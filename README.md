@@ -37,7 +37,7 @@ Beyond single-structure analysis, Astra3 also supports:
 ## Goal and design philosophy
 
 Astra3 is meant to be a **reliable structural analysis assistant, not a
-black-box predictor**. Every feature in the codebase is built around five
+black-box predictor**. Every feature in the codebase is designed to follow five
 rules:
 
 1. **Scientific accuracy.** Values reported are either read directly from
@@ -126,7 +126,7 @@ Astra3/
 ├── Astra3 (MacOS)/
 │   └── install.md
 │
-└── Astra3 (Windows)/
+└── Astra3 (Windows)/ [IN PROGRESS]
 ```
 
 The `.dmg` and `.zip` themselves are attached to the corresponding
