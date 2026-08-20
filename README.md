@@ -125,13 +125,18 @@ Astra3/
 ├── LICENSE
 │
 ├── Astra3 (MacOS)/
-│   ├── Install.md
+│   └── install.md
 │
 └── Astra3 (Windows)/
 ```
 
+The `.dmg` and `.zip` themselves are attached to the corresponding
+[GitHub Release](https://github.com/andre-aguirre/Astra3/releases),
+not stored directly in the repository; `Astra3 (MacOS)/install.md`
+points there.
+
 You do not need Python, Node, or any of Astra3's own source code to run
-it -- only [PyMOL](https://pymol.org/) itself, installed separately, since
+it, only [PyMOL](https://pymol.org/) itself, installed separately, since
 Astra3 runs its analysis inside PyMOL. Both open-source PyMOL and
 Incentive PyMOL work; nothing in Astra3 requires an Incentive-only
 feature. The report footer records which one produced the report, along
@@ -143,13 +148,18 @@ viewer" below for a stated limitation on license-type detection).
 **Requirements:** macOS 12 or later, Apple Silicon (M1/M2/M3/M4 or later),
 [PyMOL](https://pymol.org/) installed separately.
 
-1. Download `Astra3-3.0.0-arm64.dmg` from the latest Astra3 release on GitHub. The `.zip` is also available as an alternative and contains the same signed app.
+1. Download `Astra3-1.7.1-arm64.dmg` (or the `.zip`, which contains the
+   same signed app) from the
+   [GitHub Releases](https://github.com/andre-aguirre/Astra3/releases)
+   page.
 2. Open the `.dmg` file.
 3. Drag **Astra3** into your **Applications** folder.
 4. Open Astra3 from Applications.
-5. On first launch, select your PyMOL installation when prompted (for example `/Applications/PyMOL.app/Contents/MacOS/PyMOL`). Astra3 saves this path so you are not asked again.
+5. On first launch, select your PyMOL installation when prompted (for
+   example `/Applications/PyMOL.app/Contents/MacOS/PyMOL`). Astra3 saves
+   this so you are not asked again.
 
-The macOS build is Developer ID signed and notarized by Apple -- no
+The macOS build is Developer ID signed and notarized by Apple; no
 Gatekeeper override should be needed to open it.
 
 ### Windows
@@ -169,10 +179,10 @@ the launcher.
    runs.
 
 `astra3.bat` starts PyMOL in quiet command-line mode (`-cq`), so the
-console window that opens is the interface you interact with -- no PyMOL
-GUI window appears. Since this path hasn't been verified end-to-end on a
-real Windows machine yet, please report anything that doesn't work as
-expected.
+console window that opens is the interface you interact with, and no
+PyMOL GUI window appears. Since this path hasn't been verified
+end-to-end on a real Windows machine yet, please report anything that
+doesn't work as expected.
 
 ---
 
@@ -700,7 +710,7 @@ logic; it constructs a command string and passes it to the same script.
 
 To run the script directly from a source checkout without the GUI at
 all, `run /path/to/astra3.py` from within PyMOL, or use
-`astra3.command`/`astra3.bat` as a launcher -- both start PyMOL in quiet
+`astra3.command`/`astra3.bat` as a launcher: both start PyMOL in quiet
 command-line mode (`-cq`) and ask for your PyMOL executable path on
 first run.
 
