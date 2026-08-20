@@ -26,8 +26,8 @@ Astra3 is **Developer ID signed and notarized by Apple**. No Gatekeeper override
 
 The release includes:
 
-- **`.dmg`** — recommended installation package
-- **`.zip`** — alternative download containing the same signed application
+- **`.dmg`**: recommended installation package
+- **`.zip`**: alternative download containing the same signed application
 
 For complete documentation, features, commands, limitations, and developer information, see the [main README](Astra3/README.md).
 
