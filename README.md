@@ -4,8 +4,8 @@
 
 Astra3 is a PyMOL automation toolkit for structural biologists who need
 consistent, reproducible processing of PDB structures without hand-running
-the same twenty PyMOL commands every time. Point it at a PDB ID (or a local
-`.pdb`/`.pse` file), and it fetches the structure, cleans it up, colors and
+the same twenty PyMOL commands every time. Point it at a PDB ID (or a local imported
+`.pdb`/`.pse`/`.mmCIF` file), and it fetches the structure, cleans it up, colors and
 labels it deterministically, renders a full set of high-resolution images,
 and writes reports (HTML, plain text, and JSON) describing exactly what it
 found, and just as importantly, what it *did not* find, rather than
