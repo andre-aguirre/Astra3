@@ -8,8 +8,7 @@ the same twenty PyMOL commands every time. Point it at a PDB ID (or a local impo
 `.pdb`/`.pse`/`.mmCIF` file), and it fetches the structure, cleans it up, colors and
 labels it deterministically, renders a full set of high-resolution images,
 and writes reports (HTML, plain text, JSON, and CSV) describing exactly what it
-found, and just as importantly, what it *did not* find, rather than
-guessing.
+found, and just as importantly, what it *did not* find.
 
 Astra3 runs as a PyMOL script, and it is also available as a desktop
 application (Electron) that wraps that same script with a graphical
