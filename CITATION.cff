@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+title: "Astra3: Structural Analysis Toolkit for PDB Rendering Automation"
+message: "If you use Astra3 in a publication, please cite this software."
+type: software
+authors:
+  - family-names: "Aguirre"
+    given-names: "Andre"
+version: "1.0.0"
+date-released: "2026-08-20"
+repository-code: "https://github.com/andre-aguirre/Astra3"
+license: "MIT"
