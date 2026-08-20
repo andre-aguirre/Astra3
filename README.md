@@ -125,8 +125,7 @@ Astra3/
 ├── LICENSE
 │
 ├── Astra3 (MacOS)/
-│   ├── Astra3-3.0.0-arm64.dmg
-│   └── Astra3-3.0.0-arm64-mac.zip
+│   ├── Install.md
 │
 └── Astra3 (Windows)/
 ```
@@ -144,14 +143,11 @@ viewer" below for a stated limitation on license-type detection).
 **Requirements:** macOS 12 or later, Apple Silicon (M1/M2/M3/M4 or later),
 [PyMOL](https://pymol.org/) installed separately.
 
-1. Download `Astra3-3.0.0-arm64.dmg` (or the `.zip`, which contains the
-   same signed app) from `Astra3 (MacOS)/`.
+1. Download `Astra3-3.0.0-arm64.dmg` from the latest Astra3 release on GitHub. The `.zip` is also available as an alternative and contains the same signed app.
 2. Open the `.dmg` file.
 3. Drag **Astra3** into your **Applications** folder.
 4. Open Astra3 from Applications.
-5. On first launch, select your PyMOL installation when prompted (for
-   example `/Applications/PyMOL.app/Contents/MacOS/PyMOL`). Astra3 saves
-   this so you are not asked again.
+5. On first launch, select your PyMOL installation when prompted (for example `/Applications/PyMOL.app/Contents/MacOS/PyMOL`). Astra3 saves this path so you are not asked again.
 
 The macOS build is Developer ID signed and notarized by Apple -- no
 Gatekeeper override should be needed to open it.
