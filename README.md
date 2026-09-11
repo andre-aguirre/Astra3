@@ -1,8 +1,8 @@
-# Astra3 for macOS
+# Astra3
 
 **Structural Analysis Toolkit for PDB Rendering Automation**
 
-Version 1.8.0 (macOS, Apple Silicon)
+Version 1.8.0
 
 Astra3 is a PyMOL automation toolkit for structural biologists who need
 consistent, reproducible processing of PDB structures without hand-running
