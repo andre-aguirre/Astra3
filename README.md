@@ -1,21 +1,22 @@
-# Astra3
+# Astra3 for macOS
 
 **Structural Analysis Toolkit for PDB Rendering Automation**
 
+Version 1.8.0 (macOS, Apple Silicon)
+
 Astra3 is a PyMOL automation toolkit for structural biologists who need
 consistent, reproducible processing of PDB structures without hand-running
-the same twenty PyMOL commands every time. Point it at a PDB ID (or a local imported
-`.pdb`/`.pse`/`.mmCIF` file), and it fetches the structure, cleans it up, colors and
+the same twenty PyMOL commands every time. Point it at a PDB ID (or a local
+`.pdb`, `.cif`, or `.pse` file), and it fetches the structure, cleans it up, colors and
 labels it deterministically, renders a full set of high-resolution images,
-and writes reports (HTML, plain text, JSON, and CSV) describing exactly what it
-found, and just as importantly, what it *did not* find.
+and writes reports (HTML, plain text, and JSON) describing exactly what it
+found, and just as importantly, what it did not find, rather than
+guessing.
 
-Astra3 runs as a PyMOL script, and it is also available as a desktop
-application (Electron) that wraps that same script with a graphical
-interface, an interactive 3D structure viewer, and live console output, so
-command syntax does not have to be memorized to use it. Both interfaces run
-the identical underlying script and produce identical output; the desktop
-app does not reimplement any analysis logic of its own.
+Astra3 is a desktop application with a graphical interface, an interactive
+3D structure viewer, and live console output, so command syntax does not
+have to be memorized. The same commands are available through the interface
+and through the built-in console, and both produce identical output.
 
 Beyond single-structure analysis, Astra3 also supports:
 
@@ -34,11 +35,128 @@ Beyond single-structure analysis, Astra3 also supports:
 
 ---
 
+## What's new in 1.8.0
+
+**Run progress and outcomes**
+
+- **Progress bars** on every kind of run, above the console that produced
+  them. Progress follows the stages Astra3 prints, and through rendering it
+  counts images as they are saved, so the bar moves in step with the work.
+  Where the image count is not known in advance, as in a terminus
+  comparison, the estimate corrects itself from the run's own output.
+- **Time remaining**, measured from how long this run's images are actually
+  taking. Before enough have been saved to measure a rate, no estimate is
+  offered rather than a guessed one.
+- **Cancelling a run now ends it.** A cancelled analysis previously returned
+  to the prompt the same way a finished one did, so it reported success.
+  Cancelling now marks the run cancelled, removes the partial output it had
+  written, and records no history entry. OVERLAY and TERMINI discard the
+  whole comparison, since a comparison missing one of its structures is not
+  a partial answer.
+- **Cancellation cleanup is scoped to the run that was cancelled.** Output
+  folders are named for the structure, so re-running one reuses the folder
+  its previous run wrote into; only what the cancelled run itself wrote is
+  removed.
+- **A structure ID that cannot be fetched is reported as a failure**, in
+  red, with the reason left in the console. Previously a nonexistent ID
+  produced a completion notification and a history entry with nothing
+  behind it.
+- **BATCH** stopped part-way keeps the structures that finished and is
+  recorded as cancelled rather than failed; one stopped before any
+  structure finished records nothing at all.
+
+**Structures and input**
+
+- **Local file imports work end to end.** An imported structure is named
+  for its file, and one internal check compared that name case-sensitively
+  where PyMOL does not, so every imported run completed its analysis and
+  then stopped at the render step.
+- **Imports accept `.cif` and `.mmcif`**, which the analysis had always
+  supported but the file picker did not offer.
+- **A five-character ID is recognised as an entry plus a chain.** `1AKEA`
+  means chain A of entry `1AKE` to PyMOL. Astra3 now asks which was meant
+  before fetching anything, rather than silently analysing one chain.
+- **Fetch format is not requested for imported structures**, which are read
+  from the registered file in whatever format it already is.
+
+**3D viewer**
+
+- **Ions are recolourable**, and the colour panel opens beside whatever was
+  clicked rather than at the foot of the ligand list.
+- **Per-item representations.** Chains, ligands and ions each have their
+  own representation control, so a single ion can be drawn as sticks while
+  the rest stay spheres. Anything left on Default follows the global
+  buttons.
+- **Per-item show/hide** for every ligand and ion. Group switches work as
+  hide-all-then-show-one: switching a group off hides each of its members,
+  and turning one back on leaves the rest hidden.
+- **Reset View resets the view**, not just the camera: colours,
+  representations, hidden items, painted residues, selection and background
+  all return to how the structure was first drawn.
+- **Fixed:** a surface could remain on screen permanently if the view was
+  reset while it was still being built.
+
+**Documentation**
+
+- **Find-in-page in the README.** Cmd+F opens it, Enter moves to the next
+  match and scrolls to it, Shift+Enter goes back. Every match is
+  highlighted, with an arrow in the margin beside each line containing one
+  and the current match's arrow in accent colour.
+
+**Earlier in 1.8.0**
+
+- **Summary tab**: a visual gallery of recent structures with per-run
+  metadata, alignment statistics, and direct actions to open the report,
+  session, or output folder.
+- **3D viewer: DNA and RNA** are recognised and drawn with the standard
+  ribbon-and-ladder representation instead of the protein cartoon.
+- **3D viewer: ions** are recognised and drawn as spheres. Previously they
+  were styled as sticks, which renders nothing for a single unbonded atom.
+- **3D viewer: selection tool**: hover any atom for a readout, click to
+  select and recolour the residue. Shift+click builds a multi-residue
+  selection, a representation can be chosen for the selected residues, and
+  dragging near the edge of the viewport rolls the view.
+- **Network status** in the top bar. A failed download distinguishes an
+  unreachable host from a mistyped structure ID instead of always blaming
+  the ID.
+- **Unobserved residues are excluded from measurement.** A deposited
+  structure can contain residues with coordinates but zero occupancy, which
+  were never seen in the density. These are no longer treated as a chain's
+  first or last residue, and every report states which residues were
+  excluded.
+- **TERMINI: ligand-to-terminus distances.** For ligands present in one
+  structure and absent from the other, the report gives the distance from
+  each ligand to each terminal window centroid.
+- **TERMINI: sequence and residue reporting.** Whole-chain and
+  terminus-window comparisons are reported separately, each with identity,
+  similarity and per-sequence coverage; local RMSD now states how many
+  residue pairs it was computed from.
+- **Visibility controls** for chains, ligands, ions, DNA/RNA and waters.
+- **History** reports storage used per run and in total, with separate
+  actions to clear the list or to clear the list and delete the files.
+- **Batch cancellation** stops the whole queue rather than the current
+  structure only, and a confirmation is shown before large batches.
+- **Fixed:** intra-structure homomer reduction never ran during OVERLAY.
+- **Fixed:** rendered images lost their transparent background.
+- **Fixed:** a single unnameable ligand could discard an entire structure.
+- **Fixed:** the report logo was never embedded in packaged builds.
+- **Fixed:** settings could not persist when the app was installed to
+  `/Applications`.
+- **Fixed:** terminus windows could be anchored on unobserved residues.
+- **Fixed:** rendered views could repeat the same camera angle, so
+  `view_front` and `view_back` were effectively the same image.
+- **Fixed:** images from a previous run of the same comparison remained in
+  the output folder and appeared alongside the current run's.
+- **Fixed:** PyMOL alignment scratch objects were saved into the `.pse`.
+- **Fixed:** the "needs input" indicator stayed lit after a cancelled run.
+
+
+---
+
 ## Goal and design philosophy
 
 Astra3 is meant to be a **reliable structural analysis assistant, not a
-black-box predictor**. Every feature in the codebase is designed to follow five
-rules:
+black-box predictor**. Every feature is built around five rules:
 
 1. **Scientific accuracy.** Values reported are either read directly from
    PyMOL, computed deterministically from atomic coordinates, or parsed
@@ -55,12 +173,11 @@ rules:
 4. **No fabricated biological conclusions.** Astra3 will not invent a
    biological interpretation it cannot support with the data in front of
    it. Geometric proximity is reported as geometric proximity; a close N/O
-   contact is a *possible* polar interaction by distance, never asserted
+   contact is a possible polar interaction by distance, never asserted
    as a confirmed hydrogen bond.
-5. **Modular architecture.** The codebase is split into focused modules
-   (see "Project layout" below), and every export format (HTML, TXT, JSON,
-   CSV) is built from the same underlying data object per command, so they
-   can never disagree with each other.
+5. **Consistent exports.** Every export format (HTML, TXT, JSON, CSV) is
+   produced from the same result set for a given command, so they cannot
+   disagree with each other.
 
 If you are evaluating output from Astra3, you should be able to trace every
 number in a report back to either PyMOL's own geometry calculations or the
@@ -73,7 +190,7 @@ PDB file's header. There is no hidden modeling step in between.
 For every structure it processes, Astra3:
 
 1. **Fetches or loads** the structure (by PDB ID, in legacy PDB or mmCIF
-   format, or from a local `.pdb`/`.pse` file via `IMPORT`).
+   format, or from a local `.pdb`, `.cif`, or `.pse` file via `IMPORT`).
 2. **Removes water** molecules.
 3. **Colors and names every protein chain, ligand, and ion**
    deterministically. The same chain letter, ligand code, or ion name is
@@ -123,65 +240,161 @@ Astra3/
 ├── CITATION.cff
 ├── LICENSE
 │
-├── Astra3 (MacOS)/
-│   └── install.md
-│
-└── Astra3 (Windows)/ [IN PROGRESS]
+└── Astra3 (MacOS)/
+    └── install.md
 ```
+
+Windows is maintained as a separate distribution with its own build and
+release; it is not part of this package.
 
 The `.dmg` and `.zip` themselves are attached to the corresponding
 [GitHub Release](https://github.com/andre-aguirre/Astra3/releases),
 not stored directly in the repository; `Astra3 (MacOS)/install.md`
 points there.
 
-You do not need Python, Node, or any of Astra3's own source code to run
-it, only [PyMOL](https://pymol.org/) itself, installed separately, since
-Astra3 runs its analysis inside PyMOL. Both open-source PyMOL and
+Astra3 requires only [PyMOL](https://pymol.org/), installed separately.
+Nothing else needs to be installed. Both open-source PyMOL and
 Incentive PyMOL work; nothing in Astra3 requires an Incentive-only
 feature. The report footer records which one produced the report, along
 with the PyMOL version, where that can be determined (see "The 3D
 viewer" below for a stated limitation on license-type detection).
 
-### macOS
+### Installing
 
-**Requirements:** macOS 12 or later, Apple Silicon (M1/M2/M3/M4 or later),
+**Requirements:** macOS 12 or later, Apple Silicon (M1 or newer),
 [PyMOL](https://pymol.org/) installed separately.
 
-1. Download `Astra3-1.7.1-arm64.dmg` (or the `.zip`, which contains the
+1. Download `Astra3-1.8.0-arm64.dmg` (or the `.zip`, which contains the
    same signed app) from the
    [GitHub Releases](https://github.com/andre-aguirre/Astra3/releases)
    page.
-2. Open the `.dmg` file.
+2. Open the `.dmg`.
 3. Drag **Astra3** into your **Applications** folder.
-4. Open Astra3 from Applications.
-5. On first launch, select your PyMOL installation when prompted (for
-   example `/Applications/PyMOL.app/Contents/MacOS/PyMOL`). Astra3 saves
-   this so you are not asked again.
+4. Launch Astra3 from Applications.
 
-The macOS build is Developer ID signed and notarized by Apple; no
-Gatekeeper override should be needed to open it.
+The build is Developer ID signed and notarized, so no Gatekeeper override
+is required.
 
-### Windows
+### PyMOL discovery
 
-**Windows support is currently untested and console-only.** There is no
-packaged Windows desktop app yet; `Astra3 (Windows)/` contains the script
-itself (`astra3.py` and its three companion modules) plus `astra3.bat`,
-the launcher.
+On first launch Astra3 looks for PyMOL automatically in the locations it
+is normally installed to:
 
-**Requirements:** [PyMOL](https://pymol.org/) installed separately.
+- `/Applications/PyMOL.app/Contents/MacOS/PyMOL`
+- `~/Applications/PyMOL.app/Contents/MacOS/PyMOL`
+- `/Applications/PyMOL.app/Contents/bin/pymol`
+- Homebrew (`/opt/homebrew/bin/pymol`, `/usr/local/bin/pymol`)
+- conda and pip installs under your home directory
 
-1. Download the contents of `Astra3 (Windows)/` and keep every file in
-   the same folder.
-2. Double-click `astra3.bat`.
-3. On first run, it asks for the full path to your PyMOL executable (for
-   example `C:\Program Files\PyMOL\PyMOLWin.exe`) and saves it for future
-   runs.
+If none is found, Settings prompts you to select it. Astra3 verifies the
+choice by briefly launching it and confirming it behaves like PyMOL, so a
+wrong selection is caught immediately rather than at the first analysis.
+Both open-source and Incentive PyMOL work.
 
-`astra3.bat` starts PyMOL in quiet command-line mode (`-cq`), so the
-console window that opens is the interface you interact with, and no
-PyMOL GUI window appears. Since this path hasn't been verified
-end-to-end on a real Windows machine yet, please report anything that
-doesn't work as expected.
+### Where Astra3 keeps things
+
+| What | Location |
+|---|---|
+| Analysis output | `~/Documents/Astra3/Protein_outputs/` (configurable in Settings) |
+| Saved settings | `~/Library/Application Support/Astra3/tools/` |
+| Diagnostic log | `~/Library/Application Support/Astra3/tools/pymol-diagnostic.log` |
+
+Settings live in Application Support rather than inside the application
+bundle, because a signed `.app` cannot be written to without invalidating
+its signature, and `/Applications` is not writable by a standard user.
+
+Each run creates `<ID>_Output/` inside the output folder, containing the
+rendered images, the HTML and JSON reports, and a `Session/` subfolder
+with the `.pse`, the exported `.pdb`, and the text report.
+
+### Permissions
+
+If the output folder is set to Desktop, Documents, or Downloads, macOS
+asks once for permission the first time Astra3 writes there. Denying it
+causes analyses to fail at the point of saving; you can grant it later
+under System Settings → Privacy & Security → Files and Folders.
+
+### Known limitations on macOS
+
+- Apple Silicon only. There is no Intel build.
+- PyMOL must be installed separately; Astra3 does not bundle it.
+- Opening a `.pse` from within Astra3 launches your configured PyMOL
+  directly rather than going through the Finder file association, which
+  PyMOL does not always register.
+
+---
+
+## PyMOL Setup
+
+The desktop app actively manages its connection to PyMOL rather than
+just trusting whatever was last saved. This section covers what that
+looks like in practice.
+
+### Automatic detection
+
+Every time Astra3 launches, it validates the saved PyMOL path before
+you can run anything, including a real
+check that briefly launches the candidate and confirms it actually
+behaves like PyMOL (watching for PyMOL's own startup output). If it
+checks out, you'll see a small "PyMOL location verified" notification
+in the bottom-right corner and Astra3 is ready to use. This same real
+check also runs whenever you change the path in Settings, and a
+lighter, instant version of it runs before every individual analysis,
+so a problem is caught before it can produce a confusing failure
+partway through a run.
+
+### First-launch setup
+
+If Astra3 has never been pointed at a PyMOL installation, a welcome
+dialog appears on first launch asking you to connect one. It has a
+path field, a Browse button (for picking `PyMOL.app` directly through
+a native file picker), and a Confirm button. Selecting `PyMOL.app`
+itself works correctly here: Astra3 automatically resolves it down to
+the real executable inside the bundle
+(`PyMOL.app/Contents/MacOS/PyMOL`) rather than needing you to know
+that structure yourself. A small "README Document" link in the dialog
+closes it and takes you straight to the Citation & Docs page if you'd
+rather read more first. The dialog can also be closed without setting
+anything; Astra3 stays usable elsewhere, and the dialog reopens
+automatically the next time you try to run something that needs
+PyMOL.
+
+### Manual path selection
+
+You can also set or change the PyMOL path anytime from **Settings ->
+PyMOL**, using the same Browse button or by typing a path directly.
+Either way, the path is validated the same way (a real launch check,
+not just a file-existence check) before it's accepted; changing an
+already-configured path restarts Astra3 automatically so the new path
+takes effect everywhere immediately, not just for the next analysis
+you happen to run.
+
+### Recovery if PyMOL becomes unavailable
+
+If PyMOL is later deleted, moved, renamed, has its permissions
+changed, or is replaced with something that isn't actually PyMOL, the
+same setup dialog reopens automatically the next time it's needed,
+with a shorter message ("PyMOL could not be found. Please select a
+valid PyMOL installation.") instead of the first-launch welcome text.
+You never see a raw backend error for this; Astra3 catches it before
+attempting to run anything.
+
+### Validation and troubleshooting
+
+If you select a file that isn't really PyMOL (for example, another
+application's executable, or a renamed file), Astra3 rejects it with
+"This file does not appear to be a valid PyMOL executable." rather
+than accepting it and failing later. If you hit this unexpectedly,
+double-check you selected PyMOL's own application/executable, not
+something else with a similar name or location.
+
+**Common macOS PyMOL location:**
+```
+/Applications/PyMOL.app/Contents/MacOS/PyMOL
+```
+
+If PyMOL is installed somewhere other than these defaults, use Browse
+to locate it directly rather than typing a guessed path.
 
 ---
 
@@ -233,7 +446,7 @@ OVERLAY 3FXI 1RO6 1ROR
 ```
 
 **Reference selection.** By default, Astra3 automatically picks the
-structure with the *fewest bound ligands* as the reference (on the
+structure with the fewest bound ligands as the reference (on the
 reasoning that a more sparsely bound structure is generally a cleaner
 alignment target), and records that reasoning in the report. This is a
 heuristic, not a structural-quality assessment; you can override it:
@@ -270,9 +483,16 @@ TERMINI <reference> <comparison1> [comparison2 ...]
 ```
 
 Quantifies how much a protein's N- and C-termini move and reorient
-relative to a reference structure, after alignment. The **first**
-structure listed is always the reference; every other structure is
-independently aligned to it and compared.
+relative to a reference structure, after alignment. As with OVERLAY,
+Astra3 selects the structure with the **fewest bound ligands** as the
+reference, on the reasoning that the less ligand-encumbered structure is
+the more neutral baseline; every other structure is independently
+aligned to it and compared. Ties break on the order the structures were
+given. Use `-reference<ID>` to choose the reference yourself. Because
+every terminal measurement, the offset correction and the
+ligand-to-terminus distances are all expressed relative to the
+reference, the report states which structure was chosen and why, and
+warns when that is not the first structure named.
 
 Example:
 ```
@@ -302,17 +522,33 @@ If a chain has too few resolved residues near a terminus to compute these
 windows, or two structures share no chain IDs at all, that comparison is
 reported as unavailable rather than estimated.
 
-**Renders.** TERMINI produces two sets of images per comparison: the
-standard whole-structure views, and a set of close-up terminus renders
-showing the TPV arrows directly (reference N-/C-terminus in blue/pink,
-comparison N-/C-terminus in cyan/orange, with a white dashed line
-connecting corresponding terminal centroids). Two camera angles are
-rendered per terminus, so a vector that happens to be foreshortened from
-one viewing angle is unlikely to be foreshortened from both. The arrows
-are also retained in the saved `.pse` session, disabled by default; they
-can be enabled from PyMOL's own object panel for closer inspection there.
-Close-up rendering is on by default; `-skipcloseup` disables it if only
-the wide shots are needed.
+**Renders.** TERMINI produces two independent sets of images per
+comparison: the standard whole-structure views, and a set of close-up
+terminus renders showing the TPV arrows directly (reference N-/C-terminus
+in orange/pink, comparison N-/C-terminus in cyan/bright yellow, with a
+white dashed line connecting corresponding terminal centroids). Two
+camera angles are rendered per terminus, so a vector that happens to be
+foreshortened from one viewing angle is unlikely to be foreshortened
+from both. The arrows are also retained in the saved `.pse` session,
+disabled by default; they can be enabled from PyMOL's own object panel
+for closer inspection there.
+
+Both sets are controlled independently, by `-skipimage` (whole-structure
+views) and `-skipcloseup` (close-ups) respectively; neither one implies
+the other:
+
+| `-skipimage` | `-skipcloseup` | Result |
+|---|---|---|
+| off | off | Both: whole-structure views and close-ups |
+| off | on | Whole-structure views only |
+| on | off | Close-ups only, no whole-structure views |
+| on | on | No images at all |
+
+In the desktop app, this is "Render images" and "Close-up terminus
+views" as two separate checkboxes on the Termini page, matching the
+same four combinations. Image quality (`-low`/`-medium`/`-excellent`)
+applies to whichever of the two is actually being rendered, including a
+close-ups-only run with whole-structure views turned off.
 
 TERMINI accepts the same flags as single-structure analysis (`-low`,
 `-medium`, `-excellent`, `-skipimage`, `-skipreport`, `-ro`, `-csv`,
@@ -326,14 +562,50 @@ auto-decision flags below, and produces:
   columns for every metric above, N and C side by side)
 
 **Terminus alignment offsets.** When two termini do not quite line up at
-the naive window boundary, TERMINI asks whether to shift and trim to
-correct it, showing a before/after comparison of the affected residues.
-`-alwaysmatch` always applies the correction without asking; `-nevermatch`
-always declines it without asking. Both print the same before/after
-summary either way, so the run's own console output stays a complete
-record of what was decided.
+the naive first/last residues, Astra3 shows a before/after comparison for
+each terminus and asks whether to apply the correction. Nothing is changed
+without approval.
 
-### Redundant chains (homomers)
+When both termini need a correction they can be handled independently:
+answer `y` to apply both, `n` to apply neither, or `nterm` / `cterm` to
+apply only that one. The two ends of a chain frequently differ, and a
+single decision for both would discard that.
+
+**How the match is scored.** Astra3 takes the terminal window from each
+structure, extends it by a search margin, and tries every offset between
+the two extended sequences. Each offset is scored as the fraction of
+exactly matching residues over the overlap, and the highest-scoring offset
+is adopted as the frame; where two offsets score equally the smaller one
+wins, so a nearby explanation is preferred to a distant one. The terminus
+is then re-scored over the window in that frame, and treated as a
+confident match at **80% identity or above**.
+
+The window is 10 residues per terminus. The ordinary search looks 10
+residues either way, which covers ordinary terminal disorder: one crystal
+resolving a few more tail residues than another. A narrow search is what
+keeps it from wandering off and finding a plausible-looking match somewhere
+unrelated.
+
+If that match is not confident, Astra3 offers a more thorough pass before
+you decide. Type `advanced` at the prompt (the console also accepts
+`escalate`). It runs the same scoring over a search range of **250
+residues** either way, for the case the narrow search cannot represent at
+all: two entries of the same protein built from different constructs, where
+one carries an expression tag, a cloning scar, or a whole extra domain
+ahead of the point the other begins. Those differ by tens of residues, and
+a search that stops at 10 reports "these termini do not correspond" for a
+pair whose termini correspond perfectly 40 residues in. Any adopted offset
+of **15 residues or more** is disclosed rather than applied quietly. The
+thorough pass is offered only when the quick check is genuinely uncertain,
+so most runs never see it.
+
+Terminus matching is deliberately an exact-residue comparison: it is
+answering where two chains line up, not how similar they are. Sequence
+similarity is a separate question and is reported separately, from a
+gap-aware alignment of the whole chain that distinguishes exact identity
+from conservative-substitution similarity, and both from how much of each
+sequence was actually compared, so a high score over very few residues
+cannot be mistaken for strong evidence.
 
 When a structure contains multiple chains that are the same protein (a
 homodimer, for example), Astra3 flags this and asks how to proceed. By
@@ -430,7 +702,7 @@ DONE
 
 Ends the session and closes PyMOL. If any structures were processed,
 you will be asked whether to open the output folder (uses `open` on
-macOS, `os.startfile` on Windows, `xdg-open` on Linux).
+macOS, and the platform equivalent elsewhere).
 
 ---
 
@@ -446,12 +718,17 @@ The viewer is built with **3Dmol.js**, a WebGL-based molecular
 visualization library:
 
 > Rego, N., and Koes, D. (2015). 3Dmol.js: molecular visualization with
-> WebGL. *Bioinformatics*, 31(8), 1322-1324.
+> WebGL. Bioinformatics, 31(8), 1322-1324.
 > https://doi.org/10.1093/bioinformatics/btu829
 
 3Dmol.js is distributed under a BSD 3-Clause license; see its own
 repository at https://github.com/3dmol/3Dmol.js for full license terms,
 and "License" below for how Astra3 reproduces that notice.
+
+The viewer is interactive: chains, ligands and ions can each be recoloured
+and given their own representation, individually shown or hidden, and
+reset. Clicking any of them opens its controls in place. **Reset View**
+returns the structure to how it was first drawn, camera included.
 
 A few notes on current viewer behavior:
 
@@ -631,12 +908,10 @@ publication- or decision-critical.
   comparison structure to compute a comparison for that chain; if none
   exists, or if a terminus has too few resolved residues for the
   tip/orientation window, that comparison is reported as unavailable.
-- **Requires PyMOL to run.** Astra3 is not a standalone application; it
-  depends on `cmd` (PyMOL's Python API) throughout, and the desktop app
-  is a wrapper around the same script rather than a separate
-  implementation.
+- **Requires PyMOL to run.** Astra3 performs its analysis through PyMOL and
+  cannot run without it installed.
 - **Fetching structures by PDB ID requires internet access.** Offline use
-  is only possible via `IMPORT` with a local `.pdb`/`.pse` file.
+  is only possible via `IMPORT` with a local `.pdb`, `.cif`, or `.pse` file.
 - **Imported (`AST-XXXX`) structures are session-only.** There is
   currently no persistent registry across separate Astra3 launches.
 - **Rendering is deterministic in orientation and coloring logic, but not
@@ -644,88 +919,6 @@ publication- or decision-critical.
   can vary slightly across PyMOL versions, GPUs, or OS-level font/
   anti-aliasing differences, even though the same selection/coloring/
   camera logic is applied every time.
-- **Windows launcher (`astra3.bat`) has not been tested yet on Windows.**
-  It mirrors the macOS/Linux launcher's logic, including PyMOL path
-  detection and confirmation, but if you hit an issue specific to a
-  Windows console/PyMOL build, please open an issue with the exact
-  output.
-
----
-
-## For developers: building from source
-
-Everything above describes using a downloaded release. If you're working
-from the source repository instead (contributing, or building your own
-copy), the source is laid out like this:
-
-```
-python/
-    astra3.py                  Entry point: interactive command loop,
-                                OVERLAY orchestration (OverlayRequest,
-                                OverlayExecution), TERMINI orchestration
-                                (TerminiExecution, reusing OverlayExecution
-                                for loading/alignment), BATCH processing,
-                                single-structure run orchestration, and
-                                redundant-chain / terminus auto-decision
-                                flag parsing
-    astra3_core.py              Shared constants, terminal colors,
-                                cancellation handling, base-directory
-                                detection, the AST-XXXX structure
-                                registry, shared chain/ligand/ion color
-                                maps, PDB/mmCIF header parsing,
-                                output-folder helpers, and PyMOL
-                                version/license detection
-    astra3_structure.py         Structure processing: water removal,
-                                chain/ligand/ion coloring and naming,
-                                N-/C-terminus selection, all report_*
-                                section builders, the ligand-environment
-                                geometry module, homomer detection and
-                                priority ranking, and the TERMINI
-                                terminus-comparison and TPV vector
-                                geometry
-    astra3_render_report.py     Session saving, image rendering
-                                (including TERMINI close-ups), and every
-                                report/export format: Astra3_Report.html,
-                                Protein_Information.txt,
-                                Astra3_Report.json, and all CSV exports
-    astra3.command / astra3.bat Launchers (macOS/Linux and Windows
-                                respectively)
-
-gui/
-    electron/                  Main process: PyMOL subprocess management,
-                                filesystem access, and IPC handlers
-    renderer/                  Application UI (React, bundled with
-                                esbuild): one page per command, the 3D
-                                viewer, live console, history, and
-                                settings
-```
-
-All four Python files must stay together in the same folder;
-`astra3.py` imports from the other three, which is what makes each
-concern editable independently (for example, report styling or a new
-export format only touches `astra3_render_report.py`, never the analysis
-logic in `astra3_structure.py`). The GUI never duplicates the analysis
-logic; it constructs a command string and passes it to the same script.
-
-To run the script directly from a source checkout without the GUI at
-all, `run /path/to/astra3.py` from within PyMOL, or use
-`astra3.command`/`astra3.bat` as a launcher: both start PyMOL in quiet
-command-line mode (`-cq`) and ask for your PyMOL executable path on
-first run.
-
-To run the desktop app from source:
-
-```
-cd gui
-npm install
-npm start
-```
-
-To build a distributable:
-
-```
-npm run build:mac    # or build:win
-```
 
 ---
 
