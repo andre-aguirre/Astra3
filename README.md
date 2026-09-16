@@ -1,8 +1,8 @@
-# Astra3
+# Astra3 for macOS (Windows Undergoing Testing)
 
 **Structural Analysis Toolkit for PDB Rendering Automation**
 
-Version 1.8.0
+Version 1.8.1 (macOS, Apple Silicon)
 
 Astra3 is a PyMOL automation toolkit for structural biologists who need
 consistent, reproducible processing of PDB structures without hand-running
@@ -35,121 +35,32 @@ Beyond single-structure analysis, Astra3 also supports:
 
 ---
 
-## What's new in 1.8.0
+## What's new in 1.8.1
 
-**Run progress and outcomes**
-
-- **Progress bars** on every kind of run, above the console that produced
-  them. Progress follows the stages Astra3 prints, and through rendering it
-  counts images as they are saved, so the bar moves in step with the work.
-  Where the image count is not known in advance, as in a terminus
-  comparison, the estimate corrects itself from the run's own output.
-- **Time remaining**, measured from how long this run's images are actually
-  taking. Before enough have been saved to measure a rate, no estimate is
-  offered rather than a guessed one.
-- **Cancelling a run now ends it.** A cancelled analysis previously returned
-  to the prompt the same way a finished one did, so it reported success.
-  Cancelling now marks the run cancelled, removes the partial output it had
-  written, and records no history entry. OVERLAY and TERMINI discard the
-  whole comparison, since a comparison missing one of its structures is not
-  a partial answer.
-- **Cancellation cleanup is scoped to the run that was cancelled.** Output
-  folders are named for the structure, so re-running one reuses the folder
-  its previous run wrote into; only what the cancelled run itself wrote is
-  removed.
-- **A structure ID that cannot be fetched is reported as a failure**, in
-  red, with the reason left in the console. Previously a nonexistent ID
-  produced a completion notification and a history entry with nothing
-  behind it.
-- **BATCH** stopped part-way keeps the structures that finished and is
-  recorded as cancelled rather than failed; one stopped before any
-  structure finished records nothing at all.
-
-**Structures and input**
-
-- **Local file imports work end to end.** An imported structure is named
-  for its file, and one internal check compared that name case-sensitively
-  where PyMOL does not, so every imported run completed its analysis and
-  then stopped at the render step.
-- **Imports accept `.cif` and `.mmcif`**, which the analysis had always
-  supported but the file picker did not offer.
-- **A five-character ID is recognised as an entry plus a chain.** `1AKEA`
-  means chain A of entry `1AKE` to PyMOL. Astra3 now asks which was meant
-  before fetching anything, rather than silently analysing one chain.
-- **Fetch format is not requested for imported structures**, which are read
-  from the registered file in whatever format it already is.
-
-**3D viewer**
-
-- **Ions are recolourable**, and the colour panel opens beside whatever was
-  clicked rather than at the foot of the ligand list.
-- **Per-item representations.** Chains, ligands and ions each have their
-  own representation control, so a single ion can be drawn as sticks while
-  the rest stay spheres. Anything left on Default follows the global
-  buttons.
-- **Per-item show/hide** for every ligand and ion. Group switches work as
-  hide-all-then-show-one: switching a group off hides each of its members,
-  and turning one back on leaves the rest hidden.
-- **Reset View resets the view**, not just the camera: colours,
-  representations, hidden items, painted residues, selection and background
-  all return to how the structure was first drawn.
-- **Fixed:** a surface could remain on screen permanently if the view was
-  reset while it was still being built.
-
-**Documentation**
-
-- **Find-in-page in the README.** Cmd+F opens it, Enter moves to the next
-  match and scrolls to it, Shift+Enter goes back. Every match is
-  highlighted, with an arrow in the margin beside each line containing one
-  and the current match's arrow in accent colour.
-
-**Earlier in 1.8.0**
-
-- **Summary tab**: a visual gallery of recent structures with per-run
-  metadata, alignment statistics, and direct actions to open the report,
-  session, or output folder.
-- **3D viewer: DNA and RNA** are recognised and drawn with the standard
-  ribbon-and-ladder representation instead of the protein cartoon.
-- **3D viewer: ions** are recognised and drawn as spheres. Previously they
-  were styled as sticks, which renders nothing for a single unbonded atom.
-- **3D viewer: selection tool**: hover any atom for a readout, click to
-  select and recolour the residue. Shift+click builds a multi-residue
-  selection, a representation can be chosen for the selected residues, and
-  dragging near the edge of the viewport rolls the view.
-- **Network status** in the top bar. A failed download distinguishes an
-  unreachable host from a mistyped structure ID instead of always blaming
-  the ID.
-- **Unobserved residues are excluded from measurement.** A deposited
-  structure can contain residues with coordinates but zero occupancy, which
-  were never seen in the density. These are no longer treated as a chain's
-  first or last residue, and every report states which residues were
-  excluded.
-- **TERMINI: ligand-to-terminus distances.** For ligands present in one
-  structure and absent from the other, the report gives the distance from
-  each ligand to each terminal window centroid.
-- **TERMINI: sequence and residue reporting.** Whole-chain and
-  terminus-window comparisons are reported separately, each with identity,
-  similarity and per-sequence coverage; local RMSD now states how many
-  residue pairs it was computed from.
-- **Visibility controls** for chains, ligands, ions, DNA/RNA and waters.
-- **History** reports storage used per run and in total, with separate
-  actions to clear the list or to clear the list and delete the files.
-- **Batch cancellation** stops the whole queue rather than the current
-  structure only, and a confirmation is shown before large batches.
-- **Fixed:** intra-structure homomer reduction never ran during OVERLAY.
-- **Fixed:** rendered images lost their transparent background.
-- **Fixed:** a single unnameable ligand could discard an entire structure.
-- **Fixed:** the report logo was never embedded in packaged builds.
-- **Fixed:** settings could not persist when the app was installed to
-  `/Applications`.
-- **Fixed:** terminus windows could be anchored on unobserved residues.
-- **Fixed:** rendered views could repeat the same camera angle, so
-  `view_front` and `view_back` were effectively the same image.
-- **Fixed:** images from a previous run of the same comparison remained in
-  the output folder and appeared alongside the current run's.
-- **Fixed:** PyMOL alignment scratch objects were saved into the `.pse`.
-- **Fixed:** the "needs input" indicator stayed lit after a cancelled run.
-
+- **Local file imports** (`.pdb`, `.cif`, `.mmcif`) run end to end, and a
+  five-character ID like `1AKEA` asks whether a chain was meant.
+- **Progress bars** follow the images as they are saved, with a time
+  estimate. Cancelling a run ends it, and a structure that cannot be
+  fetched is reported as a failure.
+- **Consistent colours.** OVERLAY and TERMINI draw each structure in the
+  same colour: grey for the reference, then sky blue, yellow and onward.
+- **Combined views.** OVERLAY renders six views of every structure together
+  and six of each comparison with the reference; TERMINI adds the
+  all-structures views when it has two or more comparisons.
+- **TERMINI close-ups** give each comparison its own arrow colours, with a
+  colour key; whole-structure views carry no arrows.
+- **Reports** include colour keys on image groups, a dark mode switch,
+  small info icons explaining each value and how it is calculated, and
+  foldable sections, tables, structures and ligands.
+- **Report content** adds resolved residue counts, a Terminus Sequences
+  view, a Structural Interpretation for every comparison, and
+  Ligand-to-Terminus Distances grouped by comparison.
+- **Images tab** shows every image a run wrote, grouped by comparison in the
+  same order as the report.
+- **Summary page** leads with the kind of run and a few key results for
+  each.
+- **3D viewer** adds ion recolouring, per-item representation and
+  visibility, and a Reset View that restores the whole view.
 
 ---
 
@@ -264,7 +175,7 @@ viewer" below for a stated limitation on license-type detection).
 **Requirements:** macOS 12 or later, Apple Silicon (M1 or newer),
 [PyMOL](https://pymol.org/) installed separately.
 
-1. Download `Astra3-1.8.0-arm64.dmg` (or the `.zip`, which contains the
+1. Download `Astra3-1.8.1-arm64.dmg` (or the `.zip`, which contains the
    same signed app) from the
    [GitHub Releases](https://github.com/andre-aguirre/Astra3/releases)
    page.
@@ -469,7 +380,9 @@ OVERLAY produces:
 - An RMSD summary per aligned structure (aligned atoms, aligned residues)
 - A full pairwise RMSD matrix (C-alpha based) across every loaded
   structure, not just each structure vs. the reference
-- A combined aligned-overlay render
+- Six views of all structures aligned together, and six views of each
+  comparison with the reference, each group with a colour key naming which
+  colour is which structure
 - The same `Astra3_Report.html` / session / JSON / warnings structure as a
   single-structure run
 - With `-csv`: `Overlay_Summary.csv` and `Pairwise_RMSD_Matrix.csv` (kept
@@ -524,9 +437,12 @@ reported as unavailable rather than estimated.
 
 **Renders.** TERMINI produces two independent sets of images per
 comparison: the standard whole-structure views, and a set of close-up
-terminus renders showing the TPV arrows directly (reference N-/C-terminus
-in orange/pink, comparison N-/C-terminus in cyan/bright yellow, with a
-white dashed line connecting corresponding terminal centroids). Two
+terminus renders showing the TPV arrows directly, with a white dashed line
+connecting corresponding terminal centroids. The reference's arrows are
+orange (N) and pink (C) in every close-up; each comparison has its own
+pair, named in a colour key beside its close-ups. Runs with two or more
+comparisons also include six views of all structures together. Arrows
+appear only in the close-ups. Two
 camera angles are rendered per terminus, so a vector that happens to be
 foreshortened from one viewing angle is unlikely to be foreshortened
 from both. The arrows are also retained in the saved `.pse` session,
@@ -606,6 +522,15 @@ gap-aware alignment of the whole chain that distinguishes exact identity
 from conservative-substitution similarity, and both from how much of each
 sequence was actually compared, so a high score over very few residues
 cannot be mistaken for strong evidence.
+
+**Terminus Sequences.** The HTML report shows the residues actually
+compared at each terminus, reference above comparison, one residue per
+column after any approved offset is applied -- so a column always compares
+residues that correspond, rather than a fixed first-or-last-N slice that
+can misalign the moment one structure's terminus starts earlier or later
+than the other's. A `|` marks each column where the two agree. This is
+what every identity and similarity figure elsewhere in the report is
+computed from, shown so it can be checked by eye.
 
 When a structure contains multiple chains that are the same protein (a
 homodimer, for example), Astra3 flags this and asks how to proceed. By
@@ -730,6 +655,10 @@ and given their own representation, individually shown or hidden, and
 reset. Clicking any of them opens its controls in place. **Reset View**
 returns the structure to how it was first drawn, camera included.
 
+**Open Session** is offered from every HTML report -- single-structure,
+OVERLAY, and TERMINI -- as well as from the desktop app's Reports page,
+and opens the same `.pse` the viewer itself would load.
+
 A few notes on current viewer behavior:
 
 - **Chain and ligand recoloring apply per structure**, including in
@@ -805,7 +734,9 @@ cover the same underlying data, organized as:
   conformations, water-removal status
 - **Chain analysis**, N-terminus/C-terminus residue ranges per chain and
   missing-residue ranges (parsed from PDB `REMARK 465`, or the equivalent
-  mmCIF field, when present)
+  mmCIF field, when present). The residue count shown alongside a range
+  list is a count of residues, not of ranges: `587-671 (85 residues in 1
+  range)`, not `(1)`.
 - **Sequence and secondary structure summaries**
 - **Ligand and ion listings**, including automatically detected
   binding-site residues and possible polar contacts near each ligand
@@ -831,6 +762,17 @@ rather than silently omitted or filled with a guess:
 
 This is intentional: Astra3 would rather tell you a section is not
 available than fabricate a plausible-looking answer.
+
+The HTML report is built to be read quickly:
+
+- **Info icons** beside values open a short explanation of what the value
+  means, how it is calculated, and how to read it.
+- **Colour keys** above image groups name which colour is which structure,
+  and, for TERMINI close-ups, which arrow colours belong to each terminus.
+- **Foldable sections**, tables, per-structure details and ligand
+  environments keep long reports manageable.
+- **Dark mode** is a switch under the report header; the choice is
+  remembered, and printing always uses the light theme.
 
 The footer includes the Astra3 version, the PyMOL version and license
 (where determinable), and a citation block. See "License" below for the
