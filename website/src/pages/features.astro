@@ -1,0 +1,169 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { u } from '../lib/url';
+---
+<BaseLayout title="Features · Astra3" description="OVERLAY, TERMINI, BATCH, Related Structures, PDB/mmCIF, structured reports and PyMOL integration: what Astra3 measures, renders and reports." current="features">
+<header class="page-head"><div class="wrap"><p class="eyebrow">Features</p><h1>What Astra3 measures, renders and reports.</h1><p class="lede">Every capability below is described from the application itself. Illustrations are schematic; screenshots are from Astra3 for macOS.</p></div></header>
+  <div class="wrap">
+    <section class="feat" id="overlay">
+      <div class="txt">
+        <p class="eyebrow">OVERLAY</p>
+        <h2>Align structures onto a shared reference.</h2>
+        <p>OVERLAY aligns two or more structures onto one reference using PyMOL's <span class="mono">cmd.align</span>, a sequence-guided iterative structural superposition. By default Astra3 picks the structure with the fewest bound ligands as the reference and records why; <span class="mono">-reference&lt;ID&gt;</span> overrides it.</p>
+        <ul class="specs"><li>RMSD per aligned structure, with aligned atom and residue counts</li><li>A C-alpha pairwise RMSD matrix across every loaded structure</li><li>Six views of all structures together, six of each comparison, each with a colour key</li><li>Per-structure <span class="mono">-mmCIF</span>, e.g. <span class="mono">OVERLAY 6DK3 9BOX -mmCIF</span></li></ul>
+        <a class="more" href={u('/docs#overlay')} style="color:var(--accent-bright);font-weight:600;text-decoration:none">OVERLAY documentation →</a>
+      </div>
+      <div class="viz gridbg align-anim">
+        <svg viewBox="0 0 520 320" role="img" aria-label="Schematic: a comparison backbone in sky blue moving into alignment with a grey reference backbone.">
+          <path d="M40 210 C 90 120, 140 260, 190 170 S 290 90, 330 170 S 420 250, 480 130" fill="none" stroke="#9aa3ae" stroke-width="5" stroke-linecap="round"/>
+          <g class="cmp"><path d="M40 210 C 90 120, 140 260, 190 170 S 290 90, 330 170 S 420 250, 480 130" fill="none" stroke="#7cc4f0" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 0" opacity=".95"/></g>
+          <text class="lab" x="22" y="30">REFERENCE · GREY</text><text class="lab" x="22" y="48" style="fill:#7cc4f0">COMPARISON · SKY BLUE</text>
+          <text class="lab" x="370" y="300">cmd.align</text>
+        </svg>
+        <p class="viz-cap">SCHEMATIC · COLOURS MATCH ASTRA3'S OVERLAY RENDERS</p>
+      </div>
+    </section>
+
+    <section class="feat" id="termini">
+      <div class="txt">
+        <p class="eyebrow">TERMINI</p>
+        <h2>Quantify how termini move and reorient.</h2>
+        <p>For each chain shared with the reference, TERMINI measures the N- and C-terminus independently: tip and centroid displacement in ångströms, orientation change, the Terminal Projection Vector (TPV) angle change and local terminal RMSD.</p>
+        <p>The TPV approximates the direction a fusion tag would initially project from resolved backbone coordinates. It is a geometric extrapolation, not a prediction of how a tag would behave.</p>
+        <ul class="specs"><li>Before/after offsets shown and approved per terminus (<span class="mono">y</span>, <span class="mono">n</span>, <span class="mono">nterm</span>, <span class="mono">cterm</span>)</li><li>A more thorough 250-residue search when the quick match isn't confident (<span class="mono">advanced</span>)</li><li>Close-ups from two camera angles per terminus; <span class="mono">-skipcloseup</span> to turn them off</li></ul>
+        <a class="more" href={u('/docs#termini')} style="color:var(--accent-bright);font-weight:600;text-decoration:none">TERMINI documentation →</a>
+      </div>
+      <div class="viz gridbg">
+        <svg viewBox="0 0 520 320" role="img" aria-label="Schematic: a protein chain with an orange arrow at the N-terminus and a pink arrow at the C-terminus, and a white dashed line connecting corresponding terminal centroids of two structures.">
+          <path class="draw" style="--len:900" d="M120 220 C 160 140, 220 250, 260 180 S 330 110, 360 170 S 400 230, 420 140" fill="none" stroke="#9aa3ae" stroke-width="5" stroke-linecap="round"/>
+          <path class="draw" style="--len:900" d="M110 236 C 150 160, 214 262, 256 194 S 326 124, 356 184 S 398 244, 426 158" fill="none" stroke="#7cc4f0" stroke-width="3" stroke-linecap="round" opacity=".8"/>
+          <defs><marker id="ah-o" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#F29A4A"/></marker><marker id="ah-p" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#EE8FC4"/></marker></defs>
+          <line x1="120" y1="220" x2="60" y2="170" stroke="#F29A4A" stroke-width="3" marker-end="url(#ah-o)"/>
+          <line x1="420" y1="140" x2="470" y2="80" stroke="#EE8FC4" stroke-width="3" marker-end="url(#ah-p)"/>
+          <line x1="120" y1="220" x2="110" y2="236" stroke="#EDEFF2" stroke-width="1.5" stroke-dasharray="4 4"/>
+          <line x1="420" y1="140" x2="426" y2="158" stroke="#EDEFF2" stroke-width="1.5" stroke-dasharray="4 4"/>
+          <text class="lab" x="30" y="160">N · TPV</text><text class="lab" x="440" y="70">C · TPV</text>
+          <text class="lab" x="22" y="300">REFERENCE ARROWS: ORANGE (N) · PINK (C)</text>
+        </svg>
+        <p class="viz-cap">SCHEMATIC · ARROWS APPEAR ONLY IN CLOSE-UP RENDERS</p>
+      </div>
+    </section>
+
+    <section class="feat" id="batch">
+      <div class="txt">
+        <p class="eyebrow">BATCH</p>
+        <h2>Process a whole queue, unattended.</h2>
+        <p>BATCH runs structures one after another without stopping if one fails. IDs are case-insensitive and deduplicated, and every structure gets its own output folder, exactly as if it had been run alone.</p>
+        <p>Redundant chains can be decided in advance with <span class="mono">-alwaysreduce</span>, <span class="mono">-keephomomers</span> and an ordered <span class="mono">-reducepriority</span> (default <span class="mono">missing,leastligands,chainA</span>), so a long batch never waits for input.</p>
+        <a class="more" href={u('/docs#batch')} style="color:var(--accent-bright);font-weight:600;text-decoration:none">BATCH documentation →</a>
+      </div>
+      <div class="viz">
+        <div class="term" style="border:0">
+          <div class="window-bar"><i></i><i></i><i></i><span>batch.txt</span></div>
+<pre><span class="c"># one structure ID per line
+# blank lines and # comments are ignored</span>
+1AKE
+4AKE
+2AK3
+<span class="c"># duplicates are removed</span>
+1ake</pre>
+        </div>
+        <figure style="margin-top:14px"><img loading="lazy" src={u('/img/batch-800.webp')} srcset={`${u('/img/batch-800.webp')} 800w, ${u('/img/batch-1600.webp')} 1600w`} sizes="(max-width:860px) 92vw, 560px" width="800" height="430" alt="Astra3 batch page processing a queue of structures." style="border-radius:var(--r-md);border:1px solid var(--line-0)"><figcaption>Batch mode processes a whole queue of structures unattended, with the same reports and images for each one.</figcaption></figure>
+      </div>
+    </section>
+
+    <section class="feat" id="related">
+      <div class="txt">
+        <p class="eyebrow">Related Structures · new in 1.9.0</p>
+        <h2>Find every entry of the same protein.</h2>
+        <p>Enter a PDB ID to find every experimental entry with the same UniProt entry. Each result shows its method, resolution, ligands, mutations and how much of your protein it covers, and suggests whether it suits OVERLAY or TERMINI.</p>
+        <p>Before you run anything it warns about different construct boundaries, low resolution, NMR ensembles, extra copies, partner proteins and unmodelled residues. Selected results go straight to OVERLAY, TERMINI or BATCH.</p>
+      </div>
+      <div class="viz gridbg">
+        <svg viewBox="0 0 520 300" role="img" aria-label="Schematic: one query entry linked to several related entries of the same protein, each labelled by the checks Astra3 applies.">
+          <g font-family="IBM Plex Mono, monospace" font-size="12">
+            <rect x="30" y="126" width="120" height="48" rx="8" fill="#1D222A" stroke="#AB7ADF"/><text x="90" y="155" text-anchor="middle" fill="#EDEFF2">QUERY</text>
+            <g stroke="#323A46"><path d="M150 150 C 220 150, 220 50, 290 50"/><path d="M150 150 L 290 120"/><path d="M150 150 L 290 190"/><path d="M150 150 C 220 150, 220 260, 290 260"/></g>
+            <g fill="#161A20" stroke="#323A46"><rect x="290" y="30" width="200" height="40" rx="8"/><rect x="290" y="100" width="200" height="40" rx="8"/><rect x="290" y="170" width="200" height="40" rx="8"/><rect x="290" y="240" width="200" height="40" rx="8"/></g>
+            <g fill="#A7AFBC"><text x="306" y="55">method · resolution</text><text x="306" y="125">ligands · mutations</text><text x="306" y="195">coverage of UniProt</text><text x="306" y="265">OVERLAY / TERMINI fit</text></g>
+          </g>
+        </svg>
+        <p class="viz-cap">SCHEMATIC · SEARCH BY UNIPROT ENTRY VIA THE RCSB SEARCH API</p>
+      </div>
+    </section>
+
+    <section class="feat" id="formats">
+      <div class="txt">
+        <p class="eyebrow">PDB / mmCIF</p>
+        <h2>Legacy PDB, mmCIF, or your own files.</h2>
+        <p>Structures fetched by ID are tried as legacy PDB first and fall back to mmCIF automatically when that format is not available. Add <span class="mono">-mmCIF</span> to request it directly, per structure in OVERLAY and TERMINI.</p>
+        <p>Local files load through IMPORT and receive a session-only <span class="mono">AST-XXXX</span> ID you can use anywhere a PDB ID is accepted. Imported files are never looked up online.</p>
+      </div>
+      <div class="viz">
+        <div class="tw"><table class="t">
+          <thead><tr><th>Source</th><th>Formats</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>Fetch by PDB ID</td><td><code>PDB</code> <code>mmCIF</code></td><td>Automatic fallback to mmCIF</td></tr>
+            <tr><td>IMPORT</td><td><code>.pdb</code> <code>.cif</code> <code>.mmcif</code> <code>.pse</code></td><td>Assigned an AST-XXXX ID for the session</td></tr>
+            <tr><td>Session output</td><td><code>.pse</code> <code>.pdb</code></td><td>A <span class="mono">.pdb</span> is always written for the viewer</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <section class="feat" id="reports">
+      <div class="txt">
+        <p class="eyebrow">Reports · CSV / JSON</p>
+        <h2>One analysis, four consistent exports.</h2>
+        <p><span class="mono">Astra3_Report.html</span>, <span class="mono">Protein_Information.txt</span> and <span class="mono">Astra3_Report.json</span> are written for every run; CSV is opt-in with <span class="mono">-csv</span>. Unavailable values are JSON <span class="mono">null</span>, so tooling can tell "unknown" from a real number.</p>
+        <p>Reports cover structure quality, chains and missing residues, sequence, ligands and binding-site residues, a HETATM audit, disulfides, and, new in 1.9.0, wwPDB validation outliers, the UniProt reference with declared mutations, and Pfam, CATH, ECOD and SCOP domains in the structure's own numbering.</p>
+        <a class="more" href={u('/docs#reports')} style="color:var(--accent-bright);font-weight:600;text-decoration:none">Reports documentation →</a>
+      </div>
+      <div class="viz">
+<pre class="tree mono"><span class="d">Protein_outputs/</span>
+└── <span class="d">1HEW_Output/</span>
+    ├── Astra3_Report.html
+    ├── <span class="d">Session/</span>
+    │   ├── 1HEW.pse
+    │   ├── 1HEW.pdb           <span class="n">plain coordinates, for the viewer</span>
+    │   ├── Protein_Information.txt
+    │   ├── Astra3_Report.json
+    │   ├── Astra3_Export.csv      <span class="n">-csv only</span>
+    │   └── Ligand_Environment.csv <span class="n">-csv only</span>
+    └── <span class="d">Images/</span>
+        ├── view_front.png   view_back.png
+        ├── view_left.png    view_right.png
+        └── view_top.png     view_bottom.png</pre>
+      </div>
+    </section>
+
+    <section class="feat" id="viewer">
+      <div class="txt">
+        <p class="eyebrow">3D viewer</p>
+        <h2>Inspect results without leaving the app.</h2>
+        <p>The built-in viewer uses 3Dmol.js. Chains, ligands and ions can each be recoloured, given their own representation, shown or hidden. DNA and RNA draw as ribbons, ions as spheres, and Reset View restores the view, camera included.</p>
+      </div>
+      <figure class="viz" style="padding:0"><img loading="lazy" src={u('/img/viewer-3d-800.webp')} srcset={`${u('/img/viewer-3d-800.webp')} 800w, ${u('/img/viewer-3d-1600.webp')} 1600w`} sizes="(max-width:860px) 92vw, 580px" width="800" height="430" alt="Astra3 3D viewer showing a protein cartoon with chain, visibility and background controls."><figcaption style="padding:0 16px 14px">An interactive 3D viewer built into Astra3, with chain visibility, representation styles, and camera controls.</figcaption></figure>
+    </section>
+
+    <section class="feat" id="pymol">
+      <div class="txt">
+        <p class="eyebrow">PyMOL integration</p>
+        <h2>Built around PyMOL, not instead of it.</h2>
+        <p>Astra3 performs its analysis through your own separately installed PyMOL, open-source or Incentive. It finds PyMOL automatically, verifies it by briefly launching it, and runs it in the background; its window never opens.</p>
+        <p>Everything Astra3 does ends in a normal PyMOL session file. Open it from any report or the Reports page and keep working in PyMOL itself.</p>
+      </div>
+      <div class="viz gridbg">
+        <svg viewBox="0 0 520 220" role="img" aria-label="Diagram: Astra3 interface sends commands to your PyMOL installation, which produces sessions, images and reports.">
+          <g font-family="Inter, sans-serif" font-size="14">
+            <rect x="20" y="80" width="130" height="60" rx="10" fill="#1D222A" stroke="#AB7ADF"/><text x="85" y="108" text-anchor="middle" fill="#EDEFF2" font-weight="600">Astra3</text><text x="85" y="126" text-anchor="middle" fill="#A7AFBC" font-size="11" font-family="IBM Plex Mono, monospace">GUI + CONSOLE</text>
+            <rect x="195" y="80" width="130" height="60" rx="10" fill="#1D222A" stroke="#6E8EE8"/><text x="260" y="108" text-anchor="middle" fill="#EDEFF2" font-weight="600">Your PyMOL</text><text x="260" y="126" text-anchor="middle" fill="#A7AFBC" font-size="11" font-family="IBM Plex Mono, monospace">RUNS HIDDEN</text>
+            <g fill="#161A20" stroke="#323A46"><rect x="370" y="24" width="130" height="44" rx="8"/><rect x="370" y="88" width="130" height="44" rx="8"/><rect x="370" y="152" width="130" height="44" rx="8"/></g>
+            <g fill="#A7AFBC" font-family="IBM Plex Mono, monospace" font-size="12" text-anchor="middle"><text x="435" y="51">.pse session</text><text x="435" y="115">6 images</text><text x="435" y="179">reports</text></g>
+            <g stroke="#323A46" fill="none"><path d="M150 110 H195"/><path d="M325 110 C 345 110, 350 46, 370 46"/><path d="M325 110 H370"/><path d="M325 110 C 345 110, 350 174, 370 174"/></g>
+          </g>
+        </svg>
+      </div>
+    </section>
+  </div>
+</BaseLayout>

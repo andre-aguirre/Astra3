@@ -1,0 +1,55 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import ResearchSection from '../components/ResearchSection.astro';
+import { CONFIG } from '../config';
+---
+<BaseLayout title="Research & Citation · Astra3" description="Scientific use cases, reproducibility and citation information for Astra3, a PyMOL-based structural analysis toolkit." current="research">
+<header class="page-head"><div class="wrap"><p class="eyebrow">Research</p><h1>For structural biology workflows that need to be repeatable.</h1><p class="lede">Astra3 is built so that every number in a report can be traced to PyMOL's geometry, the coordinates, or the entry's own records, with no hidden modelling step in between.</p></div></header>
+  <div class="wrap">
+    <section class="block" style="padding-block:56px">
+      <div class="sec-head"><p class="eyebrow">Scientific use cases</p><h2>Where Astra3 fits</h2></div>
+      <div class="fgrid">
+        <div><span class="tag">COMPARE</span><h3>Entries of the same protein</h3><p>Find related entries by UniProt accession, then align them with OVERLAY and review RMSD and the pairwise matrix.</p></div>
+        <div><span class="tag">TERMINI</span><h3>Terminal regions and tags</h3><p>Check how termini are displaced or reoriented between structures before planning a terminal fusion or tag.</p></div>
+        <div><span class="tag">BATCH</span><h3>Consistent figures at scale</h3><p>Render the same six views with the same colours for every structure in a set, ready for multi-panel figures.</p></div>
+        <div><span class="tag">QUALITY</span><h3>Choosing structures</h3><p>Compare method, resolution, validation outliers, missing residues and declared mutations before choosing a model.</p></div>
+        <div><span class="tag">LIGANDS</span><h3>Binding-site context</h3><p>List residues near each ligand and possible polar contacts, reported as geometry rather than asserted interactions.</p></div>
+        <div><span class="tag">TEACHING</span><h3>Reproducible exercises</h3><p>The same command gives the same session and report, so a class can reproduce a result exactly.</p></div>
+      </div>
+    </section>
+    <section class="split" style="padding-bottom:56px">
+      <div>
+        <p class="eyebrow">Reproducibility</p>
+        <h2>What a run records</h2>
+        <ul class="rules" style="margin-top:24px">
+          <li><b>Options</b><p>The exact command options used for the run.</p></li>
+          <li><b>Outside data</b><p>A copy of every piece of Protein Data Bank data the report relied on, saved in the run's <span class="mono">Session</span> folder.</p></li>
+          <li><b>Software</b><p>The Astra3 version and the PyMOL version and licence, where determinable.</p></li>
+          <li><b>Methods</b><p>A ready-to-paste Methods paragraph with references, also saved as <span class="mono">Methods.txt</span>.</p></li>
+        </ul>
+      </div>
+      <div>
+        <p class="eyebrow">Citation</p>
+        <h2 style="margin-bottom:24px">Cite Astra3</h2>
+        <ResearchSection />
+      </div>
+    </section>
+    <section class="split" style="padding-bottom:40px">
+      <div class="prose" style="padding:0">
+        <h2>Related software and data</h2>
+        <p>Astra3 depends on, and should be cited alongside, the tools and resources it uses:</p>
+        <ul>
+          <li><strong>PyMOL</strong>, the PyMOL Molecular Graphics System (open-source or Schrödinger, LLC), which performs every analysis.</li>
+          <li><strong>3Dmol.js</strong>: Rego, N., and Koes, D. (2015). 3Dmol.js: molecular visualization with WebGL. <i>Bioinformatics</i>, 31(8), 1322–1324. <a href="https://doi.org/10.1093/bioinformatics/btu829" target="_blank" rel="noopener">doi:10.1093/bioinformatics/btu829</a></li>
+          <li><strong>RCSB Protein Data Bank</strong> and <strong>wwPDB</strong> validation reports, the source of structures, annotations and validation data.</li>
+          <li><strong>UniProt</strong>, <strong>Pfam</strong>, <strong>CATH</strong>, <strong>ECOD</strong>, <strong>SCOPe</strong> and <strong>SCOP2</strong> annotations, as provided through the RCSB Data API.</li>
+        </ul>
+      </div>
+      <div class="prose" style="padding:0">
+        <h2>Acknowledgments</h2>
+        <p>Astra3 is created by Andre Aguirre. It builds on PyMOL, 3Dmol.js and the public archives above, and on the work of the depositors whose structures it analyses.</p>
+        <p>If you use Astra3 in a publication, <a href={`mailto:${CONFIG.contactEmail}`}>let us know</a> and it can be listed here.</p>
+      </div>
+    </section>
+  </div>
+</BaseLayout>
