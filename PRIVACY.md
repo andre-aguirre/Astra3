@@ -82,5 +82,5 @@ If Astra3 ever changes how it handles information, this policy will be updated b
 
 Questions about this policy or about Astra3:
 **Andre Aguirre**
-Email: [your email address]
+Email: andreaguirre20@outlook.com
 Project page: https://github.com/andre-aguirre/Astra3
