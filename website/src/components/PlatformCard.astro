@@ -1,0 +1,33 @@
+---
+import { CONFIG } from '../config';
+import { ICON } from '../lib/icons';
+import DownloadButton from './DownloadButton.astro';
+interface Props { platform: 'macos' | 'windows' }
+const { platform } = Astro.props;
+const mac = CONFIG.platforms.macos;
+const win = CONFIG.platforms.windows;
+const ok = CONFIG.platforms[platform].status === 'available';
+const statusText = ok ? 'Available now' : 'Coming soon · Certification in progress';
+---
+<div class="plat">
+  {platform === 'macos' ? (
+    <>
+      <div class="plat-top"><h3><Fragment set:html={ICON.apple} />macOS</h3><span class="status ok"><i></i>{statusText}</span></div>
+      <p class="muted">Latest macOS release, v{CONFIG.version}.</p>
+      <dl>
+        <dt>REQUIRES</dt><dd>{mac.requirements} · PyMOL installed separately</dd>
+        <dt>CHIP</dt><dd>{mac.arch}</dd>
+        <dt>FORMAT</dt><dd class="mono">{mac.formats}</dd>
+        <dt>SIGNING</dt><dd>{mac.signing}</dd>
+      </dl>
+      <div class="actions"><DownloadButton platform="macos" /><a class="btn btn-ghost" href={CONFIG.latestReleaseUrl} target="_blank" rel="noopener">Release notes</a></div>
+    </>
+  ) : (
+    <>
+      <div class="plat-top"><h3><Fragment set:html={ICON.windows} />Windows</h3><span class={`status${ok ? ' ok' : ''}`}><i></i>{statusText}</span></div>
+      <p class="muted">{ok ? 'Available from the Microsoft Store.' : 'Windows version coming soon. Microsoft Store certification in progress.'}</p>
+      <dl><dt>CHANNEL</dt><dd>{win.channel}</dd><dt>STATUS</dt><dd>{ok ? 'Live' : 'Certification pending'}</dd></dl>
+      <div class="actions"><DownloadButton platform="windows" /></div>
+    </>
+  )}
+</div>
