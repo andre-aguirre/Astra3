@@ -31,14 +31,14 @@ const jsonLd = {
     <div class="wrap split">
       <div class="reveal">
         <p class="eyebrow">What Astra3 does</p>
-        <h2 id="h-what">A reliable structural analysis assistant, not a black-box predictor.</h2>
+        <h2 id="h-what">A reliable structural analysis assistant.</h2>
         <p class="lede">The same twenty PyMOL commands, run the same way every time. Astra3 fetches or loads a structure, cleans it, colours and labels it deterministically, renders a full set of images and writes reports that say exactly what it found, and what it did not.</p>
         <p class="pull"><strong>Astra3 does not replace PyMOL.</strong> It runs its analysis inside your own copy of PyMOL, open-source or Incentive, and saves a finished <span class="mono">.pse</span> session you can keep working in.</p>
       </div>
       <ul class="rules reveal" aria-label="Design rules">
         <li><b>Scientific accuracy</b><p>Values are read from PyMOL, computed from atomic coordinates, or parsed from the file's own header records. Nothing is estimated to fill a gap.</p></li>
         <li><b>Reproducibility</b><p>The same structure and command give the same colouring, selections, session and report. Reports record the exact options used.</p></li>
-        <li><b>Known vs. unavailable</b><p>When something cannot be determined, the report says so explicitly instead of guessing or omitting it.</p></li>
+        <li><b>Known vs. unavailable</b><p>When something cannot be determined, the report explicitly says so.</p></li>
         <li><b>No fabricated conclusions</b><p>Geometric proximity is reported as proximity. A close N/O pair is a possible polar contact, never an asserted hydrogen bond.</p></li>
         <li><b>Consistent exports</b><p>HTML, TXT, JSON and CSV come from one result set, so they cannot disagree.</p></li>
       </ul>
