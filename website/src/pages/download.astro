@@ -1,0 +1,42 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import PlatformCard from '../components/PlatformCard.astro';
+import { CONFIG } from '../config';
+import { u } from '../lib/url';
+---
+<BaseLayout title="Download Astra3 for macOS" description="Download Astra3 for macOS (universal: Intel and Apple Silicon, macOS 10.15+). The Windows version is in Microsoft Store certification." current="download">
+<header class="page-head"><div class="wrap"><p class="eyebrow">Download</p><h1>Install Astra3.</h1><p class="lede">Astra3 needs only PyMOL, installed separately. Open-source and Incentive PyMOL both work.</p></div></header>
+  <div class="wrap">
+    <div class="dl-grid">
+      <PlatformCard platform="macos" />
+      <PlatformCard platform="windows" />
+    </div>
+    <div class="dl-grid" style="padding-top:0">
+      <div class="panel">
+        <h3>Install on macOS</h3>
+        <ol class="steps">
+          <li>Download the latest <strong>.dmg</strong> (or the <strong>.zip</strong>, which holds the same signed app) from GitHub Releases.</li>
+          <li>Open the <strong>.dmg</strong>.</li>
+          <li>Drag <strong>Astra3</strong> into your <strong>Applications</strong> folder.</li>
+          <li>Launch Astra3 and select your PyMOL installation if it isn't found automatically.</li>
+        </ol>
+        <p class="muted">Astra3 is Developer ID signed and notarized by Apple, so no Gatekeeper override is required.</p>
+      </div>
+      <div class="panel">
+        <h3>If macOS blocks something</h3>
+        <p class="muted"><strong style="color:var(--text-0)">Folder permission.</strong> If your output folder is on the Desktop, Documents or Downloads, macOS asks once for permission. If it was denied, grant it in System Settings → Privacy &amp; Security → Files and Folders.</p>
+        <p class="muted"><strong style="color:var(--text-0)">PyMOL not found.</strong> Use Browse in the setup dialog or Settings → PyMOL and pick <span class="mono">PyMOL.app</span> itself. Astra3 resolves the executable inside it and checks that it really is PyMOL.</p>
+        <p class="muted"><strong style="color:var(--text-0)">Intel Macs.</strong> The download is a universal build: the same app runs natively on Intel and Apple Silicon.</p>
+      </div>
+    </div>
+    <div class="panel" style="margin-bottom:24px">
+      <h3>Source and releases</h3>
+      <ul class="doclinks" style="margin-top:4px">
+        <li><a href={CONFIG.githubUrl} target="_blank" rel="noopener">GitHub repository <span>andre-aguirre/Astra3</span></a></li>
+        <li><a href={CONFIG.latestReleaseUrl} target="_blank" rel="noopener">Latest release notes <span>GITHUB</span></a></li>
+        <li><a href={CONFIG.releasesUrl} target="_blank" rel="noopener">Previous releases <span>ALL VERSIONS</span></a></li>
+        <li><a href={u('/changelog')}>Changelog <span>THIS SITE</span></a></li>
+      </ul>
+    </div>
+  </div>
+</BaseLayout>

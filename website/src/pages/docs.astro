@@ -1,0 +1,144 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { u } from '../lib/url';
+import { CONFIG } from '../config';
+import DocumentationLayout from '../components/DocumentationLayout.astro';
+const sections = [{"id": "getting-started", "group": "Start", "title": "Getting started"}, {"id": "installation", "group": "Start", "title": "Installation"}, {"id": "importing", "group": "Start", "title": "Importing structures"}, {"id": "single", "group": "Commands", "title": "Single-structure analysis"}, {"id": "overlay", "group": "Commands", "title": "OVERLAY"}, {"id": "termini", "group": "Commands", "title": "TERMINI"}, {"id": "batch", "group": "Commands", "title": "BATCH"}, {"id": "related", "group": "Commands", "title": "Related Structures"}, {"id": "reports", "group": "Output", "title": "Reports"}, {"id": "formats", "group": "Output", "title": "PDB and mmCIF"}, {"id": "exports", "group": "Output", "title": "CSV and JSON"}, {"id": "troubleshooting", "group": "Help", "title": "Troubleshooting"}, {"id": "limitations", "group": "Help", "title": "Limitations"}, {"id": "faq", "group": "Help", "title": "FAQ"}];
+---
+<BaseLayout title="Documentation · Astra3" description="Astra3 documentation: installation, PyMOL setup, importing structures, OVERLAY, TERMINI, BATCH, reports, exports, troubleshooting and FAQ." current="docs">
+<header class="page-head"><div class="wrap"><p class="eyebrow">Documentation</p><h1>Astra3 documentation</h1><p class="lede">For Astra3 {CONFIG.version} on macOS. The same commands work from the interface and the built-in console.</p></div></header>
+<DocumentationLayout sections={sections}>
+<section id="getting-started" data-group="Start">
+          <h2>Getting started</h2>
+          <p>Astra3 runs as an interactive prompt behind its interface: <code>Enter a PDB ID (or -help):</code>. Everything on the Home, Single Structure, Overlay, Termini and Batch pages sends the same commands you can type into the console, and both produce identical output.</p>
+          <ol>
+            <li>Install Astra3 and connect PyMOL (see <a href={u('/docs#installation')} style="color:var(--accent-bright)">Installation</a>).</li>
+            <li>Type a PDB ID such as <code>1HEW</code> and press Enter, or use Fetch by ID on the Home page.</li>
+            <li>Open the output folder, the HTML report, or the 3D viewer when the run completes.</li>
+          </ol>
+          <p>Run <code>-t</code> for a quick smoke test: a full analysis of <code>1AKE</code> into an always-overwritten <code>TEST/</code> folder. Type <code>DONE</code> to end a session.</p>
+        </section>
+        <section id="installation" data-group="Start">
+          <h2>Installation</h2>
+          <p><strong>Requirements:</strong> macOS 10.15 Catalina or later, Intel or Apple Silicon, PyMOL installed separately.</p>
+          <p>On first launch Astra3 looks for PyMOL in <code>/Applications/PyMOL.app</code>, <code>~/Applications</code>, Homebrew and conda/pip installs. It verifies a candidate by briefly launching it and watching for PyMOL's startup output, and shows "PyMOL location verified" when it passes.</p>
+          <div class="tw"><table class="t"><thead><tr><th>What</th><th>Location</th></tr></thead><tbody>
+            <tr><td>Analysis output</td><td><code>~/Documents/Astra3/Protein_outputs/</code> (configurable)</td></tr>
+            <tr><td>Saved settings</td><td><code>~/Library/Application Support/Astra3/tools/</code></td></tr>
+            <tr><td>Diagnostic log</td><td><code>…/tools/pymol-diagnostic.log</code></td></tr>
+          </tbody></table></div>
+        </section>
+        <section id="importing" data-group="Start">
+          <h2>Importing structures</h2>
+          <p>Use <code>IMPORT</code>, or drag a file onto the Home page, to load a local <code>.pdb</code>, <code>.cif</code>, <code>.mmcif</code> or <code>.pse</code>. The structure gets a temporary <code>AST-XXXX</code> ID you can use like a PDB ID, including inside OVERLAY and TERMINI.</p>
+          <div class="note"><strong>Session-only IDs.</strong> AST IDs disappear when Astra3 closes. Note the ID it prints, or process the file before ending the session.</div>
+          <p>A five-character ID such as <code>1AKEA</code> prompts to ask whether you meant a chain.</p>
+        </section>
+        <section id="single" data-group="Commands">
+          <h2>Single-structure analysis</h2>
+<pre><code>&lt;PDB ID&gt; [flags]
+1ABC -medium -csv</code></pre>
+          <div class="tw"><table class="t"><thead><tr><th>Flag</th><th>Effect</th></tr></thead><tbody>
+            <tr><td><code>-low</code> <code>-medium</code> <code>-excellent</code></td><td>Image quality (excellent is the default)</td></tr>
+            <tr><td><code>-skipimage</code></td><td>Report and session only</td></tr>
+            <tr><td><code>-skipreport</code></td><td>Session and images only</td></tr>
+            <tr><td><code>-ro</code></td><td>Render-only: save the session without reports or images</td></tr>
+            <tr><td><code>-csv</code></td><td>Also write CSV exports to <code>Session/</code></td></tr>
+            <tr><td><code>-mmCIF</code></td><td>Fetch as mmCIF instead of legacy PDB</td></tr>
+          </tbody></table></div>
+        </section>
+        <section id="overlay" data-group="Commands">
+          <h2>OVERLAY</h2>
+<pre><code>OVERLAY &lt;id&gt; &lt;id&gt; [&lt;id&gt; ...] [flags]
+OVERLAY 3FXI 1RO6 1ROR -reference1RO6</code></pre>
+          <p>Aligns two or more structures onto a shared reference with PyMOL's <code>cmd.align</code>. The reference defaults to the structure with the fewest bound ligands, a heuristic rather than a quality assessment; the report records the reasoning. If a requested <code>-reference</code> ID was not loaded, Astra3 falls back to automatic selection and notes it.</p>
+          <p>Output: RMSD per structure with aligned atoms and residues, a C-alpha pairwise RMSD matrix, six views of all structures and of each comparison, and with <code>-csv</code> both <code>Overlay_Summary.csv</code> and <code>Pairwise_RMSD_Matrix.csv</code>.</p>
+        </section>
+        <section id="termini" data-group="Commands">
+          <h2>TERMINI</h2>
+<pre><code>TERMINI &lt;reference&gt; &lt;comparison1&gt; [comparison2 ...] [flags]</code></pre>
+          <p>Measures how N- and C-termini move and reorient relative to a reference after alignment: tip displacement, centroid displacement, orientation change, TPV angle change and local terminal RMSD. The two ends are never compared to each other.</p>
+          <h3>Terminus offsets</h3>
+          <p>When termini don't line up at the naive first and last residues, Astra3 shows a before/after for each and asks. Answer <code>y</code>, <code>n</code>, <code>nterm</code> or <code>cterm</code>. Matching uses a 10-residue window and a 10-residue search; a confident match is 80% identity or above. If it isn't confident, type <code>advanced</code> for a 250-residue search. Offsets of 15 residues or more are always disclosed.</p>
+          <h3>Renders</h3>
+          <div class="tw"><table class="t"><thead><tr><th><code>-skipimage</code></th><th><code>-skipcloseup</code></th><th>Result</th></tr></thead><tbody>
+            <tr><td>off</td><td>off</td><td>Whole-structure views and close-ups</td></tr>
+            <tr><td>off</td><td>on</td><td>Whole-structure views only</td></tr>
+            <tr><td>on</td><td>off</td><td>Close-ups only</td></tr>
+            <tr><td>on</td><td>on</td><td>No images</td></tr>
+          </tbody></table></div>
+        </section>
+        <section id="batch" data-group="Commands">
+          <h2>BATCH</h2>
+<pre><code>BATCH 1AKE 4AKE 2AK3
+BATCH batch.txt -alwaysreduce</code></pre>
+          <p>Processes structures one after another without stopping the run if one fails. A batch file has one ID per line; blank lines and lines starting with <code>#</code> are ignored. IDs are normalised and deduplicated.</p>
+          <h3>Redundant chains</h3>
+          <div class="tw"><table class="t"><thead><tr><th>Flag</th><th>Effect</th></tr></thead><tbody>
+            <tr><td><code>-alwaysreduce</code></td><td>Always keep one chain; never prompt</td></tr>
+            <tr><td><code>-keephomomers</code></td><td>Never reduce; keep every chain</td></tr>
+            <tr><td><code>-reducepriority:&lt;order&gt;</code></td><td>Order of <code>missing</code>, <code>leastligands</code>/<code>mostligands</code>, <code>chainA</code>. Default <code>missing,leastligands,chainA</code>; ties end alphabetically.</td></tr>
+          </tbody></table></div>
+        </section>
+        <section id="related" data-group="Commands">
+          <h2>Related Structures</h2>
+          <p>New in 1.9.0. Enter a PDB ID on the Related Structures tab to list every experimental entry of the same protein (same UniProt entry), with method, resolution, ligands, mutations and coverage. Astra3 suggests OVERLAY or TERMINI and warns about construct boundaries, low resolution, NMR ensembles, extra copies, partner proteins and unmodelled residues. Send selected results to OVERLAY, TERMINI or BATCH.</p>
+        </section>
+        <section id="reports" data-group="Output">
+          <h2>Reports</h2>
+          <p><code>Astra3_Report.html</code> is self-contained, with relative image and session paths, so the whole output folder can be zipped and shared. It includes info icons that explain each value, colour keys on image groups, foldable sections, a dark-mode switch and an Open Session button.</p>
+          <ul>
+            <li><strong>Structure quality:</strong> method, resolution, chains, ligands, ions, B-factors, alternate conformations</li>
+            <li><strong>Chains:</strong> terminus ranges and missing residues from <code>REMARK 465</code> or the mmCIF equivalent</li>
+            <li><strong>Ligands:</strong> binding-site residues within 4.0 Å and possible polar contacts within 3.5 Å</li>
+            <li><strong>HETATM audit</strong>, geometric <strong>disulfides</strong> (Sγ–Sγ ≤ 2.5 Å) and a <strong>water summary</strong></li>
+            <li><strong>1.9.0:</strong> wwPDB validation (clashscore, Ramachandran, rotamer and real-space fit outliers), UniProt reference and declared mutations, Pfam/CATH/ECOD/SCOP domains, cross-checks, and a Methods paragraph saved as <code>Methods.txt</code></li>
+          </ul>
+          <p>If the Protein Data Bank cannot be reached, analyses still complete and the report says which information is unavailable.</p>
+        </section>
+        <section id="formats" data-group="Output">
+          <h2>PDB and mmCIF</h2>
+          <p>Legacy PDB is tried first when fetching by ID; if a structure isn't available in that format Astra3 falls back to mmCIF. Use <code>-mmCIF</code> to request it directly, or attach it after one ID in OVERLAY/TERMINI (<code>OVERLAY 6DK3 9BOX -mmCIF</code> fetches only 9BOX as mmCIF).</p>
+        </section>
+        <section id="exports" data-group="Output">
+          <h2>CSV and JSON</h2>
+          <p>JSON is always written: <code>Astra3_Report.json</code> for single-structure and OVERLAY runs, <code>Termini_Analysis.json</code> for TERMINI. Unavailable values are <code>null</code>.</p>
+          <div class="tw"><table class="t"><thead><tr><th>Command</th><th>CSV files with <code>-csv</code></th></tr></thead><tbody>
+            <tr><td>Single / BATCH</td><td><code>Astra3_Export.csv</code>, one row per structure</td></tr>
+            <tr><td>OVERLAY</td><td><code>Overlay_Summary.csv</code> and <code>Pairwise_RMSD_Matrix.csv</code></td></tr>
+            <tr><td>TERMINI</td><td><code>Termini_Analysis.csv</code>, one row per structure and chain</td></tr>
+            <tr><td>Ligands</td><td><code>Ligand_Environment.csv</code>, one row per ligand and nearby residue</td></tr>
+          </tbody></table></div>
+        </section>
+        <section id="troubleshooting" data-group="Help">
+          <h2>Troubleshooting</h2>
+          <h3>"This file does not appear to be a valid PyMOL executable."</h3>
+          <p>You selected something other than PyMOL. Choose PyMOL's own application; the common location is <code>/Applications/PyMOL.app/Contents/MacOS/PyMOL</code>.</p>
+          <h3>"PyMOL could not be found."</h3>
+          <p>PyMOL was moved, renamed or removed. The setup dialog reopens; browse to the new location. Changing a configured path restarts Astra3 so it applies everywhere.</p>
+          <h3>Analyses fail when saving</h3>
+          <p>macOS may have denied folder access. Grant it under System Settings → Privacy &amp; Security → Files and Folders, or choose another output folder in Settings.</p>
+          <h3>Images differ slightly between machines</h3>
+          <p>Orientation and colouring are deterministic, but ray-traced pixels can vary across PyMOL versions, GPUs and font rendering.</p>
+        </section>
+        <section id="limitations" data-group="Help">
+          <h2>Limitations</h2>
+          <ul>
+            <li>Astra3 is not a modelling or prediction tool; it does not predict structure, function, stability, affinity or biological effect.</li>
+            <li>Ligand-environment results are geometric proximity, not confirmed interactions. Salt bridges and π-stacking are not computed.</li>
+            <li>Alignment uses PyMOL's sequence-guided <code>cmd.align</code>; it is not designed for remote homology or fold recognition.</li>
+            <li>TERMINI needs a shared chain ID and enough resolved residues near each terminus.</li>
+            <li>Crystal contacts are not computed.</li>
+            <li>Fetching by PDB ID needs internet access; offline use works through IMPORT.</li>
+          </ul>
+        </section>
+        <section id="faq" data-group="Help" class="faq">
+          <h2>FAQ</h2>
+          <details><summary>Does Astra3 replace PyMOL?</summary><p>No. It runs its analysis through your own PyMOL and saves a normal PyMOL session you can keep working in.</p></details>
+          <details><summary>Do I need Incentive PyMOL?</summary><p>No. Open-source and Incentive PyMOL both work; nothing requires an Incentive-only feature. The report footer records which one produced it, where that can be determined.</p></details>
+          <details><summary>Does it run on Intel Macs or Windows?</summary><p>The macOS build is universal and runs natively on Intel and Apple Silicon. A Windows version is in Microsoft Store certification and is not available yet.</p></details>
+          <details><summary>Does Astra3 send my data anywhere?</summary><p>It contacts only the RCSB Protein Data Bank to download and annotate public structures you ask for. Imported files, results and settings stay on your computer. See the <a href={u('/privacy')} style="color:var(--accent-bright)">privacy policy</a>.</p></details>
+          <details><summary>How do I cite Astra3?</summary><p>See <a href={u('/research')} style="color:var(--accent-bright)">Research &amp; citation</a>, or use the Methods paragraph at the end of every report.</p></details>
+        </section>
+</DocumentationLayout>
+</BaseLayout>
