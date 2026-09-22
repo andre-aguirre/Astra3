@@ -1,8 +1,8 @@
-# Astra3 for macOS (Windows Undergoing Testing)
+# Astra3 for macOS
 
 **Structural Analysis Toolkit for PDB Rendering Automation**
 
-Version 1.8.1 (macOS, Apple Silicon)
+Version 1.9.0 (macOS, Apple Silicon)
 
 Astra3 is a PyMOL automation toolkit for structural biologists who need
 consistent, reproducible processing of PDB structures without hand-running
@@ -34,6 +34,35 @@ Beyond single-structure analysis, Astra3 also supports:
   HTML/text reports, so results can feed downstream analysis pipelines
 
 ---
+
+## What's new in 1.9.0
+
+- **Related Structures tab.** Enter a PDB ID to find every experimental
+  entry of the same protein (same UniProt entry). Each result shows its
+  method, resolution, ligands, mutations and how much of your protein it
+  covers, suggests whether it suits Overlay or Termini, and warns before
+  you run anything: different construct boundaries, low resolution, NMR
+  ensembles, extra copies, partner proteins, unmodeled residues. Selected
+  results go straight to Overlay, Termini or Batch.
+- **Validation data** from the wwPDB validation report: clashscore,
+  Ramachandran, rotamer and real-space fit outliers, with the specific
+  outlier residues.
+- **Reference sequence and mutations.** Reports list the UniProt
+  reference and every difference the depositor declared (engineered
+  mutations, expression tags, cloning artifacts), plus residues the PDB
+  identifies as differing from UniProt.
+- **Domains** from Pfam, CATH, ECOD and SCOP, in the structure's own
+  residue numbering.
+- **Cross-checks.** Astra3 warns when an outlier, mutation or expression
+  tag falls inside a terminus window or a ligand's contact residues, and,
+  when comparing structures, when they are different proteins, start at
+  different residues, or only some carry mutations.
+- **Methods section.** Every report ends with a ready-to-paste Methods
+  paragraph with references, also saved as `Methods.txt`.
+- **Reproducibility.** Reports record the exact command options used, and
+  every piece of outside data a report relied on is saved with the run.
+- **Works offline.** If the Protein Data Bank cannot be reached, analyses
+  still complete and the reports say which information is unavailable.
 
 ## What's new in 1.8.1
 
@@ -175,7 +204,7 @@ viewer" below for a stated limitation on license-type detection).
 **Requirements:** macOS 12 or later, Apple Silicon (M1 or newer),
 [PyMOL](https://pymol.org/) installed separately.
 
-1. Download `Astra3-1.8.1-arm64.dmg` (or the `.zip`, which contains the
+1. Download `Astra3-1.9.0-arm64.dmg` (or the `.zip`, which contains the
    same signed app) from the
    [GitHub Releases](https://github.com/andre-aguirre/Astra3/releases)
    page.
@@ -601,12 +630,25 @@ auto-decision flags above, applied to every structure in the batch.
 IMPORT
 ```
 
-Prompts for a file path. Accepts `.pdb` and `.pse` files. The imported
-structure is assigned a temporary `AST-XXXX` ID that you can then use
-like a PDB ID for the rest of the session, including inside
-`OVERLAY`/`TERMINI`. This ID is **session-only**; it disappears once
-Astra3 closes, so if you need to refer back to an imported structure,
-note the ID it prints or process it before ending the session.
+Prompts for a file path. Accepts `.pdb`, `.cif`/`.mmcif` and `.pse`
+files. The imported structure is assigned a temporary `AST-XXXX` ID that
+you can then use like a PDB ID for the rest of the session, including
+inside `OVERLAY`/`TERMINI`. This ID is **session-only**; it disappears
+once Astra3 closes, so if you need to refer back to an imported
+structure, note the ID it prints or process it before ending the
+session.
+
+An imported coordinate file's own header is used as it is: resolution,
+R-factors, missing residues and the depositor's biological assemblies,
+so chain-reduction prompts can still say whether other chains are
+binding partners or crystal copies. When the file names a PDB entry (in
+its header, or as its file name, e.g. `3fxi.pdb`), Astra3 asks once
+whether the file is that entry. Answering yes adds the entry's public
+validation, reference-sequence and domain data from RCSB PDB to the
+report, which then notes the identification as a warning and in its
+Methods text. Imported structures work fully offline; if RCSB cannot be
+reached after a yes, Astra3 offers to try again or to continue without
+that data.
 
 ### -t, regression test
 
