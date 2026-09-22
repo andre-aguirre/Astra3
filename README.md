@@ -3,6 +3,7 @@
 **Structural Analysis Toolkit for PDB Rendering Automation**
 
 Version 1.9.0 (macOS, Apple Silicon)
+
 Visit our website: [Astra3 Website](https://andre-aguirre.github.io/Astra3/)
 
 Astra3 is a PyMOL automation toolkit for structural biologists who need
