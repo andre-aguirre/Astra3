@@ -1,6 +1,7 @@
 # Astra3
 Visit the Website: [Astra3 Website](https://andre-aguirre.github.io/Astra3/)
-Windows? Download from the Microsoft Store: [Astra3 Microsoft Store Link](https://apps.microsoft.com/detail/9PKK58GQP8QX)
+
+Download Astra3 for Windows from the Microsoft Store: [Astra3 Microsoft Store Link](https://apps.microsoft.com/detail/9PKK58GQP8QX)
 
 **Structural Analysis Toolkit for PDB Rendering Automation**
 
