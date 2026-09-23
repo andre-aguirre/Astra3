@@ -1,0 +1,12 @@
+---
+import { CONFIG } from '../config';
+import { ICON } from '../lib/icons';
+const w = CONFIG.platforms.windows;
+const live = w.status === 'available' && w.url;
+---
+<div class="win-note">
+  <Fragment set:html={ICON.windows} />
+  {live
+    ? <span>Also on Windows · <a href={w.url!} target="_blank" rel="noopener">Microsoft Store</a></span>
+    : <span><strong style="color:var(--text-0);font-weight:600">Windows · Coming soon.</strong> Microsoft Store certification in progress.</span>}
+</div>
