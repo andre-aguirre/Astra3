@@ -2,9 +2,7 @@
 
 **Structural Analysis Toolkit for PDB Rendering Automation**
 
-Version 1.9.0 (macOS, Apple Silicon)
-
-Visit our website: [Astra3 Website](https://andre-aguirre.github.io/Astra3/)
+Version 1.9.0 (macOS, universal: Intel and Apple Silicon)
 
 Astra3 is a PyMOL automation toolkit for structural biologists who need
 consistent, reproducible processing of PDB structures without hand-running
@@ -203,10 +201,10 @@ viewer" below for a stated limitation on license-type detection).
 
 ### Installing
 
-**Requirements:** macOS 12 or later, Apple Silicon (M1 or newer),
+**Requirements:** macOS 10.15 Catalina or later, Intel or Apple Silicon,
 [PyMOL](https://pymol.org/) installed separately.
 
-1. Download `Astra3-1.9.0-arm64.dmg` (or the `.zip`, which contains the
+1. Download `Astra3-1.9.0-universal.dmg` (or the `.zip`, which contains the
    same signed app) from the
    [GitHub Releases](https://github.com/andre-aguirre/Astra3/releases)
    page.
@@ -258,7 +256,7 @@ under System Settings → Privacy & Security → Files and Folders.
 
 ### Known limitations on macOS
 
-- Apple Silicon only. There is no Intel build.
+- One universal build runs natively on Intel and Apple Silicon.
 - PyMOL must be installed separately; Astra3 does not bundle it.
 - Opening a `.pse` from within Astra3 launches your configured PyMOL
   directly rather than going through the Finder file association, which
