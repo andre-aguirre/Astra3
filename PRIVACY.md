@@ -1,6 +1,6 @@
 # Astra3 Privacy Policy
 
-**Effective date:** September 21, 2026 (updated for Astra3 1.9.0)
+**Effective date:** September 22, 2026 (updated for Astra3 1.9.0)
 **Applies to:** Astra3 for Windows (including the Microsoft Store version) and Astra3 for macOS
 
 Astra3 is a desktop application for protein structure analysis, created by Andre Aguirre. This policy explains what information Astra3 handles, where it goes, and what stays on your computer.
