@@ -1,0 +1,63 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { CONFIG } from '../config';
+// Kept in step with PRIVACY.md in the Astra3 repository, which is the policy
+// the app itself shows and the Microsoft Store listing links to.
+---
+<BaseLayout title="Privacy · Astra3" description="What information Astra3 handles, what it sends to the RCSB Protein Data Bank, and what stays on your computer." current="privacy">
+<header class="page-head"><div class="wrap"><p class="eyebrow">Privacy</p><h1>Privacy policy</h1><p class="lede">Effective September 23, 2026, updated for Astra3 1.9.1. Applies to Astra3 for macOS and Windows (including the Microsoft Store version), and to this website.</p></div></header>
+  <div class="wrap prose">
+    <h2>The short version</h2>
+    <ul>
+      <li>Astra3 does not collect, store, sell or share personal information.</li>
+      <li>Astra3 has no accounts, sign-in, analytics, advertising, tracking, telemetry or crash reporting.</li>
+      <li>Your analyses, imported files and results stay on your own computer.</li>
+      <li>The only information that leaves your computer is what is needed to download and look up public protein structure data you ask for, sent to the RCSB Protein Data Bank.</li>
+    </ul>
+
+    <h2>Information Astra3 sends over the internet</h2>
+    <p>Astra3 contacts one organization, the <strong>RCSB Protein Data Bank</strong> (rcsb.org), a public scientific archive. Requests contain only what each service needs:</p>
+    <div class="tw"><table class="t"><thead><tr><th>Service</th><th>When Astra3 uses it</th><th>What the request contains</th></tr></thead><tbody>
+      <tr><td>Structure downloads (files.rcsb.org)</td><td>When you analyze a structure by its PDB ID</td><td>The PDB ID</td></tr>
+      <tr><td>Connection check (files.rcsb.org)</td><td>Periodically while Astra3 is open, to tell you when you are offline</td><td>Nothing about you or your work</td></tr>
+      <tr><td>Data API (data.rcsb.org)</td><td>When a report is created for a structure downloaded by PDB ID, or for an imported file you have confirmed is a specific PDB entry, to add validation, reference-sequence and domain information</td><td>The PDB ID and the chain identifiers being analyzed</td></tr>
+      <tr><td>Search API (search.rcsb.org)</td><td>When you use the Related Structures tab</td><td>The UniProt accession of the protein you searched for or, for a protein with no UniProt entry, that public PDB entry's protein sequence</td></tr>
+      <tr><td>Structure images (cdn.rcsb.org)</td><td>When the Related Structures tab shows results</td><td>The PDB IDs of the listed entries, to load RCSB's published picture of each</td></tr>
+    </tbody></table></div>
+    <p>Every request also carries the standard technical information any internet request includes, such as your IP address. The Protein Data Bank handles these requests under its own privacy policy, available at rcsb.org; Astra3 does not receive or keep any record of them beyond the data returned.</p>
+    <p>Astra3 never uploads your imported files, results, reports or settings. Structures you import from your own files are not looked up online, with one exception you control: when an imported file names a PDB entry (for example, 3FXI), Astra3 asks whether the file is that entry. Only if you answer yes does it request that entry's public data, sending only the PDB ID. Imported structures work fully offline.</p>
+    <p>Reports link to UniProt for reference sequences and to the wwPDB validation report on rcsb.org. Nothing is sent to either unless you click a link, which opens it in your web browser.</p>
+
+    <h2>Information stored on your computer</h2>
+    <p>Analysis results, a copy of the public Protein Data Bank data each report used, settings, run history, your PyMOL location and output folder, and a PyMOL diagnostic log are kept only on your computer, in your output folder and Astra3's own folders. None of it is sent to the developer or anyone else. Reports can contain file and folder names from your computer and only leave it if you share them.</p>
+    <div class="tw"><table class="t"><thead><tr><th>What</th><th>Windows</th><th>macOS</th></tr></thead><tbody>
+      <tr><td>Analysis results (default output folder)</td><td><code>Astra3\Protein_outputs</code> in your user folder</td><td><code>~/Documents/Astra3/Protein_outputs</code></td></tr>
+      <tr><td>PyMOL location, output folder choice, diagnostic log</td><td><code>Astra3\config</code> in your user folder</td><td><code>~/Library/Application Support/Astra3/tools</code></td></tr>
+      <tr><td>Settings and run history</td><td>Astra3's app data folder</td><td><code>~/Library/Application Support/Astra3</code></td></tr>
+    </tbody></table></div>
+
+    <h2>PyMOL</h2>
+    <p>Astra3 runs its analysis inside your separately installed PyMOL, governed by its provider's terms (the open-source PyMOL project or Schrödinger, Inc.). Astra3 reads PyMOL's version and license type only to record them in your reports.</p>
+
+    <h2>How you obtained Astra3</h2>
+    <p>Astra3 itself collects nothing, but the service you downloaded it from may. The Microsoft Store handles purchases, downloads and updates under the Microsoft Privacy Statement and may give developers aggregated, non-identifying statistics such as download counts. GitHub hosts release files under the GitHub Privacy Statement. On macOS, Apple may verify the app's notarization when you first open it.</p>
+
+    <h2>Deleting your data</h2>
+    <p>Everything is stored locally, so you are in control. Delete results from your output folder, and remove Astra3's configuration by deleting the <code>Astra3</code> folder in your user folder on Windows, or <code>~/Library/Application Support/Astra3</code> on macOS. Uninstalling the Microsoft Store version removes the app and its app data folder; uninstalling any other version leaves the app data folder (<code>%APPDATA%\Astra3</code> on Windows, <code>~/Library/Application Support/Astra3</code> on macOS), which you can delete yourself. On Windows, the <code>Astra3</code> folder in your user folder is kept after uninstalling in every case, and your output folder is always kept unless you delete it. There is nothing to request from the developer, because the developer holds no data about you.</p>
+
+    <h2>This website</h2>
+    <p>This website is a static site hosted on GitHub Pages. It uses no analytics, no cookies, no advertising and no tracking, and its fonts, images, structure files and 3D viewer are served from the site itself. GitHub, as the host, may log technical information such as visitors' IP addresses under the GitHub Privacy Statement. Links to GitHub, LinkedIn or other sites take you to services with their own privacy policies.</p>
+
+    <h2>Children's privacy</h2>
+    <p>Astra3 is a scientific tool for general and educational use. It does not knowingly collect information from anyone, including children, because it collects no personal information at all.</p>
+
+    <h2>Security</h2>
+    <p>Astra3 does not operate servers or store your data remotely, so there is no remote copy of your information that could be exposed. All requests to the Protein Data Bank use encrypted connections (HTTPS).</p>
+
+    <h2>Changes to this policy</h2>
+    <p>If Astra3 changes how it handles information, this policy will be updated before or alongside that change, and any feature that sends information somewhere new will be described here first.</p>
+
+    <h2>Contact</h2>
+    <p>Andre Aguirre · <a href={`mailto:${CONFIG.contactEmail}`}>{CONFIG.contactEmail}</a> · <a href={CONFIG.githubUrl} target="_blank" rel="noopener">github.com/andre-aguirre/Astra3</a></p>
+  </div>
+</BaseLayout>
