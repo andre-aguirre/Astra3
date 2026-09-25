@@ -1,13 +1,8 @@
-# Astra3 for MacOS
-Visit the Website: [Astra3 Official Website](https://andre-aguirre.github.io/Astra3/)
-
-Download Astra3 for Windows from the Microsoft Store: [Astra3 for Windows](https://apps.microsoft.com/detail/9PKK58GQP8QX)
-
----
+# Astra3 for macOS
 
 **Structural Analysis Toolkit for PDB Rendering Automation**
 
-Version 1.9.1 (macOS, universal: Intel and Apple Silicon)
+Version 1.9.2 (macOS, universal: Intel and Apple Silicon)
 
 Astra3 is a PyMOL automation toolkit for structural biologists who need
 consistent, reproducible processing of PDB structures without hand-running
@@ -39,6 +34,51 @@ Beyond single-structure analysis, Astra3 also supports:
   HTML/text reports, so results can feed downstream analysis pipelines
 
 ---
+
+## What's new in 1.9.2
+
+- **TERMINI measurements.** Each terminus reports its orientation change,
+  the angle through which its last ten residues have turned as a segment,
+  and its Terminal Projection Vector (TPV) angle change, the turn of its
+  last four residues: the direction the chain points where a terminal tag
+  would join. Local RMSD is given in place and refit, which separates a
+  shift of the whole end from a change in its shape. All of these are in
+  the report, JSON and CSV, and the "Largest Rotation" cards use
+  orientation change.
+- **Orientation arrows.** Close-up views draw each terminus's orientation
+  vector as an arrow pointing out of the protein at both ends.
+- **Offset corrections.** The prompt names the structure and chain that
+  would be trimmed, including the reference. `-alwaysmatch` applies a
+  correction at 70% identity or higher and leaves weaker matches for
+  review. Warnings record whether each correction was approved at the
+  prompt or applied automatically.
+- **Methods text.** Terminus metrics are described with their exact
+  definitions, multi-structure runs name each structure's water count,
+  ligands and ions, and the RCSB PDB is cited with both its original and
+  its current reference.
+- **Reports in the app.** The report view shows its images as scaled
+  copies loaded as you scroll. Each group of images has a Copy figure
+  button that copies the images and their colour key as one full-quality
+  picture, with the shared empty margin trimmed and every panel at the
+  same scale, on a transparent background on macOS. Copy figure is
+  available only inside the app, because a
+  report opened in a browser cannot read its own image files back.
+- **3D viewer.** Each chain lists the ligands and ions bound to it, with
+  one switch for its ligands and one for its ions.
+- **Advanced Console.** Astra3 starts when the console opens, each
+  command is shown once, and every command gets a reply, including a
+  mistyped one. A command typed while Astra3 is starting waits for it.
+  The prompt is `Enter a PDB ID:`.
+- **B-factors.** An NMR entry reports its B-factor statistics as not
+  applicable, and a file whose B-factors are all zero reports them as not
+  recorded, in the HTML report, text report, JSON and CSV.
+- **Short chains.** A structure whose chains are all too short for
+  termini (under 25 residues, such as 1L2Y) completes normally. Chains
+  left out of terminus selection are listed in the report's warnings,
+  Chain Analysis table and Methods text.
+- **NMR ensembles.** For a file holding several models, Astra3 uses the
+  first model for every measurement, including ligand contacts, and the
+  warnings and Methods text say so.
 
 ## What's new in 1.9.1
 
@@ -223,7 +263,7 @@ viewer" below for a stated limitation on license-type detection).
 **Requirements:** macOS 10.15 Catalina or later, Intel or Apple Silicon,
 [PyMOL](https://pymol.org/) installed separately.
 
-1. Download `Astra3-1.9.1-universal.dmg` (or the `.zip`, which contains the
+1. Download `Astra3-1.9.2-universal.dmg` (or the `.zip`, which contains the
    same signed app) from the
    [GitHub Releases](https://github.com/andre-aguirre/Astra3/releases)
    page.
@@ -359,9 +399,9 @@ to locate it directly rather than typing a guessed path.
 
 ## Commands
 
-Astra3 runs as an interactive prompt: `Enter a PDB ID (or -help):`. Type a
-command and press Enter. Type `-help` at any time to print the full
-command reference from inside the running session.
+Astra3 runs as an interactive prompt, `Enter a PDB ID:`, which is what
+the desktop app's Advanced Console shows. Type a command and press Enter.
+Every command and flag is described below.
 
 ### Single-structure analysis
 
@@ -460,32 +500,51 @@ Example:
 TERMINI AST-0001 AST-0002 AST-0003
 ```
 
-For each shared protein chain between the reference and a comparison
-structure, TERMINI computes, independently for the N-terminus and the
-C-terminus (the two are never compared to each other):
+For each protein chain matched between the reference and a comparison
+structure (by chain ID, or by sequence when the two structures use
+different chain letters), TERMINI computes, independently for the
+N-terminus and the C-terminus (the two are never compared to each other):
 
-- **Tip displacement**, distance (angstroms) between the terminal
-  residue's C-alpha before and after alignment
-- **Centroid displacement**, distance between the centroid of the first
-  (or last) residues, a more stable measure than the single tip residue
-- **Orientation change**, angle between the reference's and the
-  comparison's terminus orientation vector
-- **Terminal Projection Vector (TPV) angle change**, an angle describing
-  how much the direction a fusion tag would project outward from the
-  terminus has changed. This is a **geometric extrapolation of resolved
-  backbone coordinates only**; it approximates, but does not predict, how
-  an attached tag (for example HiBiT, FLAG, HA, or GFP) would actually
-  behave.
-- **Local terminal RMSD**, isolating local conformational change from
-  global backbone RMSD
+- **Tip displacement**, the distance (angstroms) between the reference's
+  and the comparison's terminal C-alpha after superposition
+- **Centroid displacement**, the distance between the centroids of the
+  five terminal C-alpha atoms, a more stable measure than the single tip
+  residue
+- **Orientation change**, how much the last ten residues, taken as one
+  segment, have turned. Each structure's orientation vector runs along the
+  terminal segment between the centroids of its outer five and inner five
+  C-alpha atoms; the value is the angle between the two structures'
+  vectors. Because it averages ten residues, one loose residue changes it
+  very little. The close-up views draw this vector as an arrow pointing
+  out of the protein.
+- **Terminal Projection Vector (TPV) angle change**, how much the very
+  end of the chain has changed direction. Each structure's TPV is an arrow
+  from the centroid of the three C-alpha atoms just before the terminal
+  residue to the terminal C-alpha, pointing the way the chain is heading
+  as it ends. It uses only the last four residues, so a large TPV change
+  with a small orientation change means the segment stayed in place while
+  its tip turned. For a tag attached at that terminus (for example HiBiT,
+  FLAG, HA or GFP), the TPV shows which way the chain points where the tag
+  joins.
+- **Local RMSD, in place**, the C-alpha RMSD over the paired residues of
+  the ten-residue terminus window, measured where they sit after the
+  whole-chain superposition. It includes both a shift of the whole end
+  and any change in its shape.
+- **Local RMSD, refit**, the same pairs after superposing the two
+  terminus windows onto each other, which leaves only the change in
+  shape. It is never larger than the in-place value; a large in-place
+  value with a small refit value means the end moved as a rigid piece.
+- **Change in solvent-accessible surface area** and **change in
+  normalized B-factor** of the terminus window
 
 If a chain has too few resolved residues near a terminus to compute these
-windows, or two structures share no chain IDs at all, that comparison is
-reported as unavailable rather than estimated.
+windows, or no chain in the comparison corresponds to a reference chain,
+that comparison is reported as unavailable rather than estimated.
 
 **Renders.** TERMINI produces two independent sets of images per
 comparison: the standard whole-structure views, and a set of close-up
-terminus renders showing the TPV arrows directly, with a white dashed line
+terminus renders showing each structure's orientation vector as an arrow
+pointing out of the protein, with a white dashed line
 connecting corresponding terminal centroids. The reference's arrows are
 orange (N) and pink (C) in every close-up; each comparison has its own
 pair, named in a colour key beside its close-ups. Runs with two or more
@@ -526,14 +585,14 @@ auto-decision flags below, and produces:
   columns for every metric above, N and C side by side)
 
 **Terminus alignment offsets.** When two termini do not quite line up at
-the naive first/last residues, Astra3 shows a before/after comparison for
-each terminus and asks whether to apply the correction. Nothing is changed
-without approval.
-
-When both termini need a correction they can be handled independently:
-answer `y` to apply both, `n` to apply neither, or `nterm` / `cterm` to
-apply only that one. The two ends of a chain frequently differ, and a
-single decision for both would discard that.
+the naive first/last residues, Astra3 shows a before/after comparison and
+asks about each terminus separately, naming the structure and chain whose
+residues would be trimmed. That can be the reference: every compared
+residue has to correspond, so whichever structure carries the extra
+residues loses them, and later comparisons in the same run use the
+trimmed reference. Nothing is changed without approval, and the report
+records each decision. The two ends are asked about separately because
+they frequently differ: one can line up cleanly while the other does not.
 
 **How the match is scored.** Astra3 takes the terminal window from each
 structure, extends it by a search margin, and tries every offset between
@@ -562,6 +621,18 @@ pair whose termini correspond perfectly 40 residues in. Any adopted offset
 of **15 residues or more** is disclosed rather than applied quietly. The
 thorough pass is offered only when the quick check is genuinely uncertain,
 so most runs never see it.
+
+**Deciding in advance (Advanced Console).** Two flags answer the offset
+question without a prompt, for unattended runs typed in the Advanced
+Console; the desktop app's Termini page always asks.
+
+| Flag | Effect |
+|---|---|
+| `-alwaysmatch` | Applies a correction when the match is 70% identity or higher. A weaker match is left uncorrected and flagged in the report for review. |
+| `-nevermatch` | Declines every correction; every terminus is measured on the naive window. |
+
+The before/after comparison is still printed, and the report says the
+decision was made automatically.
 
 Terminus matching is deliberately an exact-residue comparison: it is
 answering where two chains line up, not how similar they are. Sequence
@@ -722,6 +793,13 @@ and opens the same `.pse` the viewer itself would load.
 
 A few notes on current viewer behavior:
 
+- **Ligands and ions under their chain.** In the Chains section, a chain
+  with ligands or ions bound lists them beneath it, open by default, with
+  one switch for its ligands and one for its ions (the residue names are
+  shown beside each), so a chain and everything it carries can be hidden
+  together. A ligand or ion belongs to the chain with the same chain
+  letter in the same structure; any that match no chain stay in the
+  Ligands and Ions sections.
 - **Chain and ligand recoloring apply per structure**, including in
   OVERLAY/TERMINI comparisons where two independently loaded structures
   can share a chain letter (both using chain A, for example) in the
@@ -810,14 +888,14 @@ cover the same underlying data, organized as:
   events, and other conditions worth a researcher's attention, kept in a
   dedicated section separate from the main summary
 
-Several report sections are **explicit "not available" stubs by design**,
-rather than silently omitted or filled with a guess:
+Some report sections say plainly when their data is unavailable, rather
+than being silently omitted or filled with a guess:
 
-- **Domains.** Domain boundaries require an external annotation database
-  (Pfam, InterPro, CATH/SCOP) that Astra3 does not query.
-- **Mutations.** Identifying mutations relative to a deposited construct
-  requires comparison against an external reference sequence (for example
-  UniProt) that Astra3 does not query.
+- **Domains and mutations** come from the RCSB PDB Data API (Pfam, CATH,
+  ECOD and SCOP assignments; the UniProt reference sequence) and from the
+  depositor's own difference records in the file. When that data cannot
+  be retrieved, for example offline or for an imported file with no
+  matching entry, the report says so.
 - **Crystal contacts.** Not computed in the current version; this would
   require generating symmetry mates from the file's space group.
 
@@ -876,19 +954,23 @@ publication- or decision-critical.
   in the structure/header data, or what can be measured geometrically
   from PyMOL coordinates. It does not predict structure, function,
   stability, binding affinity, or biological effect of any kind.
-- **Domain, mutation, and crystal-contact analysis are not implemented.**
-  These sections exist in the report specifically to say so; do not
-  mistake their presence for partial support.
+- **Crystal contacts are not analyzed.** A terminal difference between
+  two crystal structures can come from crystal packing rather than from
+  the ligand or mutation that distinguishes them, and Astra3 does not yet
+  flag this.
+- **A terminus is the last resolved residue.** Tails that were not
+  modelled cannot be measured, so two structures' termini can sit at
+  different points in the sequence; the offset check exists for this
+  reason.
 - **Ligand-environment analysis reports geometric proximity, not
   confirmed interactions.** A "possible polar contact" is an N/O pair
   within 3.5 angstroms; it does not confirm hydrogen-bond donor/acceptor
   geometry or that a bond actually forms. Salt bridges, pi-stacking, and
   other interaction typing are not computed.
-- **The Terminal Projection Vector (TERMINI) is a geometric
-  extrapolation, not a prediction.** It approximates the direction a
-  terminal fusion tag would initially project from the backbone, based
-  only on resolved coordinate geometry; it does not model how a tag
-  would actually fold, move, or behave once attached.
+- **The Terminal Projection Vector (TERMINI) comes from the last four
+  resolved residues.** It shows the direction the chain points where a
+  terminal tag would join. Astra3 does not model the tag itself, so how a
+  tag folds or behaves once attached has to be tested experimentally.
 - **Missing-residue detection depends on `REMARK 465`**, or the
   equivalent mmCIF field, being present in the source file. Structures
   without this information will show missing-residue data as
@@ -897,8 +979,8 @@ publication- or decision-critical.
   distance of 2.5 angstroms or less) and does not distinguish
   biologically relevant disulfides from close contacts that happen to
   fall within that cutoff in a given conformation.
-- **OVERLAY's automatic reference selection is a heuristic** (fewest
-  bound ligands), not a structural-quality metric. For anything where
+- **Automatic reference selection is a heuristic** (fewest bound
+  ligands, in OVERLAY and TERMINI), not a structural-quality metric. For anything where
   reference choice matters scientifically, use `-reference<ID>`
   explicitly and note the choice in your own methods.
 - **Alignment is sequence-guided structural superposition via PyMOL's
@@ -907,10 +989,12 @@ publication- or decision-critical.
   performs well for homologous structures but is not designed for
   remote-homology or fold-recognition alignment. TERMINI relies on this
   same alignment before computing any terminus comparison.
-- **TERMINI requires a shared chain ID** between the reference and each
-  comparison structure to compute a comparison for that chain; if none
-  exists, or if a terminus has too few resolved residues for the
-  tip/orientation window, that comparison is reported as unavailable.
+- **TERMINI compares chains that correspond.** Chains are paired by ID,
+  or by sequence (at least 90% identity over at least 70% coverage) when
+  the letters differ, and the report says when a pairing was made by
+  sequence. A chain with no counterpart, or a terminus with too few
+  resolved residues for the ten-residue window, is reported as
+  unavailable.
 - **Requires PyMOL to run.** Astra3 performs its analysis through PyMOL and
   cannot run without it installed.
 - **Fetching structures by PDB ID requires internet access.** Offline use
@@ -952,8 +1036,9 @@ GLmol, Three.js, and jQuery, is reproduced in `gui/THIRD_PARTY_NOTICES.txt`.
 If Astra3 contributes to published research, please cite:
 
 > Aguirre, A. (2026). Astra3: Structural Analysis Toolkit for PDB
-> Rendering Automation [Computer software].
+> Rendering Automation [Computer software]. Version 1.9.2.
 > https://github.com/andre-aguirre/Astra3
+> https://doi.org/10.5281/zenodo.22928160
 
 A machine-readable citation is also available in `CITATION.cff`.
 
