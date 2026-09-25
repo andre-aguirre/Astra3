@@ -5,7 +5,8 @@ type: software
 authors:
   - family-names: "Aguirre"
     given-names: "Andre"
-version: "1.9.1"
-date-released: "2026-09-23"
+version: "1.9.2"
+date-released: "2026-09-25"
 repository-code: "https://github.com/andre-aguirre/Astra3"
+doi: "10.5281/zenodo.22928160"
 license: "GPL-3.0-or-later"
