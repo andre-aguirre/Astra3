@@ -10,8 +10,7 @@ the same twenty PyMOL commands every time. Point it at a PDB ID (or a local
 `.pdb`, `.cif`, or `.pse` file), and it fetches the structure, cleans it up, colors and
 labels it deterministically, renders a full set of high-resolution images,
 and writes reports (HTML, plain text, and JSON) describing exactly what it
-found, and just as importantly, what it did not find, rather than
-guessing.
+found and what it could not find.
 
 Astra3 is a desktop application with a graphical interface, an interactive
 3D structure viewer, and live console output, so command syntax does not
@@ -45,6 +44,11 @@ Beyond single-structure analysis, Astra3 also supports:
   shift of the whole end from a change in its shape. All of these are in
   the report, JSON and CSV, and the "Largest Rotation" cards use
   orientation change.
+- **Change labels.** Solvent-exposure and B-factor labels in the
+  Terminal Metrics Summary use thresholds taken from the literature:
+  26 Å² of surface area and 0.2 in normalized B-factor. Smaller changes
+  are labelled Little change, and the Structural Interpretation and
+  Methods text say so.
 - **Orientation arrows.** Close-up views draw each terminus's orientation
   vector as an arrow pointing out of the protein at both ends.
 - **Offset corrections.** The prompt names the structure and chain that
@@ -57,7 +61,7 @@ Beyond single-structure analysis, Astra3 also supports:
   ligands and ions, and the RCSB PDB is cited with both its original and
   its current reference.
 - **Reports in the app.** The report view shows its images as scaled
-  copies loaded as you scroll. Each group of images has a Copy figure
+  copies loaded when the report opens. Each group of images has a Copy figure
   button that copies the images and their colour key as one full-quality
   picture, with the shared empty margin trimmed and every panel at the
   same scale, on a transparent background on macOS. Copy figure is
@@ -154,8 +158,8 @@ Beyond single-structure analysis, Astra3 also supports:
 
 ## Goal and design philosophy
 
-Astra3 is meant to be a **reliable structural analysis assistant, not a
-black-box predictor**. Every feature is built around five rules:
+Astra3 is meant to be a **reliable structural analysis assistant** whose
+every value can be traced to its source. Every feature is built around five rules:
 
 1. **Scientific accuracy.** Values reported are either read directly from
    PyMOL, computed deterministically from atomic coordinates, or parsed
@@ -203,7 +207,7 @@ For every structure it processes, Astra3:
    residues within 4.0 Å, and possible polar contacts (ligand N/O atoms
    within 3.5 Å of protein N/O atoms), using PyMOL's own geometry
    calculations (`cmd.find_pairs`, `cmd.iterate`). This is reported as a
-   geometric observation, not a confirmed hydrogen-bond or interaction
+   geometric observation without hydrogen-bond angle checks or interaction
    analysis; detailed interaction typing (salt bridges, pi-stacking) is
    out of scope and would need a dedicated tool such as PLIP or Arpeggio.
 6. **Detects redundant chains within a structure** (a homodimer, for
@@ -261,7 +265,8 @@ viewer" below for a stated limitation on license-type detection).
 ### Installing
 
 **Requirements:** macOS 10.15 Catalina or later, Intel or Apple Silicon,
-[PyMOL](https://pymol.org/) installed separately.
+[PyMOL](https://pymol.org/) installed separately, built on Python 3.7 or
+newer (current PyMOL releases are).
 
 1. Download `Astra3-1.9.2-universal.dmg` (or the `.zip`, which contains the
    same signed app) from the
@@ -287,7 +292,10 @@ is normally installed to:
 
 If none is found, Settings prompts you to select it. Astra3 verifies the
 choice by briefly launching it and confirming it behaves like PyMOL, so a
-wrong selection is caught immediately rather than at the first analysis.
+wrong selection is caught before the first analysis. A PyMOL too old to
+run Astra3 (one built on Python older than 3.7) is refused with a message
+saying so. A first launch can take a while, for example an Intel PyMOL
+on Apple Silicon; Astra3 waits for it.
 Both open-source and Incentive PyMOL work.
 
 ### Where Astra3 keeps things
@@ -298,7 +306,7 @@ Both open-source and Incentive PyMOL work.
 | Saved settings | `~/Library/Application Support/Astra3/tools/` |
 | Diagnostic log | `~/Library/Application Support/Astra3/tools/pymol-diagnostic.log` |
 
-Settings live in Application Support rather than inside the application
+Settings live in Application Support, outside the application
 bundle, because a signed `.app` cannot be written to without invalidating
 its signature, and `/Applications` is not writable by a standard user.
 
@@ -318,15 +326,14 @@ under System Settings → Privacy & Security → Files and Folders.
 - One universal build runs natively on Intel and Apple Silicon.
 - PyMOL must be installed separately; Astra3 does not bundle it.
 - Opening a `.pse` from within Astra3 launches your configured PyMOL
-  directly rather than going through the Finder file association, which
+  directly, without relying on the Finder file association, which
   PyMOL does not always register.
 
 ---
 
 ## PyMOL Setup
 
-The desktop app actively manages its connection to PyMOL rather than
-just trusting whatever was last saved. This section covers what that
+The desktop app actively checks and manages its connection to PyMOL. This section covers what that
 looks like in practice.
 
 ### Automatic detection
@@ -350,7 +357,7 @@ path field, a Browse button (for picking `PyMOL.app` directly through
 a native file picker), and a Confirm button. Selecting `PyMOL.app`
 itself works correctly here: Astra3 automatically resolves it down to
 the real executable inside the bundle
-(`PyMOL.app/Contents/MacOS/PyMOL`) rather than needing you to know
+(`PyMOL.app/Contents/MacOS/PyMOL`), so you never need to know
 that structure yourself. A small "README Document" link in the dialog
 closes it and takes you straight to the Citation & Docs page if you'd
 rather read more first. The dialog can also be closed without setting
@@ -362,11 +369,10 @@ PyMOL.
 
 You can also set or change the PyMOL path anytime from **Settings ->
 PyMOL**, using the same Browse button or by typing a path directly.
-Either way, the path is validated the same way (a real launch check,
-not just a file-existence check) before it's accepted; changing an
+Either way, the path is validated the same way (a real launch
+of PyMOL) before it's accepted; changing an
 already-configured path restarts Astra3 automatically so the new path
-takes effect everywhere immediately, not just for the next analysis
-you happen to run.
+takes effect everywhere immediately.
 
 ### Recovery if PyMOL becomes unavailable
 
@@ -393,7 +399,7 @@ something else with a similar name or location.
 ```
 
 If PyMOL is installed somewhere other than these defaults, use Browse
-to locate it directly rather than typing a guessed path.
+to locate it directly.
 
 ---
 
@@ -447,8 +453,13 @@ OVERLAY 3FXI 1RO6 1ROR
 **Reference selection.** By default, Astra3 automatically picks the
 structure with the fewest bound ligands as the reference (on the
 reasoning that a more sparsely bound structure is generally a cleaner
-alignment target), and records that reasoning in the report. This is a
-heuristic, not a structural-quality assessment; you can override it:
+alignment target), and records that reasoning in the report. If several
+structures tie on ligands, the one with the highest mean sequence
+similarity to the others is used (identity, coverage and length,
+weighted as in chain reduction), then the one with the most resolved
+residues, then the first by ID; the order you type them in never
+decides. This is a heuristic that does not assess structural quality;
+you can override it:
 
 ```
 -reference<ID>
@@ -467,14 +478,14 @@ per-structure `-mmCIF` attached directly after a specific ID, for example
 OVERLAY produces:
 - An RMSD summary per aligned structure (aligned atoms, aligned residues)
 - A full pairwise RMSD matrix (C-alpha based) across every loaded
-  structure, not just each structure vs. the reference
+  structure, including pairs without the reference
 - Six views of all structures aligned together, and six views of each
   comparison with the reference, each group with a colour key naming which
   colour is which structure
 - The same `Astra3_Report.html` / session / JSON / warnings structure as a
   single-structure run
 - With `-csv`: `Overlay_Summary.csv` and `Pairwise_RMSD_Matrix.csv` (kept
-  as two separate files rather than one, since a per-structure summary
+  as two separate files, since a per-structure summary
   and a per-pair comparison do not share a natural row structure)
 
 ### TERMINI, comparative terminus structural analysis
@@ -488,12 +499,14 @@ relative to a reference structure, after alignment. As with OVERLAY,
 Astra3 selects the structure with the **fewest bound ligands** as the
 reference, on the reasoning that the less ligand-encumbered structure is
 the more neutral baseline; every other structure is independently
-aligned to it and compared. Ties break on the order the structures were
-given. Use `-reference<ID>` to choose the reference yourself. Because
+aligned to it and compared. If several tie on ligands, the one with the highest mean sequence
+similarity to the others is used (identity, coverage and length,
+weighted as in chain reduction), then the one with the most resolved
+residues, then the first by ID; the order you type them in never
+decides. Use `-reference<ID>` to choose the reference yourself. Because
 every terminal measurement, the offset correction and the
 ligand-to-terminus distances are all expressed relative to the
-reference, the report states which structure was chosen and why, and
-warns when that is not the first structure named.
+reference, the report states which structure was chosen and why.
 
 Example:
 ```
@@ -530,16 +543,30 @@ N-terminus and the C-terminus (the two are never compared to each other):
   the ten-residue terminus window, measured where they sit after the
   whole-chain superposition. It includes both a shift of the whole end
   and any change in its shape.
-- **Local RMSD, refit**, the same pairs after superposing the two
+- **Local RMSD, refit**, the same pairs after [superposing](https://doi.org/10.1002/jcc.20110) the two
   terminus windows onto each other, which leaves only the change in
   shape. It is never larger than the in-place value; a large in-place
   value with a small refit value means the end moved as a rigid piece.
-- **Change in solvent-accessible surface area** and **change in
-  normalized B-factor** of the terminus window
+- **Change in [solvent-accessible surface area](https://doi.org/10.1016/0022-2836%2871%2990324-x)**
+  and **change in normalized B-factor** of the terminus window. The
+  normalized B-factor is the window's mean B-factor divided by the
+  protein's, a [published ratio normalization](https://doi.org/10.1016/j.ab.2022.114594)
+  that removes differences in overall B-factor level between structures
+  but leaves local effects such as crystal contacts. A terminus is
+  labelled more exposed or more buried when its surface area changes by
+  more than 26 Å², a quarter of
+  [glycine's maximum accessible surface](https://doi.org/10.1371/journal.pone.0080635) (104 Å²),
+  the smallest change that can carry a residue across the
+  [25% relative-accessibility line](https://doi.org/10.1016/j.jmb.2010.09.028) between
+  surface and interior residues. It is labelled rigidified or more
+  flexible when its normalized B-factor changes by more than 0.2, about
+  a 10% change in relative RMS atomic displacement given
+  [B = 8π²⟨u²⟩](https://doi.org/10.1021/acs.chemrev.8b00290). Smaller changes are labelled
+  Little change.
 
 If a chain has too few resolved residues near a terminus to compute these
 windows, or no chain in the comparison corresponds to a reference chain,
-that comparison is reported as unavailable rather than estimated.
+that comparison is reported as unavailable.
 
 **Renders.** TERMINI produces two independent sets of images per
 comparison: the standard whole-structure views, and a set of close-up
@@ -618,7 +645,7 @@ one carries an expression tag, a cloning scar, or a whole extra domain
 ahead of the point the other begins. Those differ by tens of residues, and
 a search that stops at 10 reports "these termini do not correspond" for a
 pair whose termini correspond perfectly 40 residues in. Any adopted offset
-of **15 residues or more** is disclosed rather than applied quietly. The
+of **15 residues or more** is always disclosed. The
 thorough pass is offered only when the quick check is genuinely uncertain,
 so most runs never see it.
 
@@ -634,8 +661,8 @@ Console; the desktop app's Termini page always asks.
 The before/after comparison is still printed, and the report says the
 decision was made automatically.
 
-Terminus matching is deliberately an exact-residue comparison: it is
-answering where two chains line up, not how similar they are. Sequence
+Terminus matching is deliberately an exact-residue comparison: it
+answers where two chains line up. Sequence
 similarity is a separate question and is reported separately, from a
 gap-aware alignment of the whole chain that distinguishes exact identity
 from conservative-substitution similarity, and both from how much of each
@@ -645,8 +672,8 @@ cannot be mistaken for strong evidence.
 **Terminus Sequences.** The HTML report shows the residues actually
 compared at each terminus, reference above comparison, one residue per
 column after any approved offset is applied -- so a column always compares
-residues that correspond, rather than a fixed first-or-last-N slice that
-can misalign the moment one structure's terminus starts earlier or later
+residues that correspond. A fixed first-or-last-N slice would
+misalign the moment one structure's terminus starts earlier or later
 than the other's. A `|` marks each column where the two agree. This is
 what every identity and similarity figure elsewhere in the report is
 computed from, shown so it can be checked by eye.
@@ -728,6 +755,16 @@ once Astra3 closes, so if you need to refer back to an imported
 structure, note the ID it prints or process it before ending the
 session.
 
+Each import is kept separate from everything already loaded: a second
+file with the same name (`model.pdb` from another folder, or the `.cif`
+of a `.pdb` you already imported) is loaded as its own structure, and
+both are then named with their folder in reports, for example
+`model.pdb (run1)` and `model.pdb (run2)`. From a `.pse` session, each
+protein or nucleic-acid object becomes its own ID; arrows and other
+drawing objects are left out. Output folders for runs on imported
+structures are named after the files, so running the same files again
+replaces the earlier results, as it does for PDB IDs.
+
 An imported coordinate file's own header is used as it is: resolution,
 R-factors, missing residues and the depositor's biological assemblies,
 so chain-reduction prompts can still say whether other chains are
@@ -804,8 +841,8 @@ A few notes on current viewer behavior:
   OVERLAY/TERMINI comparisons where two independently loaded structures
   can share a chain letter (both using chain A, for example) in the
   combined file PyMOL writes for such runs. The viewer distinguishes
-  these using each block's real atom serial numbers rather than the
-  chain letter alone, so recoloring one occurrence does not affect the
+  these using each block's real atom serial numbers as well as the
+  chain letter, so recoloring one occurrence does not affect the
   other.
 - The report footer records the PyMOL version and license type used to
   produce the report, where those can be determined. PyMOL does not
@@ -874,15 +911,15 @@ cover the same underlying data, organized as:
 - **Chain analysis**, N-terminus/C-terminus residue ranges per chain and
   missing-residue ranges (parsed from PDB `REMARK 465`, or the equivalent
   mmCIF field, when present). The residue count shown alongside a range
-  list is a count of residues, not of ranges: `587-671 (85 residues in 1
-  range)`, not `(1)`.
+  list counts residues: `587-671 (85 residues in 1
+  range)`.
 - **Sequence and secondary structure summaries**
 - **Ligand and ion listings**, including automatically detected
   binding-site residues and possible polar contacts near each ligand
 - **HETATM audit**, a check for HETATM records that were not cleanly
   classified as a recognized ligand, ion, or water
 - **Disulfide bonds**, detected geometrically (Cys S-gamma to S-gamma
-  pairs within 2.5 angstroms), not inferred from annotation
+  pairs within 2.5 angstroms)
 - **Water summary**
 - **Warnings / structural notes**, missing residues, chain-reduction
   events, and other conditions worth a researcher's attention, kept in a
@@ -923,7 +960,7 @@ exact citation text.
 (TERMINI) contain the same validated data as the HTML/TXT report,
 structured for programmatic use. Values that are unavailable in the
 source data (for example a resolution not found in the PDB header) are
-written as JSON `null` rather than a placeholder string, so downstream
+written as JSON `null`, so downstream
 tooling can distinguish "unknown" from a real value without
 string-matching Astra3's specific wording.
 
@@ -954,10 +991,9 @@ publication- or decision-critical.
   in the structure/header data, or what can be measured geometrically
   from PyMOL coordinates. It does not predict structure, function,
   stability, binding affinity, or biological effect of any kind.
-- **Crystal contacts are not analyzed.** A terminal difference between
-  two crystal structures can come from crystal packing rather than from
-  the ligand or mutation that distinguishes them, and Astra3 does not yet
-  flag this.
+- **Crystal contacts are not analyzed.** Crystal packing can cause a
+  terminal difference between two crystal structures, and Astra3 does not
+  yet flag when it might.
 - **A terminus is the last resolved residue.** Tails that were not
   modelled cannot be measured, so two structures' termini can sit at
   different points in the sequence; the offset check exists for this
@@ -974,18 +1010,18 @@ publication- or decision-critical.
 - **Missing-residue detection depends on `REMARK 465`**, or the
   equivalent mmCIF field, being present in the source file. Structures
   without this information will show missing-residue data as
-  unavailable, not as "none missing."
+  unavailable.
 - **Disulfide detection is purely geometric** (S-gamma to S-gamma
   distance of 2.5 angstroms or less) and does not distinguish
   biologically relevant disulfides from close contacts that happen to
   fall within that cutoff in a given conformation.
 - **Automatic reference selection is a heuristic** (fewest bound
-  ligands, in OVERLAY and TERMINI), not a structural-quality metric. For anything where
+  ligands, in OVERLAY and TERMINI) and does not assess structural quality. For anything where
   reference choice matters scientifically, use `-reference<ID>`
   explicitly and note the choice in your own methods.
 - **Alignment is sequence-guided structural superposition via PyMOL's
-  `cmd.align`**, not a specialized structural-alignment algorithm (for
-  example, no TM-align/DALI-style topology-independent alignment). It
+  `cmd.align`**. It does not perform topology-independent structural
+  alignment of the TM-align or DALI kind. It
   performs well for homologous structures but is not designed for
   remote-homology or fold-recognition alignment. TERMINI relies on this
   same alignment before computing any terminus comparison.
@@ -1026,7 +1062,7 @@ License; copies obtained under those terms keep them. Version 1.9.1
 and later are licensed under the GNU GPL, version 3 or later.
 
 The desktop app bundles or depends on third-party components under their
-own licenses, most notably **3Dmol.js** (BSD 3-Clause License, Copyright
+own licenses, including **3Dmol.js** (BSD 3-Clause License, Copyright
 2014 University of Pittsburgh and contributors) for structure
 visualization, and **PyMOL**, which is required separately and is not
 distributed with Astra3. The full text of every bundled third-party
