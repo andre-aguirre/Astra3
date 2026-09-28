@@ -1,9 +1,4 @@
-# Astra3 for MacOS
-Visit the Website: [Astra3 Official Website](https://andre-aguirre.github.io/Astra3/)
-
-Download Astra3 for Windows from the Microsoft Store: [Astra3 for Windows](https://apps.microsoft.com/detail/9PKK58GQP8QX)
-
----
+# Astra3 for macOS
 
 **Structural Analysis Toolkit for PDB Rendering Automation**
 
@@ -511,7 +506,8 @@ residues, then the first by ID; the order you type them in never
 decides. Use `-reference<ID>` to choose the reference yourself. Because
 every terminal measurement, the offset correction and the
 ligand-to-terminus distances are all expressed relative to the
-reference, the report states which structure was chosen and why.
+reference, the report states which structure was chosen; the reason is
+printed in the run log.
 
 Example:
 ```
@@ -774,13 +770,13 @@ An imported coordinate file's own header is used as it is: resolution,
 R-factors, missing residues and the depositor's biological assemblies,
 so chain-reduction prompts can still say whether other chains are
 binding partners or crystal copies. When the file names a PDB entry (in
-its header, or as its file name, e.g. `3fxi.pdb`), Astra3 asks once
-whether the file is that entry. Answering yes adds the entry's public
-validation, reference-sequence and domain data from RCSB PDB to the
-report, which then notes the identification as a warning and in its
-Methods text. Imported structures work fully offline; if RCSB cannot be
-reached after a yes, Astra3 offers to try again or to continue without
-that data.
+its header, or as its file name, e.g. `3fxi.pdb`), Astra3 asks, once in
+each analysis, whether the file is that entry. Answering yes adds the
+entry's public validation, reference-sequence and domain data from RCSB
+PDB to the report, which then notes the identification as a warning and
+in its Methods text. Imported structures work fully offline; if RCSB
+cannot be reached after a yes, Astra3 offers to try again or to continue
+without that data.
 
 ### -t, regression test
 
