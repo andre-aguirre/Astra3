@@ -1,0 +1,17 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { CONFIG, windowsAvailable } from '../config';
+const fmt = (d: string) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+---
+<BaseLayout title="Changelog · Astra3" description="Astra3 release history: what changed in each version, taken from the release notes." current="changelog">
+<header class="page-head"><div class="wrap"><p class="eyebrow">Changelog</p><h1>Release history</h1><p class="lede">Dates are macOS releases; downloads and full notes are on <a href={CONFIG.releasesUrl} target="_blank" rel="noopener" style="color:var(--accent-bright)">GitHub Releases</a>.{windowsAvailable && <> The Windows version receives the same updates through the <a href={CONFIG.platforms.windows.url!} target="_blank" rel="noopener" style="color:var(--accent-bright)">Microsoft Store</a>, once Microsoft has certified each one.</>}</p></div></header>
+  <div class="wrap">
+    {CONFIG.releases.map((r, i) => (
+      <article class="rel">
+        <div class="rel-meta"><span class="v">{r.version}</span><span class="d">{fmt(r.date)}</span>{i === 0 && <span class="pill latest">Latest</span>}</div>
+        <ul>{r.items.map(([a, b]) => <li><strong>{a}</strong> {b}</li>)}</ul>
+      </article>
+    ))}
+    <p class="muted" style="padding-block:28px;font-size:15px">Earlier versions are listed on <a href={CONFIG.releasesUrl} target="_blank" rel="noopener" style="color:var(--accent-bright)">GitHub Releases</a>.</p>
+  </div>
+</BaseLayout>

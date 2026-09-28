@@ -1,0 +1,27 @@
+---
+/**
+ * Both platform download buttons, side by side. The visitor's own platform is
+ * moved first and made the primary button once the page loads; without
+ * JavaScript, or on any other operating system, macOS comes first.
+ */
+import DownloadButton from './DownloadButton.astro';
+---
+<div class="plat-btns" data-plat-btns>
+  <DownloadButton platform="macos" />
+  <DownloadButton platform="windows" variant="ghost" />
+</div>
+<script>
+  // userAgentData is Chromium-only; the userAgent string covers Safari and Firefox.
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const ua = (nav.userAgentData?.platform || navigator.userAgent || '').toLowerCase();
+  const mine = ua.includes('win') ? 'windows' : null;
+  if (mine) {
+    document.querySelectorAll<HTMLElement>('[data-plat-btns]').forEach((group) => {
+      const own = group.querySelector<HTMLElement>(`[data-platform="${mine}"]`);
+      if (!own || own.classList.contains('is-disabled')) return;
+      group.querySelectorAll<HTMLElement>('a.btn').forEach((b) => { b.classList.remove('btn-primary'); b.classList.add('btn-ghost'); });
+      own.classList.remove('btn-ghost'); own.classList.add('btn-primary');
+      group.prepend(own);
+    });
+  }
+</script>
