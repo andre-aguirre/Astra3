@@ -1,9 +1,12 @@
-# Astra3 for MacOS
+# Astra3 - Pocket Analysis Toolkit
 Visit the Website: [Astra3 Official Website](https://andre-aguirre.github.io/Astra3/)
 
 Download Astra3 for Windows from the Microsoft Store: [Astra3 for Windows](https://apps.microsoft.com/detail/9PKK58GQP8QX)
 
 ---
+
+
+## Astra3 for MacOS
 
 **Structural Analysis Toolkit for PDB Rendering Automation**
 
