@@ -6,7 +6,7 @@ import DocumentationLayout from '../components/DocumentationLayout.astro';
 const sections = [{"id": "getting-started", "group": "Start", "title": "Getting started"}, {"id": "installation", "group": "Start", "title": "Installation"}, {"id": "importing", "group": "Start", "title": "Importing structures"}, {"id": "single", "group": "Commands", "title": "Single-structure analysis"}, {"id": "overlay", "group": "Commands", "title": "OVERLAY"}, {"id": "termini", "group": "Commands", "title": "TERMINI"}, {"id": "batch", "group": "Commands", "title": "BATCH"}, {"id": "related", "group": "Commands", "title": "Related Structures"}, {"id": "reports", "group": "Output", "title": "Reports"}, {"id": "formats", "group": "Output", "title": "PDB and mmCIF"}, {"id": "exports", "group": "Output", "title": "CSV and JSON"}, {"id": "troubleshooting", "group": "Help", "title": "Troubleshooting"}, {"id": "limitations", "group": "Help", "title": "Limitations"}, {"id": "faq", "group": "Help", "title": "FAQ"}];
 ---
 <BaseLayout title="Documentation · Astra3" description="Astra3 documentation: installation, PyMOL setup, importing structures, OVERLAY, TERMINI, BATCH, reports, exports, troubleshooting and FAQ." current="docs">
-<header class="page-head"><div class="wrap"><p class="eyebrow">Documentation</p><h1>Astra3 documentation</h1><p class="lede">For Astra3 {CONFIG.version} on {platformNames}. The same commands work from the interface and the built-in console, with identical results on every platform.</p></div></header>
+<header class="page-head"><div class="wrap"><p class="eyebrow">Documentation</p><h1>Astra3 documentation</h1><p class="lede">For Astra3 {CONFIG.version} on {platformNames}. The same commands work from the interface and the built-in console.</p></div></header>
 <DocumentationLayout sections={sections}>
 <section id="getting-started" data-group="Start">
           <h2>Getting started</h2>
@@ -21,7 +21,7 @@ const sections = [{"id": "getting-started", "group": "Start", "title": "Getting 
         <section id="installation" data-group="Start">
           <h2>Installation</h2>
           <h3>macOS</h3>
-          <p><strong>Requirements:</strong> macOS 10.15 Catalina or later, Intel or Apple Silicon, PyMOL installed separately (built on Python 3.7 or newer, as current releases are). Download the <code>.dmg</code> from <a href={CONFIG.latestReleaseUrl} target="_blank" rel="noopener" style="color:var(--accent-bright)">GitHub Releases</a> and drag Astra3 into Applications.</p>
+          <p><strong>Requirements:</strong> macOS 12 Monterey or later, Intel or Apple Silicon, and PyMOL or ChimeraX installed separately, or neither (the built-in Astra3 Engine, a test build). PyMOL must be built on Python 3.7 or newer, as current releases are. Download the <code>.dmg</code> from <a href={CONFIG.latestReleaseUrl} target="_blank" rel="noopener" style="color:var(--accent-bright)">GitHub Releases</a> and drag Astra3 into Applications.</p>
           <p>On first launch Astra3 looks for PyMOL in <code>/Applications/PyMOL.app</code>, <code>~/Applications</code>, Homebrew and conda/pip installs. It verifies a candidate by briefly launching it and watching for PyMOL's startup output, and shows "PyMOL location verified" when it passes.</p>
           <div class="tw"><table class="t"><thead><tr><th>What</th><th>Location on macOS</th></tr></thead><tbody>
             <tr><td>Analysis output</td><td><code>~/Documents/Astra3/Protein_outputs/</code> (configurable)</td></tr>
@@ -30,7 +30,7 @@ const sections = [{"id": "getting-started", "group": "Start", "title": "Getting 
           </tbody></table></div>
           {windowsAvailable && (<>
           <h3>Windows</h3>
-          <p><strong>Requirements:</strong> {CONFIG.platforms.windows.requirements}, PyMOL installed separately (built on Python 3.7 or newer, as current releases are). Install Astra3 from the <a href={CONFIG.platforms.windows.url!} target="_blank" rel="noopener" style="color:var(--accent-bright)">Microsoft Store</a>, which also delivers its updates.</p>
+          <p><strong>Requirements:</strong> {CONFIG.platforms.windows.requirements}, and PyMOL or ChimeraX installed separately, or neither (the built-in Astra3 Engine, a test build). PyMOL must be built on Python 3.7 or newer, as current releases are. Install Astra3 from the <a href={CONFIG.platforms.windows.url!} target="_blank" rel="noopener" style="color:var(--accent-bright)">Microsoft Store</a>, which also delivers its updates.</p>
           <p>On first launch Astra3 looks for PyMOL in its usual locations, such as <code>%LOCALAPPDATA%\Schrodinger\PyMOL2\PyMOLWin.exe</code>, and checks that it belongs to a PyMOL installation whose Python is new enough. PyMOL, also found in conda installs and environments, runs hidden; its window only opens when you choose Open Session on a finished run.</p>
           <div class="tw"><table class="t"><thead><tr><th>What</th><th>Location on Windows</th></tr></thead><tbody>
             <tr><td>Analysis output</td><td><code>%USERPROFILE%\Astra3\Protein_outputs\</code> (configurable)</td></tr>
@@ -41,7 +41,7 @@ const sections = [{"id": "getting-started", "group": "Start", "title": "Getting 
         </section>
         <section id="importing" data-group="Start">
           <h2>Importing structures</h2>
-          <p>Use <code>IMPORT</code>, or drag a file onto the Home page, to load a local <code>.pdb</code>, <code>.cif</code>, <code>.mmcif</code> or <code>.pse</code>. The structure gets a temporary <code>AST-XXXX</code> ID you can use like a PDB ID, including inside OVERLAY and TERMINI.</p>
+          <p>Use <code>IMPORT</code>, or drag a file onto the Home page, to load a local <code>.pdb</code>, <code>.ent</code>, <code>.cif</code>, <code>.mmcif</code> or <code>.pse</code>; coordinate files may also be gzip-compressed (<code>.cif.gz</code>). The structure gets a temporary <code>AST-XXXX</code> ID you can use like a PDB ID, including inside OVERLAY and TERMINI.</p>
           <div class="note"><strong>Session-only IDs.</strong> AST IDs disappear when Astra3 closes. Note the ID it prints, or process the file before ending the session.</div>
           <p>A five-character ID such as <code>1AKEA</code> prompts to ask whether you meant a chain.</p>
         </section>
@@ -50,19 +50,20 @@ const sections = [{"id": "getting-started", "group": "Start", "title": "Getting 
 <pre><code>&lt;PDB ID&gt; [flags]
 1ABC -medium -csv</code></pre>
           <div class="tw"><table class="t"><thead><tr><th>Flag</th><th>Effect</th></tr></thead><tbody>
-            <tr><td><code>-low</code> <code>-medium</code> <code>-excellent</code></td><td>Image quality (excellent is the default)</td></tr>
+            <tr><td><code>-low</code> <code>-medium</code> <code>-excellent</code></td><td>Image quality (medium is the default)</td></tr>
             <tr><td><code>-skipimage</code></td><td>Report and session only</td></tr>
             <tr><td><code>-skipreport</code></td><td>Session and images only</td></tr>
             <tr><td><code>-ro</code></td><td>Render-only: save the session without reports or images</td></tr>
             <tr><td><code>-csv</code></td><td>Also write CSV exports to <code>Session/</code></td></tr>
-            <tr><td><code>-mmCIF</code></td><td>Fetch as mmCIF instead of legacy PDB</td></tr>
+            <tr><td><code>-mmCIF</code></td><td>Fetch as mmCIF instead of legacy PDB; in OVERLAY and TERMINI it applies to the ID before it</td></tr>
+            <tr><td><code>-chromophoreprotein</code> <code>-chromophoreligand</code></td><td>Count residues built into a chain without a standard backbone (chromophores such as CRO) as protein, or keep them as ligands, without asking. Without either, Astra3 asks and records the answer.</td></tr>
           </tbody></table></div>
         </section>
         <section id="overlay" data-group="Commands">
           <h2>OVERLAY</h2>
 <pre><code>OVERLAY &lt;id&gt; &lt;id&gt; [&lt;id&gt; ...] [flags]
 OVERLAY 3FXI 1RO6 1ROR -reference1RO6</code></pre>
-          <p>Aligns two or more structures onto a shared reference with PyMOL's <code>cmd.align</code>. The reference defaults to the structure with the fewest bound ligands (a tie goes to the one most similar in sequence to the others, never to input order), a heuristic rather than a quality assessment; the report records the reasoning. If a requested <code>-reference</code> ID was not loaded, Astra3 falls back to automatic selection and notes it.</p>
+          <p>Aligns two or more structures onto a shared reference by least-squares fitting (Kabsch) of matching atoms in residues paired by sequence alignment, with up to five cycles that set aside pairs further apart than 2.0 × RMSD (the defaults of PyMOL's <code>align</code>). The reference defaults to the structure with the fewest bound ligands (a tie goes to the one most similar in sequence to the others, never to input order), a heuristic rather than a quality assessment; the report records the reasoning. If a requested <code>-reference</code> ID was not loaded, Astra3 falls back to automatic selection and notes it.</p>
           <p>Output: RMSD per structure with aligned atoms and residues, a C-alpha pairwise RMSD matrix, six views of all structures and of each comparison, and with <code>-csv</code> both <code>Overlay_Summary.csv</code> and <code>Pairwise_RMSD_Matrix.csv</code>.</p>
         </section>
         <section id="termini" data-group="Commands">
@@ -139,7 +140,7 @@ BATCH batch.txt -alwaysreduce</code></pre>
           <ul>
             <li>Astra3 is not a modelling or prediction tool; it does not predict structure, function, stability, affinity or biological effect.</li>
             <li>Ligand-environment results are geometric proximity, not confirmed interactions. Salt bridges and π-stacking are not computed.</li>
-            <li>Alignment uses PyMOL's sequence-guided <code>cmd.align</code>; it is not designed for remote homology or fold recognition.</li>
+            <li>Residues are paired by sequence alignment; it is not designed for remote homology or fold recognition.</li>
             <li>TERMINI needs a shared chain ID and enough resolved residues near each terminus.</li>
             <li>Crystal contacts are not computed.</li>
             <li>Fetching by PDB ID needs internet access; offline use works through IMPORT.</li>
@@ -147,9 +148,9 @@ BATCH batch.txt -alwaysreduce</code></pre>
         </section>
         <section id="faq" data-group="Help" class="faq">
           <h2>FAQ</h2>
-          <details><summary>Does Astra3 replace PyMOL?</summary><p>No. It runs its analysis through your own PyMOL and saves a normal PyMOL session you can keep working in.</p></details>
+          <details><summary>Does Astra3 replace PyMOL?</summary><p>No. It runs its analysis through your own PyMOL or ChimeraX, or the built-in Astra3 Engine, and saves a normal session you can keep working in.</p></details>
           <details><summary>Do I need Incentive PyMOL?</summary><p>No. Open-source and Incentive PyMOL both work; nothing requires an Incentive-only feature. The report footer records which one produced it, where that can be determined.</p></details>
-          <details><summary>Does it run on Intel Macs or Windows?</summary><p>The macOS build is universal and runs natively on Intel and Apple Silicon, on macOS 10.15 Catalina and later. {windowsAvailable ? 'On Windows, Astra3 runs on 64-bit Windows 10 and Windows 11 and is installed from the Microsoft Store.' : 'A Windows version is in Microsoft Store certification and is not available yet.'}</p></details>
+          <details><summary>Does it run on Intel Macs or Windows?</summary><p>The macOS build is universal and runs natively on Intel and Apple Silicon, on macOS 12 Monterey and later. {windowsAvailable ? 'On Windows, Astra3 runs on 64-bit Windows 10 and Windows 11 and is installed from the Microsoft Store.' : 'A Windows version is in Microsoft Store certification and is not available yet.'}</p></details>
           <details><summary>Does Astra3 send my data anywhere?</summary><p>It contacts only the RCSB Protein Data Bank to download and annotate public structures you ask for. Imported files, results and settings stay on your computer. See the <a href={u('/privacy')} style="color:var(--accent-bright)">privacy policy</a>.</p></details>
           <details><summary>How do I cite Astra3?</summary><p>See <a href={u('/research')} style="color:var(--accent-bright)">Research &amp; citation</a>, or use the Methods paragraph at the end of every report.</p></details>
         </section>

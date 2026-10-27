@@ -20,12 +20,12 @@ export interface Release {
 
 const githubUrl = 'https://github.com/andre-aguirre/Astra3';
 /** Zenodo concept DOI: always resolves to the newest archived release. */
-const doi = '10.5281/zenodo.22928160';
+const doi = '10.5281/zenodo.22928159';
 
 export const CONFIG = {
   name: 'Astra3',
   fullName: 'Structural Analysis Toolkit for PDB Rendering Automation',
-  version: '1.9.2',
+  version: '2.0.1',
   githubUrl,
   doi,
   doiUrl: `https://doi.org/${doi}`,
@@ -43,7 +43,7 @@ export const CONFIG = {
       name: 'macOS',
       /** null → latestReleaseUrl */
       url: null as string | null,
-      requirements: 'macOS 10.15 Catalina or later',
+      requirements: 'macOS 12 Monterey or later',
       arch: 'Universal: Intel and Apple Silicon',
       formats: '.dmg · .zip',
       signing: 'Developer ID signed and notarized',
@@ -61,6 +61,34 @@ export const CONFIG = {
   },
 
   releases: [
+    {
+      version: '2.0.1',
+      date: '2026-10-31',
+      items: [
+        ['Astra3 Engine (test build)', 'a third engine that is part of Astra3, for computers without PyMOL or ChimeraX. It runs the same analysis and saves a PyMOL .pse and a ChimeraX .cxc.'],
+        ['ChimeraX', 'Astra3 runs with UCSF ChimeraX as well as PyMOL, and their measurements agree to within rounding. The top bar shows the engine in use and switches between them.'],
+        ['Measurements', 'superposition (Kabsch least squares) and surface area (Shrake-Rupley) are computed by Astra3, so they no longer depend on the engine. Surface-area values can differ by a few Å² from earlier versions.'],
+        ['Residue pairing', 'chains are aligned through their full sequences, unobserved residues included, as ChimeraX’s matchmaker does. Superposition and terminus values change where two structures have different gaps.'],
+        ['Normalized B-factor', 'divided by the mean over the protein as deposited, also when a terminus correction removes residues.'],
+        ['Ligand centroid', 'taken over one conformation of the ligand (the first listed), as for every other measurement.'],
+        ['Secondary structure', 'Astra3’s own assignment follows mkdssp for π-helices, residue order and bridges between residues two apart.'],
+        ['Header values', 'mmCIF files give the refinement resolution, the value the PDB lists for the entry; R values written by SHELXL are read; a validation statistic missing from the RCSB Data API is read from the wwPDB validation report.'],
+        ['Chromophores', 'for a residue built into the chain without a standard backbone (such as CRO), Astra3 asks whether to count it as protein or keep it as a ligand, and records the choice. -chromophoreprotein and -chromophoreligand decide without asking.'],
+        ['Input files on record', 'each report gives every coordinate file’s name, size and SHA-256.'],
+        ['Drawing window', 'Settings > Drawing window lists each image as it is made, under any engine, and can turn and save its 3D view.'],
+        ['Color Palette', 'a page under Advanced Console sets the colours used for chains, ligands, ions, termini and arrows.'],
+        ['PyMOL sessions', 'import under every engine, read without PyMOL; a file holding anything but session data is refused unopened.'],
+        ['Files', 'import accepts .ent and gzip-compressed files; an empty, binary, truncated or misnamed file, or one of only water or only ligands, is refused with the reason.'],
+        ['PDB IDs', 'extended IDs (pdb_00001ake) are accepted, and a failed download says whether the entry does not exist or RCSB could not be reached.'],
+        ['Low sequence identity', 'brings a warning and, if you continue, a superposition of the closest pair instead of a stop.'],
+        ['Reports', 'list DNA and RNA chains, count repeated ligands and ions (MN × 8), and record each run’s options, engine and engine version.'],
+        ['Ligands', 'residues with amino-acid atom names (the glutamate of folate in FFO, for example) count as ligands under every engine, and ligand contacts count only residues of the ligand’s own structure in OVERLAY and TERMINI.'],
+        ['PyMOL on Python 3.7 to 3.9', 'no longer stops with “name \'int\' is not defined”.'],
+        ['Image quality', 'medium unless another is chosen (previously excellent).'],
+        ['Links', 'in reports and in the app open in your web browser.'],
+        ['macOS 12', 'the app runs on Electron 43, which needs macOS 12 Monterey or later (previously 10.15).'],
+      ],
+    },
     {
       version: '1.9.2',
       date: '2026-09-25',

@@ -6,17 +6,16 @@ import { u } from '../lib/url';
 <section class="hero">
   <div class="wrap">
     <div class="hero-grid">
-      <div class="hero-copy" id="heroCopy">
-        <p class="eyebrow">Structural biology</p>
-        <h1>Structural analysis, <em>streamlined.</em></h1>
-        <p class="lede">Astra3 is a desktop toolkit for structured protein-structure comparison, visualization, and reporting workflows. <span class="hide-phone">Point it at a PDB ID or a local file; it drives PyMOL, renders the images, and writes a report you can trace back to the coordinates.</span></p>
+      <div class="hero-copy">
+        <h1>Structural analysis, <em>on the record.</em></h1>
+        <p class="lede">Astra3 is a desktop app that compares protein structures, draws them, and writes up what it measured. <span class="hide-phone">Point it at a PDB ID or a local file; it drives PyMOL or ChimeraX, renders the images, and writes a report you can trace back to the coordinates.</span></p>
         <div class="hero-ctas">
           <PlatformButtons />
         </div>
         <div class="hero-meta">
           <span>v{CONFIG.version}</span>
-          <span class="hide-phone">{windowsAvailable ? 'macOS 10.15+ · Windows 10/11' : 'macOS 10.15+ · Intel and Apple Silicon'}</span>
-          <span>Requires PyMOL</span>
+          <span class="hide-phone">{windowsAvailable ? 'macOS 12+ · Windows 10/11' : 'macOS 12+ · Intel and Apple Silicon'}</span>
+          <span>Uses PyMOL or ChimeraX</span>
           <span class="hide-wide"><a href={u('/download')}>All downloads →</a></span>
         </div>
       </div>
@@ -47,17 +46,4 @@ import { u } from '../lib/url';
     if (!ok) { view.hidden = true; canvas.hidden = false; count.textContent = 'Cα TRACE'; initMolecule(canvas, document.createElement('span'), reduce); }
   };
   ('requestIdleCallback' in window) ? (window as any).requestIdleCallback(start, { timeout: 1500 }) : setTimeout(start, 300);
-  const copy = document.getElementById('heroCopy')!;
-  // The copy drifts down and fades as the page scrolls. On a single-column
-  // layout it sits directly above the structure, so the drift is shorter
-  // there and the structure starts lower (--hero-drift in global.css)
-  // leaving room for it.
-  if (!reduce) {
-    const maxDrift = matchMedia('(min-width: 861px)').matches ? 60 : 36;
-    const onScroll = () => {
-      copy.style.transform = `translateY(${Math.min(scrollY * 0.12, maxDrift)}px)`;
-      copy.style.opacity = String(Math.max(0.25, 1 - scrollY / 900));
-    };
-    addEventListener('scroll', onScroll, { passive: true }); onScroll();
-  }
 </script>

@@ -5,8 +5,8 @@ import { CONFIG, windowsAvailable, platformNames } from '../config';
 import { u } from '../lib/url';
 const win = CONFIG.platforms.windows;
 ---
-<BaseLayout title={`Download Astra3 for ${platformNames}`} description={`Download Astra3 for macOS (universal: Intel and Apple Silicon, macOS 10.15+). ${windowsAvailable ? 'Windows 10 and 11 through the Microsoft Store.' : 'The Windows version is in Microsoft Store certification.'}`} current="download">
-<header class="page-head"><div class="wrap"><p class="eyebrow">Download</p><h1>Install Astra3.</h1><p class="lede">Choose your platform. Astra3 needs only PyMOL, installed separately; open-source and Incentive PyMOL both work.</p></div></header>
+<BaseLayout title={`Download Astra3 for ${platformNames}`} description={`Download Astra3 for macOS (universal: Intel and Apple Silicon, macOS 12+). ${windowsAvailable ? 'Windows 10 and 11 through the Microsoft Store.' : 'The Windows version is in Microsoft Store certification.'}`} current="download">
+<header class="page-head"><div class="wrap"><p class="eyebrow">Download</p><h1>Install Astra3.</h1><p class="lede">Choose your platform. Astra3 runs its analysis in PyMOL or ChimeraX, installed separately, or in its built-in Astra3 Engine (a test build) if you have neither. Open-source and Incentive PyMOL both work.</p></div></header>
   <div class="wrap">
     <h2 class="sr-only">Platforms</h2>
     <div class="plats dl-plats">
@@ -20,7 +20,7 @@ const win = CONFIG.platforms.windows;
           <li>Download the latest <strong>.dmg</strong> (or the <strong>.zip</strong>, which holds the same signed app) from GitHub Releases.</li>
           <li>Open the <strong>.dmg</strong>.</li>
           <li>Drag <strong>Astra3</strong> into your <strong>Applications</strong> folder.</li>
-          <li>Launch Astra3 and select your PyMOL installation if it isn't found automatically.</li>
+          <li>Launch Astra3 and select your PyMOL or ChimeraX installation if it isn't found automatically, or choose the Astra3 Engine.</li>
         </ol>
         <p class="muted">Astra3 is Developer ID signed and notarized by Apple, so no Gatekeeper override is required. One download runs natively on both Intel and Apple Silicon Macs.</p>
       </div>
@@ -30,7 +30,7 @@ const win = CONFIG.platforms.windows;
           <ol class="steps">
             <li>Open the <a href={win.url!} target="_blank" rel="noopener">Astra3 page in the Microsoft Store</a> and choose <strong>Get</strong>.</li>
             <li>Open <strong>Astra3</strong> from the Start menu.</li>
-            <li>Select your PyMOL installation if it isn't found automatically.</li>
+            <li>Select your PyMOL or ChimeraX installation if it isn't found automatically, or choose the Astra3 Engine.</li>
           </ol>
           <p class="muted">The Microsoft Store installs Astra3 and delivers its updates. PyMOL runs hidden in the background; its window only opens when you choose Open Session on a finished run.</p>
         </div>

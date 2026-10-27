@@ -1,1060 +1,490 @@
-# Astra3 - Pocket Analysis Toolkit
-Visit the Website: [Astra3 Official Website](https://andre-aguirre.github.io/Astra3/)
-
-Download Astra3 for Windows from the Microsoft Store: [Astra3 for Windows](https://apps.microsoft.com/detail/9PKK58GQP8QX)
-
----
-
-
-## Astra3 for MacOS
+# Astra3 for macOS
 
 **Structural Analysis Toolkit for PDB Rendering Automation**
 
-Version 1.9.2 (macOS, universal: Intel and Apple Silicon)
+Version 2.0.1 · macOS 12 or later · universal (Intel and Apple Silicon)
 
-Astra3 is a PyMOL automation toolkit for structural biologists who need
-consistent, reproducible processing of PDB structures without hand-running
-the same twenty PyMOL commands every time. Point it at a PDB ID (or a local
-`.pdb`, `.cif`, or `.pse` file), and it fetches the structure, cleans it up, colors and
-labels it deterministically, renders a full set of high-resolution images,
-and writes reports (HTML, plain text, and JSON) describing exactly what it
-found and what it could not find.
+[Website](https://andre-aguirre.github.io/Astra3/) ·
+[Documentation](https://andre-aguirre.github.io/Astra3/docs/) ·
+[Download](https://andre-aguirre.github.io/Astra3/download/) ·
+[Changelog](https://andre-aguirre.github.io/Astra3/changelog/)
 
-Astra3 is a desktop application with a graphical interface, an interactive
-3D structure viewer, and live console output, so command syntax does not
-have to be memorized. The same commands are available through the interface
-and through the built-in console, and both produce identical output.
+Astra3 automates the structure work otherwise repeated by hand in PyMOL or
+UCSF ChimeraX. Give it a PDB ID or a local file, and it fetches the
+structure, removes water, colours and labels every chain, ligand and ion
+the same way each time, measures what the coordinates allow, renders six
+views, and writes a report of what it found and what it could not.
 
-Beyond single-structure analysis, Astra3 also supports:
+It can also:
 
-- **OVERLAY**, multi-structure alignment with RMSD, aligned atom/residue
-  counts, and a pairwise RMSD matrix
-- **TERMINI**, comparative N-/C-terminus structural analysis across aligned
-  structures (displacement, rotation, local RMSD), including close-up
-  renders of the terminus vectors
-- **BATCH**, unattended processing of many structures in one run, with
-  optional automatic handling of redundant chains so a batch does not have
-  to pause for input on every structure
-- Both legacy PDB and mmCIF fetch formats, with automatic fallback if the
-  requested format is not available
-- Optional **CSV** exports and always-on **JSON** exports alongside the
-  HTML/text reports, so results can feed downstream analysis pipelines
+- **Overlay** structures on a reference, with RMSD and a pairwise RMSD
+  matrix
+- **Compare termini**: how far each N- and C-terminus moved and how much
+  it turned, with close-up images
+- **Batch** a list of structures without stopping for each one
+- **Find related structures** of the same protein in the PDB
+
+Everything is done from the app; the same commands also work in its
+Advanced Console.
 
 ---
 
-## What's new in 1.9.2
+## What's new in 2.0.1
 
-- **TERMINI measurements.** Each terminus reports its orientation change,
-  the angle through which its last ten residues have turned as a segment,
-  and its Terminal Projection Vector (TPV) angle change, the turn of its
-  last four residues: the direction the chain points where a terminal tag
-  would join. Local RMSD is given in place and refit, which separates a
-  shift of the whole end from a change in its shape. All of these are in
-  the report, JSON and CSV, and the "Largest Rotation" cards use
-  orientation change.
-- **Change labels.** Solvent-exposure and B-factor labels in the
-  Terminal Metrics Summary use thresholds taken from the literature:
-  26 Å² of surface area and 0.2 in normalized B-factor. Smaller changes
-  are labelled Little change, and the Structural Interpretation and
-  Methods text say so.
-- **Orientation arrows.** Close-up views draw each terminus's orientation
-  vector as an arrow pointing out of the protein at both ends.
-- **Offset corrections.** The prompt names the structure and chain that
-  would be trimmed, including the reference. `-alwaysmatch` applies a
-  correction at 70% identity or higher and leaves weaker matches for
-  review. Warnings record whether each correction was approved at the
-  prompt or applied automatically.
-- **Methods text.** Terminus metrics are described with their exact
-  definitions, multi-structure runs name each structure's water count,
-  ligands and ions, and the RCSB PDB is cited with both its original and
-  its current reference.
-- **Reports in the app.** The report view shows its images as scaled
-  copies loaded when the report opens. Each group of images has a Copy figure
-  button that copies the images and their colour key as one full-quality
-  picture, with the shared empty margin trimmed and every panel at the
-  same scale, on a transparent background on macOS. Copy figure is
-  available only inside the app, because a
-  report opened in a browser cannot read its own image files back.
-- **3D viewer.** Each chain lists the ligands and ions bound to it, with
-  one switch for its ligands and one for its ions.
-- **Advanced Console.** Astra3 starts when the console opens, each
-  command is shown once, and every command gets a reply, including a
-  mistyped one. A command typed while Astra3 is starting waits for it.
-  The prompt is `Enter a PDB ID:`.
-- **B-factors.** An NMR entry reports its B-factor statistics as not
-  applicable, and a file whose B-factors are all zero reports them as not
-  recorded, in the HTML report, text report, JSON and CSV.
-- **Short chains.** A structure whose chains are all too short for
-  termini (under 25 residues, such as 1L2Y) completes normally. Chains
-  left out of terminus selection are listed in the report's warnings,
-  Chain Analysis table and Methods text.
-- **NMR ensembles.** For a file holding several models, Astra3 uses the
-  first model for every measurement, including ligand contacts, and the
-  warnings and Methods text say so.
+- **Three engines.** Astra3 runs with UCSF ChimeraX as well as PyMOL, and
+  its own Astra3 Engine runs on computers with neither. All
+  three run the same analysis code.
+- **Measured by Astra3.** Superposition and surface area are computed by
+  Astra3, so they no longer depend on the engine. Surface areas can differ
+  by a few Å² from earlier versions, which used PyMOL's estimate.
+- **Input files on record.** Each report gives every coordinate file's
+  name, size and SHA-256.
+- **Drawing window.** Images can be listed in a window as they are made
+  (Settings > Drawing window).
+- **Color Palette** page for the colours of chains, ligands, ions, termini
+  and close-up arrows.
+- **PyMOL sessions** import under every engine, read without PyMOL; a file
+  holding anything but session data is refused unopened.
+- **Checked input.** `.ent` and gzip-compressed files import. Empty,
+  binary, truncated or misnamed files, and files of only water or only
+  ligands, are refused with the reason. Extended IDs (`pdb_00001ake`)
+  work, and a failed download says whether the entry does not exist or
+  RCSB could not be reached.
+- **Low sequence identity** brings a warning and, if you continue, a
+  superposition of the closest pair instead of a stop.
+- **Quick View** on the 3D Viewer page opens a PDB entry, or a file
+  imported this session, without running an analysis.
+- **Biological assembly rule** for redundant chains in Batch: keep the
+  chains of the depositor's preferred assembly (one chain of a monomer,
+  both of a dimer), with a fallback for entries whose assembly records
+  cannot decide. Every report states the rule that decided.
+- **Reports** list DNA and RNA chains, count repeated ligands and ions
+  (`MN × 8`), and record each run's options, engine and engine version.
+- **Fixes.** Ligands with amino-acid atom names (the glutamate of folate
+  in FFO, for example) count as ligands under every engine. Ligand
+  contacts count only the ligand's own structure, not others in the same
+  OVERLAY or TERMINI run. PyMOL on Python 3.7 to 3.9 no longer stops with
+  "name 'int' is not defined". The hidden ChimeraX that draws images ends
+  with its analysis engine, a cancelled run no longer leaves a second
+  engine running, and a ChimeraX you open yourself is never taken by
+  Astra3's. Entries with thousands of chains (3J3Q) no longer fail with
+  "maximum recursion depth exceeded" under ChimeraX or the Astra3 Engine.
+- **Changed defaults.** Images are medium quality unless chosen otherwise
+  (previously excellent). Astra3 needs macOS 12 Monterey or later
+  (previously 10.15), and links in reports and in the app open in your web
+  browser.
 
-## What's new in 1.9.1
-
-- **License.** Astra3 is now licensed under the GNU General Public
-  License, version 3 or later (previously MIT). See "License" below.
-- **macOS 26.** The main window no longer draws its native shadow on
-  macOS 26 and later, which avoids a system-wide slowdown that affects
-  Electron apps of this generation on that release.
-- **Clearer PyMOL errors on Apple Silicon.** A PyMOL built only for Intel
-  Macs on a Mac without Rosetta is now explained, with the command to
-  install Rosetta, instead of "Unknown system error -86".
-- **PyMOL detection** also looks in `~/miniforge3` and `~/mambaforge`.
-- **Privacy Policy** now lists the macOS and Windows storage locations
-  separately.
-
-## What's new in 1.9.0
-
-- **Related Structures tab.** Enter a PDB ID to find every experimental
-  entry of the same protein (same UniProt entry). Each result shows its
-  method, resolution, ligands, mutations and how much of your protein it
-  covers, suggests whether it suits Overlay or Termini, and warns before
-  you run anything: different construct boundaries, low resolution, NMR
-  ensembles, extra copies, partner proteins, unmodeled residues. Selected
-  results go straight to Overlay, Termini or Batch.
-- **Validation data** from the wwPDB validation report: clashscore,
-  Ramachandran, rotamer and real-space fit outliers, with the specific
-  outlier residues.
-- **Reference sequence and mutations.** Reports list the UniProt
-  reference and every difference the depositor declared (engineered
-  mutations, expression tags, cloning artifacts), plus residues the PDB
-  identifies as differing from UniProt.
-- **Domains** from Pfam, CATH, ECOD and SCOP, in the structure's own
-  residue numbering.
-- **Cross-checks.** Astra3 warns when an outlier, mutation or expression
-  tag falls inside a terminus window or a ligand's contact residues, and,
-  when comparing structures, when they are different proteins, start at
-  different residues, or only some carry mutations.
-- **Methods section.** Every report ends with a ready-to-paste Methods
-  paragraph with references, also saved as `Methods.txt`.
-- **Reproducibility.** Reports record the exact command options used, and
-  every piece of outside data a report relied on is saved with the run.
-- **Works offline.** If the Protein Data Bank cannot be reached, analyses
-  still complete and the reports say which information is unavailable.
-
-## What's new in 1.8.1
-
-- **Local file imports** (`.pdb`, `.cif`, `.mmcif`) run end to end, and a
-  five-character ID like `1AKEA` asks whether a chain was meant.
-- **Progress bars** follow the images as they are saved, with a time
-  estimate. Cancelling a run ends it, and a structure that cannot be
-  fetched is reported as a failure.
-- **Consistent colours.** OVERLAY and TERMINI draw each structure in the
-  same colour: grey for the reference, then sky blue, yellow and onward.
-- **Combined views.** OVERLAY renders six views of every structure together
-  and six of each comparison with the reference; TERMINI adds the
-  all-structures views when it has two or more comparisons.
-- **TERMINI close-ups** give each comparison its own arrow colours, with a
-  colour key; whole-structure views carry no arrows.
-- **Reports** include colour keys on image groups, a dark mode switch,
-  small info icons explaining each value and how it is calculated, and
-  foldable sections, tables, structures and ligands.
-- **Report content** adds resolved residue counts, a Terminus Sequences
-  view, a Structural Interpretation for every comparison, and
-  Ligand-to-Terminus Distances grouped by comparison.
-- **Images tab** shows every image a run wrote, grouped by comparison in the
-  same order as the report.
-- **Summary page** leads with the kind of run and a few key results for
-  each.
-- **3D viewer** adds ion recolouring, per-item representation and
-  visibility, and a Reset View that restores the whole view.
+**Earlier versions.** 1.9.2 added orientation and Terminal Projection
+Vector angle changes and local RMSD to TERMINI, with orientation arrows in
+close-ups. 1.9.1 moved Astra3 to the GNU GPL. 1.9.0 added Related
+Structures, wwPDB validation, reference sequences, domains and the Methods
+paragraph. Every release is in the
+[changelog](https://andre-aguirre.github.io/Astra3/changelog/).
 
 ---
 
-## Goal and design philosophy
+## Install
 
-Astra3 is meant to be a **reliable structural analysis assistant** whose
-every value can be traced to its source. Every feature is built around five rules:
+**Requirements:** macOS 12 Monterey or later, on an Intel or Apple Silicon
+Mac, and either [PyMOL](https://pymol.org/) (open-source or Incentive,
+built on Python 3.7 or newer, as current releases are) or
+[UCSF ChimeraX](https://www.cgl.ucsf.edu/chimerax/) (tested with 1.11 and
+1.12). With neither, analyses run in the Astra3 Engine.
 
-1. **Scientific accuracy.** Values reported are either read directly from
-   PyMOL, computed deterministically from atomic coordinates, or parsed
-   from the PDB file's own header/REMARK records. Nothing is estimated or
-   inferred to fill a gap.
-2. **Reproducibility.** The same input structure and the same command run
-   twice should produce the same coloring, the same selections, the same
-   session, and the same report content.
-3. **Clear separation of known vs. unavailable data.** If something cannot
-   be determined from the structure or header alone (domain boundaries,
-   mutations relative to a reference sequence, crystal contacts), the
-   report says so explicitly instead of guessing or omitting the section
-   silently.
-4. **No fabricated biological conclusions.** Astra3 will not invent a
-   biological interpretation it cannot support with the data in front of
-   it. Geometric proximity is reported as geometric proximity; a close N/O
-   contact is a possible polar interaction by distance, never asserted
-   as a confirmed hydrogen bond.
-5. **Consistent exports.** Every export format (HTML, TXT, JSON, CSV) is
-   produced from the same result set for a given command, so they cannot
-   disagree with each other.
-
-If you are evaluating output from Astra3, you should be able to trace every
-number in a report back to either PyMOL's own geometry calculations or the
-PDB file's header. There is no hidden modeling step in between.
-
----
-
-## What Astra3 does, end to end
-
-For every structure it processes, Astra3:
-
-1. **Fetches or loads** the structure (by PDB ID, in legacy PDB or mmCIF
-   format, or from a local `.pdb`, `.cif`, or `.pse` file via `IMPORT`).
-2. **Removes water** molecules.
-3. **Colors and names every protein chain, ligand, and ion**
-   deterministically. The same chain letter, ligand code, or ion name is
-   always assigned the same color across every structure processed in a
-   given run, so multi-panel figures stay visually consistent. Ligand and
-   ion selection names are always prefixed (e.g. `lig_SCN`) so they can
-   never collide with PyMOL's own selection-language keywords.
-4. **Selects and colors the N-terminal and C-terminal residues** of every
-   protein chain.
-5. **Analyzes the structural environment around every ligand**, protein
-   residues within 4.0 Å, and possible polar contacts (ligand N/O atoms
-   within 3.5 Å of protein N/O atoms), using PyMOL's own geometry
-   calculations (`cmd.find_pairs`, `cmd.iterate`). This is reported as a
-   geometric observation without hydrogen-bond angle checks or interaction
-   analysis; detailed interaction typing (salt bridges, pi-stacking) is
-   out of scope and would need a dedicated tool such as PLIP or Arpeggio.
-6. **Detects redundant chains within a structure** (a homodimer, for
-   example) and asks whether to keep just one representative chain, or
-   proceeds automatically per your own configured preference (see
-   "Redundant chains" below).
-7. **Saves a finished PyMOL session** (`.pse`), automatically falling back
-   to a plain `.pdb` only if the `.pse` save itself fails. A separate
-   plain-coordinate `.pdb` is always also written alongside it,
-   specifically so the desktop app's 3D viewer has a file to load.
-8. **Renders six high-resolution, transparent-background images**, front,
-   back, left, right, top, and bottom views, at a quality level you
-   choose.
-9. **Writes reports**: `Protein_Information.txt`, a self-contained
-   `Astra3_Report.html`, and an `Astra3_Report.json` export, all built
-   from the same underlying analysis, so they never disagree with each
-   other. A CSV export is also available on request (see `-csv` below).
-
-Everything lands in a predictable, portable output folder (see below) that
-can be moved or shared as a unit. Image paths, session links, and the logo
-in the HTML report are all relative, so nothing breaks if the folder moves.
-
----
-
-## Download and installation
-
-Astra3 is distributed as pre-built downloads on the GitHub Releases page,
-organized like this:
-
-```
-Astra3/
-├── README.md
-├── CITATION.cff
-├── LICENSE
-│
-└── Astra3 (MacOS)/
-    └── install.md
-```
-
-Windows is maintained as a separate distribution with its own build and
-release; it is not part of this package.
-
-The `.dmg` and `.zip` themselves are attached to the corresponding
-[GitHub Release](https://github.com/andre-aguirre/Astra3/releases),
-not stored directly in the repository; `Astra3 (MacOS)/install.md`
-points there.
-
-Astra3 requires only [PyMOL](https://pymol.org/), installed separately.
-Nothing else needs to be installed. Both open-source PyMOL and
-Incentive PyMOL work; nothing in Astra3 requires an Incentive-only
-feature. The report footer records which one produced the report, along
-with the PyMOL version, where that can be determined (see "The 3D
-viewer" below for a stated limitation on license-type detection).
-
-### Installing
-
-**Requirements:** macOS 10.15 Catalina or later, Intel or Apple Silicon,
-[PyMOL](https://pymol.org/) installed separately, built on Python 3.7 or
-newer (current PyMOL releases are).
-
-1. Download `Astra3-1.9.2-universal.dmg` (or the `.zip`, which contains the
-   same signed app) from the
+1. Download `Astra3-2.0.1-universal.dmg` from the
+   [download page](https://andre-aguirre.github.io/Astra3/download/) or
    [GitHub Releases](https://github.com/andre-aguirre/Astra3/releases)
-   page.
-2. Open the `.dmg`.
-3. Drag **Astra3** into your **Applications** folder.
-4. Launch Astra3 from Applications.
+   (the `.zip` there holds the same app).
+2. Open the `.dmg` and drag **Astra3** into **Applications**.
+3. Open Astra3. It is signed and notarized by Apple, so it opens without a
+   Gatekeeper warning.
 
-The build is Developer ID signed and notarized, so no Gatekeeper override
-is required.
+**Finding PyMOL and ChimeraX.** Astra3 looks for PyMOL as `PyMOL.app` in
+`/Applications` or `~/Applications`, in Homebrew (`/opt/homebrew/bin/pymol`,
+`/usr/local/bin/pymol`) and in conda installs (`miniconda3`, `anaconda3`,
+`miniforge3`, `mambaforge`, in your home folder, `~/opt` or `/opt`, and
+their environments), and for ChimeraX as `ChimeraX.app` or
+`ChimeraX-1.x.app` in either Applications folder. If it finds neither, a
+setup dialog asks you to pick one or to use the Astra3 Engine. You can
+pick `PyMOL.app` or `ChimeraX.app` itself; Astra3 finds the program
+inside. A PyMOL is checked by starting it briefly, and one built on Python
+older than 3.7 is refused with a message saying so; the first start of an
+Intel PyMOL on Apple Silicon can take a while. Either location can be
+changed in **Settings > Analysis engine**.
 
-### PyMOL discovery
-
-On first launch Astra3 looks for PyMOL automatically in the locations it
-is normally installed to:
-
-- `/Applications/PyMOL.app/Contents/MacOS/PyMOL`
-- `~/Applications/PyMOL.app/Contents/MacOS/PyMOL`
-- `/Applications/PyMOL.app/Contents/bin/pymol`
-- Homebrew (`/opt/homebrew/bin/pymol`, `/usr/local/bin/pymol`)
-- conda and pip installs under your home directory
-
-If none is found, Settings prompts you to select it. Astra3 verifies the
-choice by briefly launching it and confirming it behaves like PyMOL, so a
-wrong selection is caught before the first analysis. A PyMOL too old to
-run Astra3 (one built on Python older than 3.7) is refused with a message
-saying so. A first launch can take a while, for example an Intel PyMOL
-on Apple Silicon; Astra3 waits for it.
-Both open-source and Incentive PyMOL work.
-
-### Where Astra3 keeps things
-
-| What | Location |
+| What | Where |
 |---|---|
-| Analysis output | `~/Documents/Astra3/Protein_outputs/` (configurable in Settings) |
-| Saved settings | `~/Library/Application Support/Astra3/tools/` |
-| Diagnostic log | `~/Library/Application Support/Astra3/tools/pymol-diagnostic.log` |
+| Results | `~/Documents/Astra3/Protein_outputs/` (change it in Settings) |
+| App settings and run history | `~/Library/Application Support/Astra3/` |
+| Engine locations, output folder, colour palette | `~/Library/Application Support/Astra3/tools/` |
+| PyMOL diagnostic log | `pymol-diagnostic.log` in the same `tools` folder |
 
-Settings live in Application Support, outside the application
-bundle, because a signed `.app` cannot be written to without invalidating
-its signature, and `/Applications` is not writable by a standard user.
-
-Each run creates `<ID>_Output/` inside the output folder, containing the
-rendered images, the HTML and JSON reports, and a `Session/` subfolder
-with the `.pse`, the exported `.pdb`, and the text report.
-
-### Permissions
-
-If the output folder is set to Desktop, Documents, or Downloads, macOS
-asks once for permission the first time Astra3 writes there. Denying it
-causes analyses to fail at the point of saving; you can grant it later
-under System Settings → Privacy & Security → Files and Folders.
-
-### Known limitations on macOS
-
-- One universal build runs natively on Intel and Apple Silicon.
-- PyMOL must be installed separately; Astra3 does not bundle it.
-- Opening a `.pse` from within Astra3 launches your configured PyMOL
-  directly, without relying on the Finder file association, which
-  PyMOL does not always register.
+If the results folder is on the Desktop or in Documents or Downloads,
+macOS asks once for permission. If that was denied, analyses fail when
+saving; allow it under System Settings → Privacy & Security → Files and
+Folders.
 
 ---
 
-## PyMOL Setup
+## Engines
 
-The desktop app actively checks and manages its connection to PyMOL. This section covers what that
-looks like in practice.
+All three engines run the same analysis code, so their measurements agree
+to within rounding.
 
-### Automatic detection
+| Engine | Session files | Open session shows it in |
+|---|---|---|
+| PyMOL | `.pse` | PyMOL |
+| UCSF ChimeraX | `.cxs` | ChimeraX |
+| Astra3 Engine | `.pse`, and a `.cxc` that rebuilds the scene in ChimeraX | Astra3's 3D Viewer |
 
-Every time Astra3 launches, it validates the saved PyMOL path before
-you can run anything, including a real
-check that briefly launches the candidate and confirms it actually
-behaves like PyMOL (watching for PyMOL's own startup output). If it
-checks out, you'll see a small "PyMOL location verified" notification
-in the bottom-right corner and Astra3 is ready to use. This same real
-check also runs whenever you change the path in Settings, and a
-lighter, instant version of it runs before every individual analysis,
-so a problem is caught before it can produce a confusing failure
-partway through a run.
+PyMOL is used when installed, then ChimeraX; the Astra3 Engine runs when
+neither is, or when you choose it. The top bar shows the engine in use and
+switches it, and Settings marks each engine green (works), amber (set but
+does not run) or red (not set up). PyMOL and ChimeraX run in the
+background and report in Astra3's console. The Astra3 Engine draws images
+with PyMOL's camera and proportions, shading by burial, depth cue and thin
+outlines, and records each image's camera and structures in the PNG.
 
-### First-launch setup
-
-If Astra3 has never been pointed at a PyMOL installation, a welcome
-dialog appears on first launch asking you to connect one. It has a
-path field, a Browse button (for picking `PyMOL.app` directly through
-a native file picker), and a Confirm button. Selecting `PyMOL.app`
-itself works correctly here: Astra3 automatically resolves it down to
-the real executable inside the bundle
-(`PyMOL.app/Contents/MacOS/PyMOL`), so you never need to know
-that structure yourself. A small "README Document" link in the dialog
-closes it and takes you straight to the Citation & Docs page if you'd
-rather read more first. The dialog can also be closed without setting
-anything; Astra3 stays usable elsewhere, and the dialog reopens
-automatically the next time you try to run something that needs
-PyMOL.
-
-### Manual path selection
-
-You can also set or change the PyMOL path anytime from **Settings ->
-PyMOL**, using the same Browse button or by typing a path directly.
-Either way, the path is validated the same way (a real launch
-of PyMOL) before it's accepted; changing an
-already-configured path restarts Astra3 automatically so the new path
-takes effect everywhere immediately.
-
-### Recovery if PyMOL becomes unavailable
-
-If PyMOL is later deleted, moved, renamed, has its permissions
-changed, or is replaced with something that isn't actually PyMOL, the
-same setup dialog reopens automatically the next time it's needed,
-with a shorter message ("PyMOL could not be found. Please select a
-valid PyMOL installation.") instead of the first-launch welcome text.
-You never see a raw backend error for this; Astra3 catches it before
-attempting to run anything.
-
-### Validation and troubleshooting
-
-If you select a file that isn't really PyMOL (for example, another
-application's executable, or a renamed file), Astra3 rejects it with
-"This file does not appear to be a valid PyMOL executable." rather
-than accepting it and failing later. If you hit this unexpectedly,
-double-check you selected PyMOL's own application/executable, not
-something else with a similar name or location.
-
-**Common macOS PyMOL location:**
-```
-/Applications/PyMOL.app/Contents/MacOS/PyMOL
-```
-
-If PyMOL is installed somewhere other than these defaults, use Browse
-to locate it directly.
+**Drawing window.** Set Settings > Drawing window to In a window to see
+each image as it is made, grouped by analysis. Choosing an image turns the
+3D view to its camera; drag along the view's edge to rotate it in the
+plane of the screen. **Reset** goes back to the image's camera, **Save
+image** saves the turned view, and images drag out of the list as files.
 
 ---
 
-## Commands
+## Using the app
 
-Astra3 runs as an interactive prompt, `Enter a PDB ID:`, which is what
-the desktop app's Advanced Console shows. Type a command and press Enter.
-Every command and flag is described below.
+- **Home**: fetch a structure by ID, or start an Overlay, Termini, Batch
+  or import run.
+- **Single Structure**: a PDB ID, with images (Low, Medium or Excellent),
+  reports (HTML, JSON, text), CSV, or the session alone. Fetch format is
+  mmCIF or legacy PDB, with a fallback to the other.
+- **Overlay** and **Termini**: two or more structures, fetched or
+  imported. The reference is chosen automatically or by you. When a
+  structure holds several copies of the same protein, Astra3 asks, always
+  keeps one, or keeps all, as set. Termini adds close-ups of each terminus.
+- **Batch**: IDs one per line, or a text file of them. Each structure is
+  analysed on its own, and a failure does not stop the queue; ten or more
+  ask for confirmation first (Settings > Behavior). Redundant chains can
+  also follow the biological assembly rule (below).
+- **Import Local**: `.pdb`, `.cif`, `.mmcif`, `.ent` or `.pse`, gzipped or
+  not. Each file gets an `AST-XXXX` ID that works anywhere a PDB ID does
+  until Astra3 closes. If a file names a PDB entry and you confirm it is
+  that entry, the report adds the entry's validation, sequence and domain
+  data.
+- **Related Structures**: every experimental entry of the same protein
+  (same UniProt entry), with method, resolution, ligands, mutations and
+  coverage, marked as suited to Overlay or Termini and with warnings
+  (construct boundaries, low resolution, NMR ensembles, extra copies,
+  partner proteins, unmodelled residues). Selected entries go straight to
+  Overlay, Termini or Batch.
+- **Reports**: every finished analysis, newest first, batches grouped,
+  with the report, its images, the output folder and the session a click
+  away. **Copy figure** copies a group of images with its colour key as
+  one picture.
+- **3D Viewer**: any finished analysis in 3D (3Dmol.js), with each chain,
+  ligand and ion recoloured, hidden or drawn its own way. Click a residue
+  to select it; Shift+click adds more. **Quick View**, under the list,
+  opens a PDB ID or an imported file's temporary ID without an analysis.
+- **Summary** and **History**: recent runs with key results and engine;
+  every run, with favourites, deletion and disk use.
+- **Color Palette**: the colours given in turn to chains, ligands and
+  ions, the terminus colours and the TERMINI close-up arrows; used from
+  the next run.
+- **Settings**: defaults (image quality, fetch format, output folder),
+  what to open when a run ends, theme and font, engines, drawing window.
+- **Advanced Console**: the command line behind the app (commands below).
 
-### Single-structure analysis
+Cmd+F finds text in the console, Related Structures and this README; the
+keyboard icon in the top bar lists every shortcut.
 
-```
-<PDB ID>
-```
+---
 
-Analyzes a single structure. Example: `1ABC`
+## What Astra3 does to each structure
 
-**Flags** (append after the ID, space-separated; every command below that
-accepts flags accepts this same set):
+1. **Fetches or loads** it: by PDB ID (mmCIF or legacy PDB) or from a
+   local file.
+2. **Removes water.**
+3. **Colours and names** every protein chain, ligand and ion, the same
+   colour for the same chain letter, ligand code or ion throughout a run.
+   Names carry a prefix (`lig_SCN`, `ion_ZN_1`) so they cannot clash with
+   the engine's keywords.
+4. **Marks the termini**: the first and last ten resolved residues of
+   every protein chain.
+5. **Describes each ligand's surroundings**: protein residues within
+   4.0 Å, and possible polar contacts (ligand and protein N/O atoms within
+   3.5 Å; distances, not confirmed hydrogen bonds).
+6. **Detects redundant chains** (a homodimer, for example) and asks, or
+   follows your setting, whether to keep one.
+7. **Saves a session**, and a plain `.pdb` for the 3D Viewer.
+8. **Renders six views** (front, back, left, right, top, bottom) on a
+   transparent background.
+9. **Writes the reports** (HTML, text, JSON, a Methods paragraph, and CSV
+   when asked), all from the same results.
 
-| Flag | Effect |
-|---|---|
-| `-low` | Render lower-quality images (faster) |
-| `-medium` | Render medium-quality images |
-| `-excellent` | Render excellent-quality images (**default**) |
-| `-skipimage` | Skip image rendering; generate only the report/session |
-| `-skipreport` | Skip report generation (HTML/TXT/JSON/CSV); generate only the session and images |
-| `-ro` | Render-only mode, save the PyMOL session without generating reports or images |
-| `-csv` | Also write a CSV export to `Session/` (opt-in, off by default) |
-| `-mmCIF` | Fetch as mmCIF instead of legacy PDB |
+---
 
-Legacy PDB is tried first by default. If a structure is not available in
-that format, Astra3 automatically falls back to mmCIF.
+## How things are measured
 
-Example: `1ABC -medium -csv`
+### Superposition and RMSD
 
-### OVERLAY, multi-structure alignment
+Residues are paired by sequence alignment (BLOSUM62), and matching atoms
+in paired residues are superposed by least-squares fitting (Kabsch). Up
+to five refinement cycles set aside pairs further apart than 2.0 × RMSD;
+the RMSD is over the pairs kept. OVERLAY also reports a pairwise Cα RMSD
+matrix.
 
-```
-OVERLAY <id> <id> [<id> ...]
-```
+Chains are paired by ID when their sequences correspond, otherwise by
+sequence. Two chains correspond when one sequence lies within the other,
+or when their alignment's identity reaches the HSSP threshold for its
+length ([Sander & Schneider 1991](https://doi.org/10.1002/prot.340090107)).
+If no pair passes, Astra3 warns and, if you continue, superposes the most
+similar pair. TERMINI pairs chains by ID, then by sequence at 90% identity
+over 70% coverage.
 
-Aligns two or more structures onto a shared reference structure using
-PyMOL's `cmd.align` (sequence-guided iterative structural superposition).
+### Reference structure
 
-Example:
-```
-OVERLAY 3FXI 1RO6 1ROR
-```
+OVERLAY and TERMINI measure everything relative to one reference: by
+default the structure with the fewest bound ligands, then the one most
+similar in sequence to the others, then the one with most resolved
+residues, then the first by ID. The order you enter them in never decides.
+This is a heuristic, not a quality judgement; the report says which
+structure was chosen and why, and you can choose it yourself.
 
-**Reference selection.** By default, Astra3 automatically picks the
-structure with the fewest bound ligands as the reference (on the
-reasoning that a more sparsely bound structure is generally a cleaner
-alignment target), and records that reasoning in the report. If several
-structures tie on ligands, the one with the highest mean sequence
-similarity to the others is used (identity, coverage and length,
-weighted as in chain reduction), then the one with the most resolved
-residues, then the first by ID; the order you type them in never
-decides. This is a heuristic that does not assess structural quality;
-you can override it:
+### TERMINI measurements
 
-```
--reference<ID>
-```
+For each chain matched to the reference, each terminus gets:
 
-Example: `OVERLAY 3FXI 1RO6 1ROR -reference1RO6`
-
-If the requested reference ID was not one of the structures loaded, Astra3
-falls back to automatic selection and adds a note to the report rather
-than silently ignoring the request.
-
-OVERLAY accepts all the flags listed above, including `-csv`, plus a
-per-structure `-mmCIF` attached directly after a specific ID, for example
-`OVERLAY 6DK3 9BOX -mmCIF` fetches only `9BOX` as mmCIF.
-
-OVERLAY produces:
-- An RMSD summary per aligned structure (aligned atoms, aligned residues)
-- A full pairwise RMSD matrix (C-alpha based) across every loaded
-  structure, including pairs without the reference
-- Six views of all structures aligned together, and six views of each
-  comparison with the reference, each group with a colour key naming which
-  colour is which structure
-- The same `Astra3_Report.html` / session / JSON / warnings structure as a
-  single-structure run
-- With `-csv`: `Overlay_Summary.csv` and `Pairwise_RMSD_Matrix.csv` (kept
-  as two separate files, since a per-structure summary
-  and a per-pair comparison do not share a natural row structure)
-
-### TERMINI, comparative terminus structural analysis
-
-```
-TERMINI <reference> <comparison1> [comparison2 ...]
-```
-
-Quantifies how much a protein's N- and C-termini move and reorient
-relative to a reference structure, after alignment. As with OVERLAY,
-Astra3 selects the structure with the **fewest bound ligands** as the
-reference, on the reasoning that the less ligand-encumbered structure is
-the more neutral baseline; every other structure is independently
-aligned to it and compared. If several tie on ligands, the one with the highest mean sequence
-similarity to the others is used (identity, coverage and length,
-weighted as in chain reduction), then the one with the most resolved
-residues, then the first by ID; the order you type them in never
-decides. Use `-reference<ID>` to choose the reference yourself. Because
-every terminal measurement, the offset correction and the
-ligand-to-terminus distances are all expressed relative to the
-reference, the report states which structure was chosen; the reason is
-printed in the run log.
-
-Example:
-```
-TERMINI AST-0001 AST-0002 AST-0003
-```
-
-For each protein chain matched between the reference and a comparison
-structure (by chain ID, or by sequence when the two structures use
-different chain letters), TERMINI computes, independently for the
-N-terminus and the C-terminus (the two are never compared to each other):
-
-- **Tip displacement**, the distance (angstroms) between the reference's
-  and the comparison's terminal C-alpha after superposition
-- **Centroid displacement**, the distance between the centroids of the
-  five terminal C-alpha atoms, a more stable measure than the single tip
-  residue
-- **Orientation change**, how much the last ten residues, taken as one
-  segment, have turned. Each structure's orientation vector runs along the
-  terminal segment between the centroids of its outer five and inner five
-  C-alpha atoms; the value is the angle between the two structures'
-  vectors. Because it averages ten residues, one loose residue changes it
-  very little. The close-up views draw this vector as an arrow pointing
-  out of the protein.
-- **Terminal Projection Vector (TPV) angle change**, how much the very
-  end of the chain has changed direction. Each structure's TPV is an arrow
-  from the centroid of the three C-alpha atoms just before the terminal
-  residue to the terminal C-alpha, pointing the way the chain is heading
-  as it ends. It uses only the last four residues, so a large TPV change
-  with a small orientation change means the segment stayed in place while
-  its tip turned. For a tag attached at that terminus (for example HiBiT,
-  FLAG, HA or GFP), the TPV shows which way the chain points where the tag
-  joins.
-- **Local RMSD, in place**, the C-alpha RMSD over the paired residues of
-  the ten-residue terminus window, measured where they sit after the
-  whole-chain superposition. It includes both a shift of the whole end
-  and any change in its shape.
-- **Local RMSD, refit**, the same pairs after [superposing](https://doi.org/10.1002/jcc.20110) the two
-  terminus windows onto each other, which leaves only the change in
-  shape. It is never larger than the in-place value; a large in-place
-  value with a small refit value means the end moved as a rigid piece.
-- **Change in [solvent-accessible surface area](https://doi.org/10.1016/0022-2836%2871%2990324-x)**
-  and **change in normalized B-factor** of the terminus window. The
-  normalized B-factor is the window's mean B-factor divided by the
-  protein's, a [published ratio normalization](https://doi.org/10.1016/j.ab.2022.114594)
-  that removes differences in overall B-factor level between structures
-  but leaves local effects such as crystal contacts. A terminus is
-  labelled more exposed or more buried when its surface area changes by
-  more than 26 Å², a quarter of
-  [glycine's maximum accessible surface](https://doi.org/10.1371/journal.pone.0080635) (104 Å²),
-  the smallest change that can carry a residue across the
-  [25% relative-accessibility line](https://doi.org/10.1016/j.jmb.2010.09.028) between
-  surface and interior residues. It is labelled rigidified or more
-  flexible when its normalized B-factor changes by more than 0.2, about
-  a 10% change in relative RMS atomic displacement given
-  [B = 8π²⟨u²⟩](https://doi.org/10.1021/acs.chemrev.8b00290). Smaller changes are labelled
+- **Tip displacement**: distance between the two terminal Cα atoms after
+  superposition.
+- **Centroid displacement**: distance between the centroids of the five
+  terminal Cα atoms, steadier than the tip alone.
+- **Orientation change**: how much the last ten residues, as one segment,
+  have turned: the angle between the vectors from the centroid of the
+  outer five Cα atoms to that of the inner five. Close-ups draw this
+  vector as an arrow.
+- **Terminal Projection Vector (TPV) angle change**: how much the very end
+  has changed direction. The TPV runs from the centroid of the three Cα
+  atoms before the terminal residue to the terminal Cα. A large TPV change
+  with a small orientation change means the segment stayed put while its
+  tip turned; for a tag fused at that end (HiBiT, FLAG, HA, GFP), the TPV
+  shows which way the chain points where the tag joins.
+- **Local RMSD**: Cα RMSD over the ten-residue window, in place (after
+  superposing the whole structure: a shift of the end plus any change in
+  its shape) and refit (after superposing the two windows: the change in
+  shape alone).
+- **Surface area change** (Shrake-Rupley, 1.4 Å probe, Bondi radii, in a
+  frame fixed to the structure) and **normalized B-factor change** (the
+  window's mean B-factor over the protein's). Labels apply above 26 Å²
+  (more exposed or more buried; a quarter of
+  [glycine's maximum accessible surface](https://doi.org/10.1371/journal.pone.0080635))
+  and above 0.2 (rigidified or more flexible; about 10% in RMS
+  displacement, since B = 8π²⟨u²⟩,
+  [Sun et al. 2019](https://doi.org/10.1021/acs.chemrev.8b00290)). Both
+  cut-offs are Astra3's, derived from these values; smaller changes read
   Little change.
 
-If a chain has too few resolved residues near a terminus to compute these
-windows, or no chain in the comparison corresponds to a reference chain,
-that comparison is reported as unavailable.
+A terminus with too few resolved residues, or a chain without a
+counterpart, is reported as unavailable.
 
-**Renders.** TERMINI produces two independent sets of images per
-comparison: the standard whole-structure views, and a set of close-up
-terminus renders showing each structure's orientation vector as an arrow
-pointing out of the protein, with a white dashed line
-connecting corresponding terminal centroids. The reference's arrows are
-orange (N) and pink (C) in every close-up; each comparison has its own
-pair, named in a colour key beside its close-ups. Runs with two or more
-comparisons also include six views of all structures together. Arrows
-appear only in the close-ups. Two
-camera angles are rendered per terminus, so a vector that happens to be
-foreshortened from one viewing angle is unlikely to be foreshortened
-from both. The arrows are also retained in the saved `.pse` session,
-disabled by default; they can be enabled from PyMOL's own object panel
-for closer inspection there.
+### Terminus offsets
 
-Both sets are controlled independently, by `-skipimage` (whole-structure
-views) and `-skipcloseup` (close-ups) respectively; neither one implies
-the other:
+Two structures of the same protein often start or end at different
+residues. Astra3 compares the terminal windows of each pair over ten
+residues either way and adopts the offset with the highest identity (80%
+or more is a confident match). If it is not confident, it offers a
+thorough search over 250 residues (type `advanced` at the prompt) for
+constructs that differ by a tag or a domain. It shows each terminus before
+and after, names the structure and chain that would be trimmed, and
+changes nothing without your approval. Offsets of 15 residues or more are
+always disclosed.
 
-| `-skipimage` | `-skipcloseup` | Result |
-|---|---|---|
-| off | off | Both: whole-structure views and close-ups |
-| off | on | Whole-structure views only |
-| on | off | Close-ups only, no whole-structure views |
-| on | on | No images at all |
+### Redundant chains
 
-In the desktop app, this is "Render images" and "Close-up terminus
-views" as two separate checkboxes on the Termini page, matching the
-same four combinations. Image quality (`-low`/`-medium`/`-excellent`)
-applies to whichever of the two is actually being rendered, including a
-close-ups-only run with whole-structure views turned off.
+When a structure holds several copies of the same protein, Astra3
+recommends one chain and asks, unless told in advance to keep one or keep
+all. The chain kept has the fewest missing residues, then the fewest bound
+ligands (or the most, if set), then is chain A, then comes first
+alphabetically, so a structure always resolves the same way. The order of
+these rules can be changed by dragging on the Overlay, Termini and Batch
+pages.
 
-TERMINI accepts the same flags as single-structure analysis (`-low`,
-`-medium`, `-excellent`, `-skipimage`, `-skipreport`, `-ro`, `-csv`,
-`-mmCIF`, per structure), plus `-skipcloseup` and the terminus-offset
-auto-decision flags below, and produces:
-- `Astra3_Report.html` with a Terminal Structural Analysis section
-  (summary table, largest N-/C-terminal displacement and rotation, and
-  the embedded whole-structure and close-up visualizations)
-- `Termini_Analysis.json`
-- With `-csv`: `Termini_Analysis.csv` (one row per structure/chain,
-  columns for every metric above, N and C side by side)
-
-**Terminus alignment offsets.** When two termini do not quite line up at
-the naive first/last residues, Astra3 shows a before/after comparison and
-asks about each terminus separately, naming the structure and chain whose
-residues would be trimmed. That can be the reference: every compared
-residue has to correspond, so whichever structure carries the extra
-residues loses them, and later comparisons in the same run use the
-trimmed reference. Nothing is changed without approval, and the report
-records each decision. The two ends are asked about separately because
-they frequently differ: one can line up cleanly while the other does not.
-
-**How the match is scored.** Astra3 takes the terminal window from each
-structure, extends it by a search margin, and tries every offset between
-the two extended sequences. Each offset is scored as the fraction of
-exactly matching residues over the overlap, and the highest-scoring offset
-is adopted as the frame; where two offsets score equally the smaller one
-wins, so a nearby explanation is preferred to a distant one. The terminus
-is then re-scored over the window in that frame, and treated as a
-confident match at **80% identity or above**.
-
-The window is 10 residues per terminus. The ordinary search looks 10
-residues either way, which covers ordinary terminal disorder: one crystal
-resolving a few more tail residues than another. A narrow search is what
-keeps it from wandering off and finding a plausible-looking match somewhere
-unrelated.
-
-If that match is not confident, Astra3 offers a more thorough pass before
-you decide. Type `advanced` at the prompt (the console also accepts
-`escalate`). It runs the same scoring over a search range of **250
-residues** either way, for the case the narrow search cannot represent at
-all: two entries of the same protein built from different constructs, where
-one carries an expression tag, a cloning scar, or a whole extra domain
-ahead of the point the other begins. Those differ by tens of residues, and
-a search that stops at 10 reports "these termini do not correspond" for a
-pair whose termini correspond perfectly 40 residues in. Any adopted offset
-of **15 residues or more** is always disclosed. The
-thorough pass is offered only when the quick check is genuinely uncertain,
-so most runs never see it.
-
-**Deciding in advance (Advanced Console).** Two flags answer the offset
-question without a prompt, for unattended runs typed in the Advanced
-Console; the desktop app's Termini page always asks.
-
-| Flag | Effect |
-|---|---|
-| `-alwaysmatch` | Applies a correction when the match is 70% identity or higher. A weaker match is left uncorrected and flagged in the report for review. |
-| `-nevermatch` | Declines every correction; every terminus is measured on the naive window. |
-
-The before/after comparison is still printed, and the report says the
-decision was made automatically.
-
-Terminus matching is deliberately an exact-residue comparison: it
-answers where two chains line up. Sequence
-similarity is a separate question and is reported separately, from a
-gap-aware alignment of the whole chain that distinguishes exact identity
-from conservative-substitution similarity, and both from how much of each
-sequence was actually compared, so a high score over very few residues
-cannot be mistaken for strong evidence.
-
-**Terminus Sequences.** The HTML report shows the residues actually
-compared at each terminus, reference above comparison, one residue per
-column after any approved offset is applied -- so a column always compares
-residues that correspond. A fixed first-or-last-N slice would
-misalign the moment one structure's terminus starts earlier or later
-than the other's. A `|` marks each column where the two agree. This is
-what every identity and similarity figure elsewhere in the report is
-computed from, shown so it can be checked by eye.
-
-When a structure contains multiple chains that are the same protein (a
-homodimer, for example), Astra3 flags this and asks how to proceed. By
-default it recommends keeping the single longest resolved chain and asks
-for confirmation, decline, or a manually specified chain letter.
-
-For BATCH runs, or for any run where an interactive prompt is not wanted,
-this decision can be set in advance instead:
-
-| Flag | Effect |
-|---|---|
-| `-alwaysreduce` | Always select a chain and reduce; never prompt |
-| `-keephomomers` | Never reduce; always keep every chain |
-| `-reducepriority:<order>` | Sets how `-alwaysreduce` selects a chain (see below) |
-
-`-reducepriority` takes a comma-separated, ordered list of criteria. Each
-criterion narrows the candidate chains to whichever are still tied on
-that criterion before the next criterion is applied:
-
-- `missing`, fewest missing (unresolved) residues
-- `leastligands` / `mostligands`, fewest or most bound ligands
-- `chainA`, chain A, if present in the cluster
-
-The default order, used when `-reducepriority` is not specified, is
-`missing,leastligands,chainA`. If every criterion in the list is
-exhausted and chains remain tied, the alphabetically first chain is
-selected. This final step is deterministic, so the same structure
-resolves the same way on every run. Worked example: three chains, none
-with missing residues, two of them (chains B and C) both with zero bound
-ligands. `missing` does not narrow the set, since all three are tied.
-`leastligands` narrows it to B and C, which are still tied with each
-other. The alphabetical fallback then selects B.
-
-The desktop app's Batch, Overlay, and Termini pages provide a drag-and-drop
-version of this ranking, along with a toggle for the ligand criterion's
-direction (fewest versus most), so the flag string does not need to be
-written by hand.
-
-### BATCH, unattended multi-structure processing
-
-```
-BATCH <id> <id> [<id> ...]
-```
-or
-```
-BATCH <file>
-```
-
-Processes multiple structures one after another, without stopping the
-whole run if one fails.
-
-Examples:
-```
-BATCH 1AKE 4AKE 2AK3
-BATCH batch.txt
-```
-
-A batch file has one structure ID per line; blank lines and lines
-starting with `#` are ignored. IDs are normalized (case-insensitive) and
-deduplicated before processing. Each structure gets its own output
-folder, exactly as if it had been run individually. BATCH accepts the
-same flags as single-structure analysis, including the redundant-chain
-auto-decision flags above, applied to every structure in the batch.
-
-### IMPORT, load a local structure file
-
-```
-IMPORT
-```
-
-Prompts for a file path. Accepts `.pdb`, `.cif`/`.mmcif` and `.pse`
-files. The imported structure is assigned a temporary `AST-XXXX` ID that
-you can then use like a PDB ID for the rest of the session, including
-inside `OVERLAY`/`TERMINI`. This ID is **session-only**; it disappears
-once Astra3 closes, so if you need to refer back to an imported
-structure, note the ID it prints or process it before ending the
-session.
-
-Each import is kept separate from everything already loaded: a second
-file with the same name (`model.pdb` from another folder, or the `.cif`
-of a `.pdb` you already imported) is loaded as its own structure, and
-both are then named with their folder in reports, for example
-`model.pdb (run1)` and `model.pdb (run2)`. From a `.pse` session, each
-protein or nucleic-acid object becomes its own ID; arrows and other
-drawing objects are left out. Output folders for runs on imported
-structures are named after the files, so running the same files again
-replaces the earlier results, as it does for PDB IDs.
-
-An imported coordinate file's own header is used as it is: resolution,
-R-factors, missing residues and the depositor's biological assemblies,
-so chain-reduction prompts can still say whether other chains are
-binding partners or crystal copies. When the file names a PDB entry (in
-its header, or as its file name, e.g. `3fxi.pdb`), Astra3 asks, once in
-each analysis, whether the file is that entry. Answering yes adds the
-entry's public validation, reference-sequence and domain data from RCSB
-PDB to the report, which then notes the identification as a warning and
-in its Methods text. Imported structures work fully offline; if RCSB
-cannot be reached after a yes, Astra3 offers to try again or to continue
-without that data.
-
-### -t, regression test
-
-```
--t
-```
-
-Runs a full single-structure analysis on `1AKE` into a single,
-always-overwritten `TEST/` folder. Useful as a quick smoke test that your
-PyMOL/Astra3 setup is working correctly, and as a regression check after
-modifying the code.
-
-### DONE, finish
-
-```
-DONE
-```
-
-Ends the session and closes PyMOL. If any structures were processed,
-you will be asked whether to open the output folder (uses `open` on
-macOS, and the platform equivalent elsewhere).
+Batch can instead keep the chains of the depositor's preferred biological
+assembly: one chain of a monomer, both of a dimer. When an entry's assembly
+records are missing, or the assembly is built from symmetry copies not in
+the file, a fallback decides: ask, keep one chain by the order above, or
+keep all. Every report states the rule that decided.
 
 ---
 
-## The 3D viewer (desktop app)
+## Reports and output files
 
-Every completed run writes a plain-coordinate `.pdb` export alongside its
-`.pse` session file, specifically so the viewer has a file to load.
-PyMOL's own session format is binary, and the structure file originally
-downloaded by Astra3 is deleted after processing, so this export is the
-only coordinate-bearing artifact that remains for the viewer.
+A report holds:
 
-The viewer is built with **3Dmol.js**, a WebGL-based molecular
-visualization library:
+- **Summary**: method, resolution, protein and nucleic-acid chains,
+  ligands, ions, water removed
+- **Structure quality**: mean Cα B-factor, alternate conformations, and
+  wwPDB validation (clashscore and Ramachandran, rotamer and real-space
+  fit outliers, with the residues)
+- **Chains**: terminus ranges and missing residues (`REMARK 465` or its
+  mmCIF equivalent)
+- **Reference sequence and mutations** declared by the depositor, and
+  **domains** from Pfam, CATH, ECOD and SCOP, in the structure's numbering
+- **Ligands**: nearby residues and possible polar contacts
+- **Disulfides** (Sγ–Sγ within 2.5 Å), unclassified hetero atoms, and
+  waters
+- **OVERLAY and TERMINI** results, with colour keys on every image group
+- **Warnings**, in their own section
+- **Input files**: each coordinate file's name, size and SHA-256
+- **Methods**: what was done, with references, ready to adapt for a paper
 
-> Rego, N., and Koes, D. (2015). 3Dmol.js: molecular visualization with
-> WebGL. Bioinformatics, 31(8), 1322-1324.
-> https://doi.org/10.1093/bioinformatics/btu829
-
-3Dmol.js is distributed under a BSD 3-Clause license; see its own
-repository at https://github.com/3dmol/3Dmol.js for full license terms,
-and "License" below for how Astra3 reproduces that notice.
-
-The viewer is interactive: chains, ligands and ions can each be recoloured
-and given their own representation, individually shown or hidden, and
-reset. Clicking any of them opens its controls in place. **Reset View**
-returns the structure to how it was first drawn, camera included.
-
-**Open Session** is offered from every HTML report -- single-structure,
-OVERLAY, and TERMINI -- as well as from the desktop app's Reports page,
-and opens the same `.pse` the viewer itself would load.
-
-A few notes on current viewer behavior:
-
-- **Ligands and ions under their chain.** In the Chains section, a chain
-  with ligands or ions bound lists them beneath it, open by default, with
-  one switch for its ligands and one for its ions (the residue names are
-  shown beside each), so a chain and everything it carries can be hidden
-  together. A ligand or ion belongs to the chain with the same chain
-  letter in the same structure; any that match no chain stay in the
-  Ligands and Ions sections.
-- **Chain and ligand recoloring apply per structure**, including in
-  OVERLAY/TERMINI comparisons where two independently loaded structures
-  can share a chain letter (both using chain A, for example) in the
-  combined file PyMOL writes for such runs. The viewer distinguishes
-  these using each block's real atom serial numbers as well as the
-  chain letter, so recoloring one occurrence does not affect the
-  other.
-- The report footer records the PyMOL version and license type used to
-  produce the report, where those can be determined. PyMOL does not
-  expose a documented, version-stable way to distinguish an
-  Educational-tier Incentive license from a paid one; that specific
-  distinction is reported as not determinable through the API rather
-  than guessed at.
-
----
-
-## Output folder structure
-
-**Single-structure runs** produce a folder under `Protein_outputs/`:
+Info icons explain each value, sections fold, a switch turns on dark mode,
+and the footer records the Astra3 version and the engine and its version.
+Validation, sequence and domain data come from RCSB PDB; when they cannot
+be retrieved (offline, say), the report says so.
 
 ```
 Protein_outputs/
-    <ID>_Output/
+    1AKE_Output/
         Astra3_Report.html
+        Images/            view_front.png, view_back.png, view_left.png,
+                           view_right.png, view_top.png, view_bottom.png
         Session/
-            <ID>.pse                    (or <ID>.pdb if .pse saving fails)
-            <ID>.pdb                    (plain-coordinate export, for the viewer)
-            Protein_Information.txt
-            Astra3_Report.json
-            Astra3_Export.csv           (only with -csv)
-            Ligand_Environment.csv      (only with -csv; header-only if no ligands present)
-        Images/
-            view_front.png
-            view_back.png
-            view_left.png
-            view_right.png
-            view_top.png
-            view_bottom.png
+            1AKE.pse                       (1AKE.cxs with ChimeraX)
+            1AKE.cxc, 1AKE_files/          (Astra3 Engine: the scene for ChimeraX)
+            1AKE.pdb                       (for the 3D Viewer)
+            1AKE_Information.txt           (text report)
+            Astra3_Report.json, Methods.txt
+            Astra3_Annotation_Sources.json (the RCSB data the report used)
+            Astra3_Export.csv, Ligand_Environment.csv  (with CSV export)
 ```
 
-**OVERLAY runs** produce `Protein_outputs/Overlay_<ids>_Output/`, with the
-same `Astra3_Report.html`/`Session/`/`Images/` structure, plus
-`Overlay_Summary.csv` and `Pairwise_RMSD_Matrix.csv` in `Session/` when
-`-csv` is used.
-
-**TERMINI runs** produce `Protein_outputs/Termini_<ids>_Output/`, with
-`Termini_Analysis.json` always in `Session/`, `Termini_Analysis.csv` there
-too with `-csv`. For a single comparison (one reference plus one
-comparison structure), images are written directly into `Images/`. Once
-three or more structures are involved (multiple comparisons against one
-reference), each comparison gets its own subfolder under
-`Images/<comparison>/`, since otherwise their `view_front.png` and
-similarly named files would overwrite one another. Close-up renders
-(`closeup_Nterm_A_angle1.png`, and so on) are written alongside the wide
-shots either way.
-
-The HTML report is fully self-contained (embedded CSS, no external
-dependencies, no internet required to view it) and uses only relative
-paths to images and the session file, so the whole output folder can be
-zipped, moved, or shared as a unit without breaking anything.
+OVERLAY writes `Overlay_<IDs>_Output/` (with `Overlay_Session.pse`,
+`Overlay_Report.txt`, and `Overlay_Summary.csv` and
+`Pairwise_RMSD_Matrix.csv` with CSV export), and TERMINI writes
+`Termini_<IDs>_Output/` (with `Termini_Analysis.json`, the close-ups, and
+`Termini_Analysis.csv` with CSV export). Running the same
+IDs or files again replaces the earlier results. JSON holds the same
+values as the report, with `null` for anything unavailable. An output
+folder can be moved or shared whole: the HTML report links its images and
+session by relative path.
 
 ---
 
-## What's in the report
+## Reproducibility and provenance
 
-`Protein_Information.txt`, `Astra3_Report.html`, and `Astra3_Report.json`
-cover the same underlying data, organized as:
+| What | Where it is recorded |
+|---|---|
+| Input | PDB ID, format and download date (Methods), or the imported file's name; for both, the coordinate file's name, size and SHA-256 (Input Files, the text report, JSON `coordinate_file`) |
+| Astra3, engine and versions | Report footer, Methods, JSON `astra3_version`, `engine`, `engine_version` |
+| Method and thresholds | Methods (also `Methods.txt`), JSON `alignment_method` |
+| Parameters | JSON `command` and `run_parameters` |
+| Chains used | JSON `chains`, `reduction_used`, `reference_structure`, `reference_selection_reason` |
+| RCSB data | `Astra3_Annotation_Sources.json`: every RCSB response used, the requests made, and when |
+| Session and images | The engine's session and the processed structure; Astra3 Engine images carry their camera and structures in the PNG |
 
-- **Structure quality**, experimental method, resolution, chain list,
-  ligands, ions, mean C-alpha B-factor and B-factor range, alternate
-  conformations, water-removal status
-- **Chain analysis**, N-terminus/C-terminus residue ranges per chain and
-  missing-residue ranges (parsed from PDB `REMARK 465`, or the equivalent
-  mmCIF field, when present). The residue count shown alongside a range
-  list counts residues: `587-671 (85 residues in 1
-  range)`.
-- **Sequence and secondary structure summaries**
-- **Ligand and ion listings**, including automatically detected
-  binding-site residues and possible polar contacts near each ligand
-- **HETATM audit**, a check for HETATM records that were not cleanly
-  classified as a recognized ligand, ion, or water
-- **Disulfide bonds**, detected geometrically (Cys S-gamma to S-gamma
-  pairs within 2.5 angstroms)
-- **Water summary**
-- **Warnings / structural notes**, missing residues, chain-reduction
-  events, and other conditions worth a researcher's attention, kept in a
-  dedicated section separate from the main summary
+**What repeats.** The same command, engine, engine version and input
+write the same reports; only dates, timings and the temporary `AST-`
+numbers of imported files differ.
 
-Some report sections say plainly when their data is unavailable, rather
-than being silently omitted or filled with a guess:
+**What can differ:**
 
-- **Domains and mutations** come from the RCSB PDB Data API (Pfam, CATH,
-  ECOD and SCOP assignments; the UniProt reference sequence) and from the
-  depositor's own difference records in the file. When that data cannot
-  be retrieved, for example offline or for an imported file with no
-  matching entry, the report says so.
-- **Crystal contacts.** Not computed in the current version; this would
-  require generating symmetry mates from the file's space group.
+- **Between engines**: measurements agree to within rounding, not digit
+  for digit, since each engine holds coordinates at its own precision (in
+  testing, RMSDs differed by less than 0.000001 Å and one surface area by
+  0.1 Å² after rounding). Secondary structure, images and sessions are
+  the engine's own.
+- **Over time**: wwPDB revises entries now and then, and RCSB updates its
+  validation and annotation data. With the download date, the RCSB
+  responses and the file's SHA-256 on record, a later download can be
+  checked against the report. The downloaded file is not kept; to keep a
+  run exactly, keep its output folder.
+- **Imported files**: the SHA-256 is of the file as given (a `.gz` is not
+  unpacked first), so `shasum -a 256 <file>` gives the same value. For a
+  PDB ID it is of the uncompressed file from RCSB.
 
-This is intentional: Astra3 would rather tell you a section is not
-available than fabricate a plausible-looking answer.
+---
 
-The HTML report is built to be read quickly:
+## Advanced Console commands
 
-- **Info icons** beside values open a short explanation of what the value
-  means, how it is calculated, and how to read it.
-- **Colour keys** above image groups name which colour is which structure,
-  and, for TERMINI close-ups, which arrow colours belong to each terminus.
-- **Foldable sections**, tables, per-structure details and ligand
-  environments keep long reports manageable.
-- **Dark mode** is a switch under the report header; the choice is
-  remembered, and printing always uses the light theme.
+The Advanced Console is Astra3's command line (prompt:
+`Enter a PDB ID:`).
 
-The footer includes the Astra3 version, the PyMOL version and license
-(where determinable), and a citation block. See "License" below for the
-exact citation text.
+| Command | What it does |
+|---|---|
+| `1AKE` | Analyse one structure |
+| `OVERLAY 3FXI 1RO6 1ROR` | Superpose structures on a reference |
+| `TERMINI 1XGD 6F7R 4JIR` | Compare termini against a reference |
+| `BATCH 1AKE 4AKE 2AK3`, `BATCH list.txt` | Analyse several structures in turn; a file lists one ID per line (`#` starts a comment) |
+| `IMPORT` | Load a local file (asks for its path) |
+| `-t` | Test run: analyse 1AKE into a `TEST/` folder |
+| `DONE` | End the session |
 
-### JSON export
+Options go after the IDs:
 
-`Astra3_Report.json` (single-structure/OVERLAY) and `Termini_Analysis.json`
-(TERMINI) contain the same validated data as the HTML/TXT report,
-structured for programmatic use. Values that are unavailable in the
-source data (for example a resolution not found in the PDB header) are
-written as JSON `null`, so downstream
-tooling can distinguish "unknown" from a real value without
-string-matching Astra3's specific wording.
-
-### CSV export (`-csv`, opt-in)
-
-CSV is never generated by default. When requested, the schema depends on
-the command:
-
-- **Single-structure/BATCH**, `Astra3_Export.csv`, one row per structure
-- **OVERLAY**, `Overlay_Summary.csv` (one row per structure) and
-  `Pairwise_RMSD_Matrix.csv` (one row per structure pair), kept separate
-  since they do not share a row structure
-- **TERMINI**, `Termini_Analysis.csv`, one row per structure/chain
-- **Ligand environment** (single-structure and OVERLAY),
-  `Ligand_Environment.csv`, one row per (ligand, nearby residue) pair,
-  written automatically alongside the other CSV output whenever `-csv` is
-  used (the file is always created; it simply has no data rows if the
-  structure has no ligands)
+| Option | Effect |
+|---|---|
+| `-low`, `-medium`, `-excellent` | Image quality (medium unless set) |
+| `-skipimage` | No images |
+| `-skipreport` | No reports |
+| `-ro` | Save the session only |
+| `-csv` | Also write CSV files |
+| `-mmCIF` | Fetch as mmCIF (legacy PDB otherwise); in OVERLAY and TERMINI it applies to the ID before it |
+| `-reference<ID>` | Choose the reference (OVERLAY, TERMINI) |
+| `-skipcloseup` | No close-up images (TERMINI) |
+| `-alwaysmatch`, `-nevermatch` | Accept terminus offsets at 70% identity or higher, or decline all (TERMINI) |
+| `-alwaysreduce`, `-keephomomers` | Always keep one chain of a redundant set, or keep all |
+| `-keepassembly` | Keep the chains of the depositor's preferred biological assembly (one of a monomer, both of a dimer) |
+| `-assemblyfallback:ask`, `:reduce`, `:keep` | What `-keepassembly` does when the file has no usable assembly records, or its assembly is built from symmetry copies not in the file (ask unless set) |
+| `-chromophoreprotein`, `-chromophoreligand` | Count residues built into a chain without a standard backbone (chromophores such as CRO) as protein, or keep them as ligands, without asking |
+| `-reducepriority:missing,leastligands,chainA` | Order used to choose that chain (`mostligands` reverses the ligand rule), also for `-assemblyfallback:reduce` |
 
 ---
 
 ## Limitations
 
-Please read this section before relying on Astra3 output for anything
-publication- or decision-critical.
-
-- **Not a modeling or prediction tool.** Astra3 reports what is present
-  in the structure/header data, or what can be measured geometrically
-  from PyMOL coordinates. It does not predict structure, function,
-  stability, binding affinity, or biological effect of any kind.
-- **Crystal contacts are not analyzed.** Crystal packing can cause a
-  terminal difference between two crystal structures, and Astra3 does not
-  yet flag when it might.
-- **A terminus is the last resolved residue.** Tails that were not
-  modelled cannot be measured, so two structures' termini can sit at
-  different points in the sequence; the offset check exists for this
-  reason.
-- **Ligand-environment analysis reports geometric proximity, not
-  confirmed interactions.** A "possible polar contact" is an N/O pair
-  within 3.5 angstroms; it does not confirm hydrogen-bond donor/acceptor
-  geometry or that a bond actually forms. Salt bridges, pi-stacking, and
-  other interaction typing are not computed.
-- **The Terminal Projection Vector (TERMINI) comes from the last four
-  resolved residues.** It shows the direction the chain points where a
-  terminal tag would join. Astra3 does not model the tag itself, so how a
-  tag folds or behaves once attached has to be tested experimentally.
-- **Missing-residue detection depends on `REMARK 465`**, or the
-  equivalent mmCIF field, being present in the source file. Structures
-  without this information will show missing-residue data as
-  unavailable.
-- **Disulfide detection is purely geometric** (S-gamma to S-gamma
-  distance of 2.5 angstroms or less) and does not distinguish
-  biologically relevant disulfides from close contacts that happen to
-  fall within that cutoff in a given conformation.
-- **Automatic reference selection is a heuristic** (fewest bound
-  ligands, in OVERLAY and TERMINI) and does not assess structural quality. For anything where
-  reference choice matters scientifically, use `-reference<ID>`
-  explicitly and note the choice in your own methods.
-- **Alignment is sequence-guided structural superposition via PyMOL's
-  `cmd.align`**. It does not perform topology-independent structural
-  alignment of the TM-align or DALI kind. It
-  performs well for homologous structures but is not designed for
-  remote-homology or fold-recognition alignment. TERMINI relies on this
-  same alignment before computing any terminus comparison.
-- **TERMINI compares chains that correspond.** Chains are paired by ID,
-  or by sequence (at least 90% identity over at least 70% coverage) when
-  the letters differ, and the report says when a pairing was made by
-  sequence. A chain with no counterpart, or a terminus with too few
-  resolved residues for the ten-residue window, is reported as
-  unavailable.
-- **Requires PyMOL to run.** Astra3 performs its analysis through PyMOL and
-  cannot run without it installed.
-- **Fetching structures by PDB ID requires internet access.** Offline use
-  is only possible via `IMPORT` with a local `.pdb`, `.cif`, or `.pse` file.
-- **Imported (`AST-XXXX`) structures are session-only.** There is
-  currently no persistent registry across separate Astra3 launches.
-- **Rendering is deterministic in orientation and coloring logic, but not
-  pixel-identical across PyMOL versions or hardware.** Ray-tracing output
-  can vary slightly across PyMOL versions, GPUs, or OS-level font/
-  anti-aliasing differences, even though the same selection/coloring/
-  camera logic is applied every time.
+- **Not a prediction tool.** Astra3 reports what is in the file and what
+  can be measured from it; it does not predict structure, function,
+  stability, binding or biological effect.
+- **Contacts are distances**: a possible polar contact is an N/O pair
+  within 3.5 Å, without hydrogen-bond geometry. Salt bridges and stacking
+  are not typed.
+- **Crystal contacts are not analysed**, so a terminal difference caused
+  by packing is not flagged.
+- **A terminus is the last resolved residue**; unmodelled tails cannot be
+  measured. **The TPV describes the chain, not a tag**: how a fused tag
+  behaves has to be tested experimentally.
+- **Missing residues** come from the file's own records.
+- **Disulfides are geometric** (Sγ–Sγ within 2.5 Å).
+- **Superposition is sequence-guided**, not a structural alignment such as
+  TM-align; for distant homologs the RMSD may not reflect a shared fold.
+- **Imported IDs last one session.**
+- **Images** keep orientation and colours but are not pixel-identical
+  across engines, versions or graphics hardware.
+- **Astra3 Engine.** It writes a ChimeraX command file
+  (`.cxc`), not a `.cxs`, and cannot import `.cxs` sessions, whose internal
+  layout can change with any ChimeraX release; open the `.cxc` in
+  ChimeraX and save a `.cxs` there. PyMOL sessions saved with
+  `pse_binary_dump` on, or by PyMOL before 1.8, cannot be imported without
+  PyMOL. For files without helix and sheet records, secondary structure
+  comes from DSSP and can differ slightly from PyMOL's. TERMINI close-ups
+  may show a terminus from the side opposite to PyMOL's.
+- **ChimeraX** shows its Dock icon for a moment the first time it draws
+  images in a session, because it needs a window to render.
 
 ---
 
-## License
+## Privacy
+
+Astra3 has no accounts, analytics or telemetry. It contacts only the RCSB
+Protein Data Bank, for the public structures and data you ask for.
+Results, imported files and settings stay on your Mac. See
+`PRIVACY.md` or the [privacy page](https://andre-aguirre.github.io/Astra3/privacy/).
+
+---
+
+## License and citation
 
 Copyright (C) 2026 Andre Aguirre
 
@@ -1066,30 +496,34 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See `LICENSE` for
 the full terms.
 
-Versions up to and including 1.9.0 were published under the MIT
-License; copies obtained under those terms keep them. Version 1.9.1
-and later are licensed under the GNU GPL, version 3 or later.
+Versions up to and including 1.9.0 were published under the MIT License;
+copies obtained under those terms keep them. Version 1.9.1 and later are
+licensed under the GNU GPL, version 3 or later.
 
-The desktop app bundles or depends on third-party components under their
-own licenses, including **3Dmol.js** (BSD 3-Clause License, Copyright
-2014 University of Pittsburgh and contributors) for structure
-visualization, and **PyMOL**, which is required separately and is not
-distributed with Astra3. The full text of every bundled third-party
-license, and the additional notices 3Dmol.js's own license carries for
-GLmol, Three.js, and jQuery, is reproduced in `gui/THIRD_PARTY_NOTICES.txt`.
+The app includes **3Dmol.js** (BSD 3-Clause License, Copyright 2014
+University of Pittsburgh and contributors) for the 3D Viewer. **PyMOL**
+and **UCSF ChimeraX** are separate programs, not distributed with Astra3;
+the Astra3 Engine needs neither. Every bundled third-party license,
+including the notices 3Dmol.js carries for GLmol, Three.js and jQuery, is
+in `gui/THIRD_PARTY_NOTICES.txt`.
 
 If Astra3 contributes to published research, please cite:
 
 > Aguirre, A. (2026). Astra3: Structural Analysis Toolkit for PDB
-> Rendering Automation [Computer software]. Version 1.9.2.
+> Rendering Automation [Computer software]. Version 2.0.1.
 > https://github.com/andre-aguirre/Astra3
-> https://doi.org/10.5281/zenodo.22928160
+> https://doi.org/10.5281/zenodo.22928159
 
-A machine-readable citation is also available in `CITATION.cff`.
+`CITATION.cff` has the same in machine-readable form. Please also cite the
+engine you used:
 
-The 3Dmol.js citation for the structure viewer (see "The 3D viewer" above)
-is also reproduced in `gui/THIRD_PARTY_NOTICES.txt` alongside its license
-text.
+> PyMOL: The PyMOL Molecular Graphics System, Schrödinger, LLC.
+>
+> ChimeraX: Meng EC et al. (2023) UCSF ChimeraX: Tools for structure
+> building and analysis. Protein Sci 32:e4792.
+>
+> 3D viewer: Rego N, Koes D (2015) 3Dmol.js: molecular visualization with
+> WebGL. Bioinformatics 31:1322-1324.
 
-Created by Andre Aguirre.
+Created by Andre Aguirre ·
 [LinkedIn](https://www.linkedin.com/in/andre-alain-aguirre/)

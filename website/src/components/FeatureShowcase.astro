@@ -5,7 +5,7 @@ import { u } from '../lib/url';
 <section class="block" aria-labelledby="h-show" style="padding-top:0">
     <div class="wrap">
       <div class="show-head">
-        <div class="reveal"><p class="eyebrow">In practice</p><h2 id="h-show">From a PDB ID to a finished report.</h2></div>
+        <div><h2 id="h-show">From a PDB ID to a finished report.</h2></div>
         <div class="show-steps" role="group" aria-label="Jump to feature" id="showSteps">
           <button type="button" data-i="0" aria-pressed="true">SINGLE</button><span class="arrow">→</span>
           <button type="button" data-i="1" aria-pressed="false">OVERLAY</button><span class="arrow">→</span>
@@ -31,7 +31,7 @@ import { u } from '../lib/url';
           <div class="body">
             <span class="num">02 / 05 · OVERLAY</span>
             <h3>Align structures on a shared reference.</h3>
-            <p>Sequence-guided structural superposition through PyMOL's <span class="mono">cmd.align</span>. The reference is chosen automatically (fewest bound ligands) or set by you, and the choice is recorded in the report.</p>
+            <p>Least-squares superposition of residues paired by sequence alignment. The reference is chosen automatically (fewest bound ligands) or set by you, and the choice is recorded in the report.</p>
             <ul class="specs"><li>RMSD per structure, aligned atoms and residues</li><li>C-alpha pairwise RMSD matrix across every structure</li><li>Six views of all structures together and of each comparison</li></ul>
             <code>OVERLAY 1XGD 6F7R</code>
             <a class="more" href={u('/docs#overlay')}>OVERLAY documentation →</a>

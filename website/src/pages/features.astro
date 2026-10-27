@@ -2,14 +2,14 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { u } from '../lib/url';
 ---
-<BaseLayout title="Features · Astra3" description="OVERLAY, TERMINI, BATCH, Related Structures, PDB/mmCIF, structured reports and PyMOL integration: what Astra3 measures, renders and reports." current="features">
+<BaseLayout title="Features · Astra3" description="OVERLAY, TERMINI, BATCH, Related Structures, PDB/mmCIF, structured reports and the analysis engines: what Astra3 measures, renders and reports." current="features">
 <header class="page-head"><div class="wrap"><p class="eyebrow">Features</p><h1>What Astra3 measures, renders and reports.</h1><p class="lede">Every capability below is described from the application itself. Illustrations are schematic; screenshots are from Astra3 for macOS.</p></div></header>
   <div class="wrap">
     <section class="feat" id="overlay">
       <div class="txt">
         <p class="eyebrow">OVERLAY</p>
         <h2>Align structures onto a shared reference.</h2>
-        <p>OVERLAY aligns two or more structures onto one reference using PyMOL's <span class="mono">cmd.align</span>, a sequence-guided iterative structural superposition. By default Astra3 picks the structure with the fewest bound ligands as the reference and records why; <span class="mono">-reference&lt;ID&gt;</span> overrides it.</p>
+        <p>OVERLAY aligns two or more structures onto one reference by least-squares fitting of residues paired by sequence alignment, refined in up to five cycles as PyMOL's <span class="mono">align</span> does. By default Astra3 picks the structure with the fewest bound ligands as the reference and records why; <span class="mono">-reference&lt;ID&gt;</span> overrides it.</p>
         <ul class="specs"><li>RMSD per aligned structure, with aligned atom and residue counts</li><li>A C-alpha pairwise RMSD matrix across every loaded structure</li><li>Six views of all structures together, six of each comparison, each with a colour key</li><li>Per-structure <span class="mono">-mmCIF</span>, e.g. <span class="mono">OVERLAY 6DK3 9BOX -mmCIF</span></li></ul>
         <a class="more" href={u('/docs#overlay')} style="color:var(--accent-bright);font-weight:600;text-decoration:none">OVERLAY documentation →</a>
       </div>
@@ -18,7 +18,7 @@ import { u } from '../lib/url';
           <path d="M40 210 C 90 120, 140 260, 190 170 S 290 90, 330 170 S 420 250, 480 130" fill="none" stroke="#9aa3ae" stroke-width="5" stroke-linecap="round"/>
           <g class="cmp"><path d="M40 210 C 90 120, 140 260, 190 170 S 290 90, 330 170 S 420 250, 480 130" fill="none" stroke="#7cc4f0" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 0" opacity=".95"/></g>
           <text class="lab" x="22" y="30">REFERENCE · GREY</text><text class="lab" x="22" y="48" style="fill:#7cc4f0">COMPARISON · SKY BLUE</text>
-          <text class="lab" x="370" y="300">cmd.align</text>
+          <text class="lab" x="370" y="300">Kabsch fit</text>
         </svg>
         <p class="viz-cap">SCHEMATIC · COLOURS MATCH ASTRA3'S OVERLAY RENDERS</p>
       </div>
@@ -105,7 +105,7 @@ import { u } from '../lib/url';
           <thead><tr><th>Source</th><th>Formats</th><th>Notes</th></tr></thead>
           <tbody>
             <tr><td>Fetch by PDB ID</td><td><code>PDB</code> <code>mmCIF</code></td><td>Automatic fallback to mmCIF</td></tr>
-            <tr><td>IMPORT</td><td><code>.pdb</code> <code>.cif</code> <code>.mmcif</code> <code>.pse</code></td><td>Assigned an AST-XXXX ID for the session</td></tr>
+            <tr><td>IMPORT</td><td><code>.pdb</code> <code>.ent</code> <code>.cif</code> <code>.mmcif</code> <code>.pse</code>, coordinate files also <code>.gz</code></td><td>Assigned an AST-XXXX ID for the session</td></tr>
             <tr><td>Session output</td><td><code>.pse</code> <code>.pdb</code></td><td>A <span class="mono">.pdb</span> is always written for the viewer</td></tr>
           </tbody>
         </table></div>
@@ -149,10 +149,10 @@ import { u } from '../lib/url';
 
     <section class="feat" id="pymol">
       <div class="txt">
-        <p class="eyebrow">PyMOL integration</p>
-        <h2>Built on PyMOL.</h2>
-        <p>Astra3 performs its analysis through your own separately installed PyMOL, open-source or Incentive. It finds PyMOL automatically, verifies it before any analysis, and runs it in the background; its window stays hidden unless you open a finished session in it.</p>
-        <p>Everything Astra3 does ends in a normal PyMOL session file. Open it from any report or the Reports page and keep working in PyMOL itself.</p>
+        <p class="eyebrow">Analysis engines</p>
+        <h2>PyMOL, ChimeraX or the Astra3 Engine.</h2>
+        <p>Astra3 performs its analysis through your own separately installed PyMOL (open-source or Incentive) or UCSF ChimeraX, or, with neither, in the Astra3 Engine that is part of Astra3 (test build). It finds them automatically, checks them before any analysis, and runs them in the background. The measurements are the same under each.</p>
+        <p>Every run ends in a normal session file: <span class="mono">.pse</span> for PyMOL, <span class="mono">.cxs</span> for ChimeraX, and a <span class="mono">.pse</span> and a ChimeraX <span class="mono">.cxc</span> for the Astra3 Engine. Open it from any report or the Reports page.</p>
       </div>
       <div class="viz gridbg">
         <svg viewBox="0 0 520 220" role="img" aria-label="Diagram: Astra3 interface sends commands to your PyMOL installation, which produces sessions, images and reports.">

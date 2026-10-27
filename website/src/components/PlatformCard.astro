@@ -15,7 +15,7 @@ const statusText = ok ? 'Available now' : 'Coming soon · Certification in progr
       <div class="plat-top"><h3><Fragment set:html={ICON.apple} />macOS</h3><span class="status ok"><i></i>{statusText}</span></div>
       <p class="muted">Version {CONFIG.version}, from GitHub Releases.</p>
       <dl>
-        <dt>REQUIRES</dt><dd>{mac.requirements} · PyMOL installed separately</dd>
+        <dt>REQUIRES</dt><dd>{mac.requirements} · PyMOL or ChimeraX installed separately, or the built-in Astra3 Engine (test build)</dd>
         <dt>CHIP</dt><dd>{mac.arch}</dd>
         <dt>FORMAT</dt><dd class="mono">{mac.formats}</dd>
         <dt>SIGNING</dt><dd>{mac.signing}</dd>
@@ -28,7 +28,7 @@ const statusText = ok ? 'Available now' : 'Coming soon · Certification in progr
       <p class="muted">{ok ? 'From the Microsoft Store.' : 'Windows version coming soon. Microsoft Store certification in progress.'}</p>
       {ok ? (
         <dl>
-          <dt>REQUIRES</dt><dd>{win.requirements} · PyMOL installed separately</dd>
+          <dt>REQUIRES</dt><dd>{win.requirements} · PyMOL or ChimeraX installed separately, or the built-in Astra3 Engine (test build)</dd>
           <dt>CHIP</dt><dd class="mono">{win.arch}</dd>
           <dt>CHANNEL</dt><dd>{win.channel}</dd>
           <dt>UPDATES</dt><dd>{win.updates}</dd>

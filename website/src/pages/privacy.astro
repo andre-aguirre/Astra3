@@ -5,7 +5,7 @@ import { CONFIG } from '../config';
 // the app itself shows and the Microsoft Store listing links to.
 ---
 <BaseLayout title="Privacy · Astra3" description="What information Astra3 handles, what it sends to the RCSB Protein Data Bank, and what stays on your computer." current="privacy">
-<header class="page-head"><div class="wrap"><p class="eyebrow">Privacy</p><h1>Privacy policy</h1><p class="lede">Effective September 23, 2026, updated for Astra3 1.9.1. Applies to Astra3 for macOS and Windows (including the Microsoft Store version), and to this website.</p></div></header>
+<header class="page-head"><div class="wrap"><p class="eyebrow">Privacy</p><h1>Privacy policy</h1><p class="lede">Effective October 2, 2026, updated for Astra3 2.0.1. Applies to Astra3 for macOS and Windows (including the Microsoft Store version), and to this website.</p></div></header>
   <div class="wrap prose">
     <h2>The short version</h2>
     <ul>
@@ -19,8 +19,9 @@ import { CONFIG } from '../config';
     <p>Astra3 contacts one organization, the <strong>RCSB Protein Data Bank</strong> (rcsb.org), a public scientific archive. Requests contain only what each service needs:</p>
     <div class="tw"><table class="t"><thead><tr><th>Service</th><th>When Astra3 uses it</th><th>What the request contains</th></tr></thead><tbody>
       <tr><td>Structure downloads (files.rcsb.org)</td><td>When you analyze a structure by its PDB ID</td><td>The PDB ID</td></tr>
+      <tr><td>Validation reports (files.rcsb.org)</td><td>When the Data API lacks one of an entry's validation statistics</td><td>The PDB ID</td></tr>
       <tr><td>Connection check (files.rcsb.org)</td><td>Periodically while Astra3 is open, to tell you when you are offline</td><td>Nothing about you or your work</td></tr>
-      <tr><td>Data API (data.rcsb.org)</td><td>When a report is created for a structure downloaded by PDB ID, or for an imported file you have confirmed is a specific PDB entry, to add validation, reference-sequence and domain information</td><td>The PDB ID and the chain identifiers being analyzed</td></tr>
+      <tr><td>Data API (data.rcsb.org)</td><td>When a report is created for a structure downloaded by PDB ID, or for an imported file you have confirmed is a specific PDB entry, to add validation, reference-sequence and domain information; when the Related Structures tab looks up the entries it found; and, after a download fails, to find out whether the entry exists</td><td>The PDB ID and the chain identifiers being analyzed, or the PDB IDs of the entries found</td></tr>
       <tr><td>Search API (search.rcsb.org)</td><td>When you use the Related Structures tab</td><td>The UniProt accession of the protein you searched for or, for a protein with no UniProt entry, that public PDB entry's protein sequence</td></tr>
       <tr><td>Structure images (cdn.rcsb.org)</td><td>When the Related Structures tab shows results</td><td>The PDB IDs of the listed entries, to load RCSB's published picture of each</td></tr>
     </tbody></table></div>
@@ -29,15 +30,16 @@ import { CONFIG } from '../config';
     <p>Reports link to UniProt for reference sequences and to the wwPDB validation report on rcsb.org. Nothing is sent to either unless you click a link, which opens it in your web browser.</p>
 
     <h2>Information stored on your computer</h2>
-    <p>Analysis results, a copy of the public Protein Data Bank data each report used, settings, run history, your PyMOL location and output folder, and a PyMOL diagnostic log are kept only on your computer, in your output folder and Astra3's own folders. None of it is sent to the developer or anyone else. Reports can contain file and folder names from your computer and only leave it if you share them.</p>
+    <p>Analysis results, a copy of the public Protein Data Bank data each report used, settings, run history, your PyMOL and ChimeraX locations, engine choice, output folder and colour palette, and a PyMOL diagnostic log are kept only on your computer, in your output folder and Astra3's own folders. None of it is sent to the developer or anyone else. Reports can contain file and folder names from your computer and only leave it if you share them.</p>
     <div class="tw"><table class="t"><thead><tr><th>What</th><th>Windows</th><th>macOS</th></tr></thead><tbody>
       <tr><td>Analysis results (default output folder)</td><td><code>Astra3\Protein_outputs</code> in your user folder</td><td><code>~/Documents/Astra3/Protein_outputs</code></td></tr>
-      <tr><td>PyMOL location, output folder choice, diagnostic log</td><td><code>Astra3\config</code> in your user folder</td><td><code>~/Library/Application Support/Astra3/tools</code></td></tr>
+      <tr><td>PyMOL and ChimeraX locations, engine, drawing-window setting, output folder, colour palette, diagnostic log</td><td><code>Astra3\config</code> in your user folder</td><td><code>~/Library/Application Support/Astra3/tools</code></td></tr>
       <tr><td>Settings and run history</td><td>Astra3's app data folder</td><td><code>~/Library/Application Support/Astra3</code></td></tr>
+      <tr><td>Images being drawn and the drawing window's scenes</td><td colspan="2">A temporary folder, deleted when the engine closes or the app stops it</td></tr>
     </tbody></table></div>
 
-    <h2>PyMOL</h2>
-    <p>Astra3 runs its analysis inside your separately installed PyMOL, governed by its provider's terms (the open-source PyMOL project or Schrödinger, Inc.). Astra3 reads PyMOL's version and license type only to record them in your reports.</p>
+    <h2>PyMOL, ChimeraX and the Astra3 Engine</h2>
+    <p>Astra3 runs its analysis inside your own separately installed PyMOL or UCSF ChimeraX, or in the Astra3 Engine, which is part of Astra3 and contacts only the RCSB services listed above. PyMOL and ChimeraX are governed by their providers' terms (the open-source PyMOL project or Schrödinger, Inc. for PyMOL; the University of California, San Francisco for ChimeraX). Astra3 reads PyMOL's version and license type, and ChimeraX's version, only to record them in your reports.</p>
 
     <h2>How you obtained Astra3</h2>
     <p>Astra3 itself collects nothing, but the service you downloaded it from may. The Microsoft Store handles purchases, downloads and updates under the Microsoft Privacy Statement and may give developers aggregated, non-identifying statistics such as download counts. GitHub hosts release files under the GitHub Privacy Statement. On macOS, Apple may verify the app's notarization when you first open it.</p>
