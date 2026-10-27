@@ -1,6 +1,6 @@
 # Astra3 Privacy Policy
 
-**Effective date:** September 23, 2026 (updated for Astra3 1.9.1)
+**Effective date:** October 2, 2026 (updated for Astra3 2.0.1)
 **Applies to:** Astra3 for Windows (including the Microsoft Store version) and Astra3 for macOS
 
 Astra3 is a desktop application for protein structure analysis, created by Andre Aguirre. This policy explains what information Astra3 handles, where it goes, and what stays on your computer.
@@ -20,7 +20,8 @@ Astra3 contacts one organization: the **RCSB Protein Data Bank** (rcsb.org), a p
 |---|---|---|
 | Structure downloads (files.rcsb.org) | When you analyze a structure by its PDB ID | The PDB ID |
 | Connection check (files.rcsb.org) | Periodically while Astra3 is open, to tell you when you are offline | Nothing about you or your work |
-| Data API (data.rcsb.org) | When a report is created for a structure downloaded by PDB ID, or for an imported file you have confirmed is a specific PDB entry, to add validation, reference-sequence and domain information | The PDB ID and the chain identifiers being analyzed |
+| wwPDB validation report (files.rcsb.org) | When the Data API leaves out one of an entry's validation statistics (clashscore, Ramachandran, rotamer or RSRZ outliers), to read it from the validation report itself | The PDB ID |
+| Data API (data.rcsb.org) | When a report is created for a structure downloaded by PDB ID, or for an imported file you have confirmed is a specific PDB entry, to add validation, reference-sequence and domain information; when the Related Structures tab looks up the entries it found; and, after a download fails, to find out whether the entry exists | The PDB ID and the chain identifiers being analyzed, or the PDB IDs of the entries found |
 | Search API (search.rcsb.org) | When you use the Related Structures tab | The UniProt accession of the protein you searched for or, for a protein with no UniProt entry, that public PDB entry's protein sequence |
 | Structure images (cdn.rcsb.org) | When the Related Structures tab shows results | The PDB IDs of the listed entries, to load RCSB's published picture of each |
 
@@ -28,7 +29,7 @@ Every request also carries the standard technical information any internet reque
 
 Astra3 never uploads your imported files, your results, your reports, or your settings anywhere. Structures you import from your own files are not looked up online, with one exception you control: when an imported file names a PDB entry (for example, 3FXI), Astra3 asks whether the file is that entry. Only if you answer yes does it request that entry's public data, sending only the PDB ID, exactly as for a structure downloaded by its ID. Imported structures work fully offline; without a connection, only that entry's public data is unavailable.
 
-Reports contain links to UniProt (uniprot.org) for reference sequences and to the wwPDB validation report on rcsb.org. Nothing is sent to either unless you click one of those links, which opens it in your web browser.
+Reports contain links to UniProt (uniprot.org) for reference sequences, to the wwPDB validation report on rcsb.org, and to the papers they cite (doi.org). Nothing is sent to any of them unless you click a link, which opens it in your web browser.
 
 ## Information stored on your computer
 
@@ -36,19 +37,20 @@ Astra3 keeps the following **only on your own computer**. None of it is sent to 
 
 | What | Why | Where |
 |---|---|---|
-| Analysis results (images, PyMOL sessions, reports, Methods text, exports) | These are what you asked Astra3 to produce | The output folder shown in Settings (by default, `Astra3\Protein_outputs` in your user folder on Windows, `~/Documents/Astra3/Protein_outputs` on macOS) |
+| Analysis results (images, PyMOL or ChimeraX sessions, reports, Methods text, exports) | These are what you asked Astra3 to produce | The output folder shown in Settings (by default, `Astra3\Protein_outputs` in your user folder on Windows, `~/Documents/Astra3/Protein_outputs` on macOS) |
 | A copy of the public Protein Data Bank data each report used | So every report can be traced to exactly the data it was built from | The same run's `Session` folder |
 | Settings (theme, image quality, fonts, and similar preferences) | So Astra3 remembers your choices | Astra3's app data folder |
 | Run history | So you can reopen past results from within Astra3 | Astra3's app data folder |
-| Your PyMOL location and chosen output folder | So Astra3 can find PyMOL and save results where you want | Windows: `Astra3\config` in your user folder. macOS: `~/Library/Application Support/Astra3/tools` |
-| A PyMOL diagnostic log | To help diagnose problems starting PyMOL; it is never sent anywhere | Same folder as your PyMOL location |
+| Your PyMOL and ChimeraX locations, chosen engine, whether the drawing window shows, output folder and color palette | So Astra3 can find PyMOL or ChimeraX, save results where you want and color structures your way | Windows: `Astra3\config` in your user folder. macOS: `~/Library/Application Support/Astra3/tools` |
+| A PyMOL diagnostic log | To help diagnose problems starting PyMOL; it is never sent anywhere | The same folder as the row above |
+| Images being drawn, and the scenes shown in the drawing window | Passed between the engine and the app's window while it works | A temporary folder, deleted when the engine closes or the app stops it. A folder left by a run outside the app (for example a crashed engine) stays in your system's temporary folder until you or the system delete it |
 | Files you import | Analyzed locally; only copied into your output folder as part of your results | Wherever you keep them, plus your output folder |
 
 Reports you create can contain file and folder names from your computer. They only leave your computer if you choose to share them.
 
-## PyMOL
+## PyMOL, ChimeraX and the Astra3 Engine
 
-Astra3 runs its analysis inside your own separately installed copy of PyMOL. PyMOL is third-party software, and your use of it is governed by the terms and privacy practices of its provider (the open-source PyMOL project or Schrödinger, Inc.). Astra3 reads PyMOL's version and license type only to record them in the reports it generates on your computer.
+Astra3 runs its analysis inside your own separately installed copy of PyMOL or UCSF ChimeraX, or in the Astra3 Engine, which is part of Astra3 and contacts only the RCSB services listed above. PyMOL and ChimeraX are third-party software, and your use of them is governed by the terms and privacy practices of their providers (the open-source PyMOL project or Schrödinger, Inc. for PyMOL; the University of California, San Francisco for ChimeraX). Astra3 reads PyMOL's version and license type, and ChimeraX's version, only to record them in the reports it generates on your computer.
 
 ## How you obtained Astra3
 
@@ -64,7 +66,7 @@ Because everything is stored locally, you are in complete control:
 - Delete any results by deleting them from your output folder.
 - On Windows, remove Astra3's configuration by deleting the `Astra3` folder in your user folder (this also removes the default output folder, so move any results you want to keep first). On macOS, delete `~/Library/Application Support/Astra3`.
 - Uninstalling the Microsoft Store version removes the app and its app data folder. Uninstalling any other version removes the app but leaves its app data folder, which you can delete yourself: `%APPDATA%\Astra3` on Windows, `~/Library/Application Support/Astra3` on macOS.
-- On Windows, the `Astra3` folder in your user folder (your PyMOL location, output folder choice and diagnostic log) is kept after uninstalling in every case; delete it yourself if you no longer need it.
+- On Windows, the `Astra3` folder in your user folder (your PyMOL and ChimeraX locations, output folder choice, color palette and diagnostic log) is kept after uninstalling in every case; delete it yourself if you no longer need it.
 - In every case your output folder is kept unless you delete it, so you never lose results by accident.
 
 There is nothing to request from the developer, because the developer holds no data about you.
