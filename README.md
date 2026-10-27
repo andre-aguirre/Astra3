@@ -4,9 +4,9 @@
 
 Version 2.0.1 · macOS 12 or later · universal (Intel and Apple Silicon)
 
-[Website](https://andre-aguirre.github.io/Astra3/) ·
-[Documentation](https://andre-aguirre.github.io/Astra3/docs/) ·
-[Download](https://andre-aguirre.github.io/Astra3/download/) ·
+[Website](https://andre-aguirre.github.io/Astra3/) |
+[Documentation](https://andre-aguirre.github.io/Astra3/docs/) |
+[Download](https://andre-aguirre.github.io/Astra3/download/) |
 [Changelog](https://andre-aguirre.github.io/Astra3/changelog/)
 
 Astra3 automates the structure work otherwise repeated by hand in PyMOL or
