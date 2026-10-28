@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Astra3 macOS Hardened Runtime entitlements.
+
+  Kept deliberately minimal. A commonly copied "kitchen sink" version of
+  this file adds com.apple.security.cs.allow-unsigned-executable-memory
+  and com.apple.security.cs.disable-library-validation alongside
+  allow-jit; those two are NOT required for a stock Electron app (only
+  allow-jit is, for V8's JIT compiler) and meaningfully widen what a
+  compromised or malicious renderer/plugin could do if it ever got code
+  execution: disable-library-validation in particular permits loading
+  arbitrary unsigned dynamic libraries into the process. Astra3 does not
+  need either, so neither is requested here; entitlements should match
+  what the app actually does, not be copied wholesale from a tutorial.
+
+  Astra3's PyMOL subprocess is launched via child_process.spawn with an
+  argument array (see electron/pymol-bridge.js), which needs no special
+  entitlement at all. Hardened Runtime restricts what can be loaded
+  INTO this process, not what child processes this process may spawn.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+</dict>
+</plist>

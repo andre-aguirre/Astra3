@@ -1,0 +1,96 @@
+{
+  "name": "astra3",
+  "productName": "Astra3",
+  "version": "2.0.1",
+  "description": "Astra3: Structural Analysis Toolkit for PDB Rendering Automation",
+  "main": "electron/main.js",
+  "author": "Andre Aguirre",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "vendor": "bash scripts/vendor-deps.sh",
+    "preflight": "node scripts/electron-preflight.js",
+    "preflight:repair": "node scripts/electron-preflight.js --repair",
+    "build:renderer": "esbuild renderer/app.jsx --bundle --jsx-factory=React.createElement --jsx-fragment=React.Fragment --external:react --external:react-dom --outfile=renderer/app.bundle.js",
+    "prestart": "node scripts/electron-preflight.js --advisory && npm run build:renderer",
+    "start": "electron .",
+    "prebuild:mac": "npm run build:renderer && npm run build:python",
+    "build:mac": "electron-builder --mac",
+    "prebuild:mac:universal": "npm run build:renderer && npm run build:python",
+    "build:mac:universal": "electron-builder --mac --universal",
+    "postinstall": "install-electron && electron-builder install-app-deps",
+    "build:python": "node scripts/build-python.js",
+    "lint": "eslint --no-eslintrc -c ../.eslintrc.json renderer/app.jsx"
+  },
+  "devDependencies": {
+    "electron": "^43.7.7",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.21.0",
+    "@electron/notarize": "^2.3.2",
+    "eslint": "^8.57.0"
+  },
+  "build": {
+    "appId": "com.aguirre.astra3",
+    "productName": "Astra3",
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "!renderer/**/*.jsx",
+      "!**/*.map",
+      "!scripts/**/*",
+      "!tests/**/*",
+      "!docs/**/*",
+      "!build/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "build/python-dist",
+        "to": "python"
+      },
+      {
+        "from": "engine",
+        "to": "engine"
+      },
+      {
+        "from": "../README.md",
+        "to": "docs/README.md"
+      },
+      {
+        "from": "../LICENSE",
+        "to": "docs/LICENSE"
+      },
+      {
+        "from": "../CITATION.cff",
+        "to": "docs/CITATION.cff"
+      },
+      {
+        "from": "../PRIVACY.md",
+        "to": "docs/PRIVACY.md"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.txt",
+        "to": "docs/THIRD_PARTY_NOTICES.txt"
+      }
+    ],
+    "mac": {
+      "icon": "assets/icons/astra3.icns",
+      "identity": "Project BloodLine (85P6A3K7K4)",
+      "notarize": false,
+      "category": "public.app-category.education",
+      "minimumSystemVersion": "12.0",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build-resources/entitlements.mac.plist",
+      "entitlementsInherit": "build-resources/entitlements.mac.plist"
+    },
+    "afterSign": "scripts/notarize.js",
+    "directories": {
+      "output": "dist"
+    },
+    "asar": true
+  }
+}

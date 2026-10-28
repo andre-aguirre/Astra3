@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Astra3: Structural Analysis Toolkit</title>
+<style id="astra3-fonts">
+/* Local, vendored fonts -- see scripts/vendor-deps.sh. If renderer/vendor/
+   doesn't have these files yet (before `npm run vendor` has been run),
+   these @font-face rules simply fail to match and the --font-ui/--font-mono
+   fallback stacks in the token block below take over -- both stacks lead
+   with genuinely neutral OS-native UI fonts (San Francisco / Segoe UI), not
+   a jarring serif fallback, so degradation is graceful either way.
+ */
+@font-face {
+  font-family: 'Inter';
+  src: url('./vendor/InterVariable.woff2') format('woff2-variations'), url('./vendor/InterVariable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./vendor/ibm-plex-mono-regular.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./vendor/ibm-plex-mono-medium.woff2') format('woff2');
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./vendor/ibm-plex-mono-semibold.woff2') format('woff2');
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Nunito';
+  src: url('./vendor/NunitoVariable.woff2') format('woff2-variations'), url('./vendor/NunitoVariable.woff2') format('woff2');
+  font-weight: 200 1000;
+  font-display: swap;
+}
+</style>
+<style id="astra3-tokens">
+:root{
+  /* ===== Color tokens ===== */
+  --bg-0:#0F1216;         /* app background, deepest */
+  --bg-1:#161A20;         /* panel background */
+  --bg-2:#1D222A;         /* raised panel / card */
+  --bg-3:#252B35;         /* hover / active surface */
+  --line-0:#262C36;       /* hairline borders */
+  --line-1:#323A46;       /* stronger dividers */
+  --text-0:#EDEFF2;       /* primary text */
+  --text-1:#A7AFBC;       /* secondary text */
+  --text-2:#6B7280;       /* tertiary / disabled */
+  --accent:#AB7ADF;       /* purple, primary interactive accent */
+  --accent-dim:#7344A6;
+  --accent-bright:#BF98EB;
+  --accent-wash: rgba(171,122,223,0.14);
+  --amber:#E8C63D;        /* running / warning -- shifted slightly toward yellow from the original orange-leaning amber */
+  --amber-wash: rgba(232,198,61,0.12);
+  --coral:#E8614F;        /* error */
+  --coral-wash: rgba(232,97,79,0.12);
+  --sage:#7FBF8A;         /* success */
+  --sage-wash: rgba(127,191,138,0.12);
+  --violet:#6E8EE8;       /* secondary structural accent (chains/ligand tags) -- blue-leaning, distinct from the now-purple primary accent */
+  --gold:#F0C361;         /* tertiary accent -- sampled from the Astra3 logo's stars; used sparingly for "take me to the good stuff" actions like opening the real HTML report */
+  --gold-bright:#FFD98A;
+  --gold-wash: rgba(240,195,97,0.14);
+
+  --text-on-accent:#1E1030; /* dark purple, legible on the purple accent fill -- swaps per theme below */
+  --console-bg:#0B0D10;   /* the live console panel's own background -- deliberately distinct from bg-0 in BOTH themes: slightly darker here (a console reading as visually "deeper"/more like a terminal than the page around it), and near-white in light theme below (bg-0 there leans pale lavender, which read as an odd, slightly-off console background) */
+
+  /* ===== Type ===== */
+  /* Kept specifically for tabs, nav labels, and input fields -- a
+     more formal/geometric face reads as more
+     precise for interactive controls a scientist is actively typing
+     into or navigating with, versus the general reading text around
+     them. */
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  /* General body/paragraph text (report content, descriptions, hints,
+     card copy). Defaults to IBM Plex Mono, a monospace face read as
+     precise and technical for this kind of structural-analysis
+     content; this is the DEFAULT starting value only, not a fixed
+     choice -- Settings -> Appearance -> "Content font" lets the person
+     pick from a wide range of bundled and system fonts, applied live
+     via this same --font-body-rounded variable (see AppProvider's own
+     effect in app.jsx). */
+  --font-body-rounded: 'IBM Plex Mono', ui-monospace, monospace;
+  /* Both Inter and Nunito are variable fonts (real weight axes, not
+     fixed static cuts), and the default browser weight (400) reads
+     thin at this app's small UI text sizes -- 500 is a real, modest
+     bump, not just a visual trick, and it's a CSS variable specifically
+     so the font picker on the Home page (see app.jsx's own
+     FontExperimentPicker) can override it live app-wide. */
+  --font-weight-base: 500;
+
+  /* ===== Scale ===== */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.45);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,0.55);
+}
+
+/* ===== Light theme ===== */
+[data-theme="light"]{
+  --bg-0:#F5F4F8;         /* app background */
+  --bg-1:#FFFFFF;         /* panel background */
+  --bg-2:#F0EEF6;         /* raised panel / card */
+  --bg-3:#E6E2F0;         /* hover / active surface */
+  --line-0:#E1DEEA;       /* hairline borders */
+  --line-1:#CFC9E0;       /* stronger dividers */
+  --text-0:#211C2E;       /* primary text */
+  --text-1:#5B5470;       /* secondary text */
+  --text-2:#8B84A0;       /* tertiary / disabled */
+  --accent:#7C4FC4;       /* darkened from the dark-theme purple for AA contrast on a light background */
+  --accent-dim:#5E3A96;
+  --accent-bright:#6B3DB8;
+  --accent-wash: rgba(124,79,196,0.10);
+  --amber:#9A7A1A;        /* shifted slightly toward yellow, darkened to keep the same text contrast on light backgrounds the original orange-leaning amber had */
+  --amber-wash: rgba(154,122,26,0.10);
+  --coral:#C43A28;
+  --coral-wash: rgba(196,58,40,0.10);
+  --sage:#3D8A4C;
+  --sage-wash: rgba(61,138,76,0.10);
+  --violet:#3E5FC4;
+  --gold:#B8862E;
+  --gold-bright:#96701F;
+  --gold-wash: rgba(184,134,46,0.12);
+  --text-on-accent:#FFFFFF; /* white reads correctly on the darker light-mode purple, unlike the dark theme's near-black */
+  --console-bg:#FCFCFE;   /* near-white, distinct from bg-0's pale lavender tint -- see the :root definition's own comment for why this needs to differ from bg-0 in both themes */
+}
+
+*,*::before,*::after{box-sizing:border-box;}
+html,body{height:100%;}
+body{
+  margin:0;
+  background:var(--bg-0);
+  color:var(--text-0);
+  font-family:var(--font-body-rounded);
+  font-size:13px;
+  font-weight:var(--font-weight-base);
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+/* Tabs/nav labels and every text input keep the more formal
+   --font-ui typeface (Inter) rather than the rounded body default
+   above -- interactive controls a person is
+   navigating with or actively typing into should read as precise,
+   not rounded/soft. .astra-nav-btn covers the sidebar's own page
+   tabs; input/textarea covers every text field app-wide (SegmentedControl's
+   own buttons and TextInput both render as real <input>/<button>
+   elements, so this reaches them without needing a class on each one). */
+/* Text fields carried no visible edge in the dark theme: the field
+   background and the panel behind it are close enough in value that the box
+   disappeared, so a form read as floating placeholder text. A hairline in
+   --line-1 gives the same definition the light theme already had from its
+   darker borders. */
+input, textarea, select{
+  border:1px solid var(--line-1);
+  border-radius:var(--radius-sm, 6px);
+  background:var(--bg-1);
+  color:var(--text-0);
+}
+input:focus, textarea:focus, select:focus{
+  border-color:var(--accent);
+  outline:none;
+}
+input::placeholder, textarea::placeholder{ color:var(--text-2); }
+
+.astra-nav-btn, input, textarea, select{
+  font-family:var(--font-ui);
+  font-weight:var(--font-weight-base);
+}
+#root{height:100vh;width:100vw;}
+::selection{background:var(--accent-wash); color:var(--accent-bright);}
+::-webkit-scrollbar{width:10px;height:10px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--line-1); border-radius:6px; border:2px solid transparent; background-clip:padding-box;}
+::-webkit-scrollbar-thumb:hover{background:var(--text-2); background-clip:padding-box;}
+a{color:inherit;}
+button{font-family:inherit;}
+:focus-visible{outline:2px solid var(--accent); outline-offset:1px; border-radius:3px;}
+code, .mono{font-family:var(--font-mono);}
+
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition-duration:0.001ms !important;}
+}
+
+/* ===== Motion ===== */
+@keyframes astra-spin{ to{ transform:rotate(360deg); } }
+.astra-spin{ animation:astra-spin 0.9s linear infinite; display:inline-flex; }
+@keyframes astra-logo-spin{ 0%,100%{ filter:drop-shadow(0 0 0 rgba(171,122,223,0)); transform:scale(1);} 50%{ filter:drop-shadow(0 0 14px rgba(171,122,223,0.45)); transform:scale(1.015);} }
+.astra-logo-spin{ animation:astra-logo-spin 3.4s ease-in-out infinite; }
+@keyframes astra-toast-in{ from{ opacity:0; transform:translateY(8px) scale(0.98);} to{opacity:1; transform:translateY(0) scale(1);} }
+.astra-toast-in{ animation:astra-toast-in 180ms cubic-bezier(0.2,0.8,0.3,1); }
+@keyframes astra-modal-in{ from{ opacity:0; transform:translateY(6px) scale(0.97);} to{opacity:1; transform:translateY(0) scale(1);} }
+/* Find-in-page marks and gutter arrows (see ReadmeFindBar). The arrow colour
+   is --text-0 so it follows the theme: near-black on light, near-white on
+   dark. The current match uses the accent instead, so which of several
+   matches is selected is readable at a glance from the gutter alone. */
+mark.astra-find-hit{
+  background:rgba(155,127,224,0.34); color:inherit;
+  border-radius:3px; padding:0 1px;
+}
+[data-theme="light"] mark.astra-find-hit{ background:rgba(126,90,214,0.22); }
+mark.astra-find-hit-current{ background:var(--accent); color:#fff; }
+.astra-find-arrows{ position:absolute; inset:0; pointer-events:none; }
+.astra-find-arrow{
+  position:absolute; left:-22px; width:14px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:10px; line-height:1; color:var(--text-0); opacity:0.5;
+}
+/* Same box and same left edge as the others, so the larger current arrow
+   grows in place instead of shifting the column sideways. */
+.astra-find-arrow.is-current{ color:var(--accent); opacity:1; font-size:13px; }
+
+.astra-modal-in{ animation:astra-modal-in 160ms cubic-bezier(0.2,0.8,0.3,1); }
+@keyframes astra-stripe{ from{background-position:0 0;} to{background-position:28px 0;} }
+.astra-progress-stripe{
+  background-image:linear-gradient(45deg, rgba(255,255,255,0.12) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.12) 50%, rgba(255,255,255,0.12) 75%, transparent 75%, transparent);
+  background-size:28px 28px;
+  animation:astra-stripe 900ms linear infinite;
+}
+@keyframes astra-cursor-blink{ 0%,49%{opacity:1;} 50%,100%{opacity:0;} }
+.astra-cursor-blink{ animation:astra-cursor-blink 1s step-end infinite; font-weight:400; }
+
+/* Slow red "breathing" pulse for a nav item with an unanswered prompt --
+   deliberately gentle (2.2s ease cycle, not a rapid blink) so it reads as
+   "there's something here whenever you're ready" rather than an alarm. */
+@keyframes astra-nav-breathe{
+  0%,100%{ box-shadow:0 0 0 0 rgba(232,97,79,0.0); }
+  50%{ box-shadow:0 0 0 4px rgba(232,97,79,0.16); }
+}
+.astra-nav-btn-alert{ animation:astra-nav-breathe 2.2s ease-in-out infinite; }
+@keyframes astra-nav-alert-dot-pulse{
+  0%,100%{ transform:scale(1); opacity:1; }
+  50%{ transform:scale(1.35); opacity:0.75; }
+}
+.astra-nav-alert-dot{ animation:astra-nav-alert-dot-pulse 1.6s ease-in-out infinite; }
+
+/* Slow, subtle purple "breathing" glow for the PyMOL setup dialog --
+   same gentle-pulse structure as astra-nav-breathe above, just the
+   app's own accent purple instead of the alert coral, and slower
+   (3.2s) since this sits on a modal someone is meant to read calmly,
+   not a nav item flagging something urgent. */
+@keyframes astra-setup-glow{
+  0%,100%{ box-shadow:0 0 24px 0 rgba(171,122,223,0.0); }
+  50%{ box-shadow:0 0 32px 6px rgba(171,122,223,0.22); }
+}
+.astra-setup-glow{ animation:astra-setup-glow 3.2s ease-in-out infinite; }
+
+/* Small, gentle twinkling stars around the PyMOL setup dialog --
+   opacity/scale pulse only (no orbital transform math), staggered per-star
+   duration/delay so they twinkle asynchronously rather than in one obvious
+   synchronized pulse, which reads as much more organic and "starlight"-like
+   than everything animating in lockstep. Kept purely decorative and
+   low-opacity so it never competes with the dialog's own actual content for
+   attention. Color is set per-star inline (see SETUP_STARS in app.jsx)
+   rather than fixed here, since the whole point is a MIX of yellow shades,
+   not one uniform color. With 12 staggered delays, that meant every star
+   appeared instantly at full brightness together, then visibly "popped"
+   down to the dim twinkle state one by one as each one's own delay elapsed,
+   exactly matching what was reported ("they all start visible and go away
+   one by one"). Fixed with two chained animations instead of one:
+   astra-star-fade-in plays once per star (its own staggered delay,
+   animation-fill-mode "both" so the star stays fully transparent for its
+   ENTIRE delay window, then holds its end state once done rather than
+   snapping back), smoothly raising opacity from 0 up to the twinkle loop's
+   own resting point. astra-star-twinkle then takes over at the exact moment
+   fade-in finishes (its own delay = the star's stagger delay plus fade-in's
+   fixed duration) and loops forever from there. Because fade-in's end state
+   and twinkle's own 0%/100% state are identical (opacity 0.2, scale 0.7),
+   the handoff between the two is seamless -- no jump at the moment
+   twinkling begins.
+ */
+@keyframes astra-star-fade-in{
+  from{ opacity:0; transform:scale(0.4); }
+  to{ opacity:0.2; transform:scale(0.7); }
+}
+@keyframes astra-star-twinkle{
+  0%,100%{ opacity:0.2; transform:scale(0.7); }
+  50%{ opacity:0.9; transform:scale(1); }
+}
+/* The setup dialog's stars rest brighter than the Summary page's: on the
+   dark backdrop a small dot at 0.2 opacity all but disappears. */
+@keyframes astra-setup-star-in{
+  from{ opacity:0; transform:scale(0.4); }
+  to{ opacity:0.45; transform:scale(0.75); }
+}
+@keyframes astra-setup-star-twinkle{
+  0%,100%{ opacity:0.45; transform:scale(0.75); }
+  50%{ opacity:1; transform:scale(1.1); }
+}
+/* The glow (currentColor, set per star) keeps the stars visible on the dark
+   backdrop, where a small dot at low opacity all but disappears. */
+.astra-setup-star{
+  position:absolute; border-radius:50%; opacity:0;
+  pointer-events:none; box-shadow:0 0 6px 1px currentColor;
+}
+/* The backdrop behind the welcome and setup dialogs: dark and slightly
+   blurred, so the page behind does not compete with the dialog. */
+.astra-setup-backdrop{
+  position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:700;
+  background:rgba(4,5,8,0.86); -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
+}
+
+/* A single "breath" (not looping, unlike astra-nav-breathe above) around
+   the whole window's edge when a real analysis finishes -- an inset
+   box-shadow so it reads as a glow along the border rather than a
+   filled overlay blocking anything underneath. */
+@keyframes astra-completion-glow{
+  0%{ box-shadow: inset 0 0 0 0 rgba(127,191,138,0); }
+  30%{ box-shadow: inset 0 0 40px 6px rgba(127,191,138,0.35); }
+  55%{ box-shadow: inset 0 0 40px 6px rgba(127,191,138,0.35); }
+  100%{ box-shadow: inset 0 0 0 0 rgba(127,191,138,0); }
+}
+.astra-completion-pulse{ animation:astra-completion-glow 2s ease-out 1; }
+
+/* Light-mode override: the dark theme's pale, low-saturation green
+   (127,191,138) reads clearly against a near-black background, but the same
+   pale green against light mode's own near-white panels (--bg-1: #FFFFFF,
+   --bg-0: #F5F4F8) has very little contrast; it just wasn't visible against
+   a light background). Uses a darker, more saturated green (37,122,58 --
+   close to --sage's own #3D8A4C light-mode success color) at higher opacity
+   so the same "breath" reads clearly on either background, without needing
+   a second keyframe or touching the animation's own trigger logic in
+   app.jsx at all.
+ */
+/* Copy-citation and favourite buttons, dark theme only.
+   Both looked wrong in dark mode for the same underlying reason: they were
+   relying on variant defaults that read as near-black against a near-black
+   panel, or (for the citation button) picked up a pale surface while keeping
+   pale text, leaving light-on-light. The light theme was already correct, so
+   these overrides are scoped to dark and leave it alone. */
+[data-theme="dark"] .astra-citation-btn{
+  background:var(--text-0) !important;
+  color:var(--bg-0) !important;
+  border-color:var(--text-0) !important;
+}
+[data-theme="dark"] .astra-citation-btn:hover{
+  background:#FFFFFF !important;
+  border-color:#FFFFFF !important;
+}
+/* Star sits on the nav-rail surface with the nav-label text colour, and
+   lifts on hover, so an unset favourite is visible without competing with
+   the entry title beside it. */
+[data-theme="dark"] .astra-fav-btn{
+  background:var(--bg-2) !important;
+  color:var(--text-1) !important;
+}
+[data-theme="dark"] .astra-fav-btn:hover{
+  background:var(--bg-3) !important;
+  color:var(--text-0) !important;
+}
+[data-theme="dark"] .astra-fav-btn.is-favorite{
+  color:var(--amber) !important;
+}
+
+[data-theme="light"] .astra-completion-pulse{ animation-name: astra-completion-glow-light; }
+@keyframes astra-completion-glow-light{
+  0%{ box-shadow: inset 0 0 0 0 rgba(37,122,58,0); }
+  30%{ box-shadow: inset 0 0 48px 8px rgba(37,122,58,0.55); }
+  55%{ box-shadow: inset 0 0 48px 8px rgba(37,122,58,0.55); }
+  100%{ box-shadow: inset 0 0 0 0 rgba(37,122,58,0); }
+}
+
+/* ===== Interactive states ===== */
+.astra-btn-primary:hover{ background:var(--accent-bright) !important; border-color:var(--accent-bright) !important; }
+.astra-btn-secondary:hover{ background:var(--bg-2) !important; border-color:var(--text-2) !important; }
+.astra-btn-ghost:hover{ background:var(--bg-2) !important; color:var(--text-0) !important; }
+.astra-btn-danger:hover{ background:var(--coral-wash) !important; }
+.astra-btn-gold:hover{ background:var(--gold-bright) !important; border-color:var(--gold-bright) !important; }
+.astra-btn:active{ transform:scale(0.98); }
+.astra-iconbtn:hover{ background:var(--bg-3) !important; color:var(--text-0) !important; }
+.astra-nav-btn:hover{ background:var(--bg-2) !important; color:var(--text-0) !important; }
+.astra-card-hover{ transition:border-color 140ms ease, transform 140ms ease; }
+.astra-card-hover:hover{ border-color:var(--line-1) !important; transform:translateY(-1px); }
+
+input[type="radio"]{ accent-color:var(--accent); }
+textarea:focus{ border-color:var(--accent) !important; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="./vendor/react.production.min.js"></script>
+<script src="./vendor/react-dom.production.min.js"></script>
+<script src="./vendor/3Dmol-min.js"></script>
+
+<script>
+  // Fail loudly, not silently, if scripts/vendor-deps.sh hasn't been run
+  // yet.
+  window.addEventListener("load", function () {
+    setTimeout(function () {
+      if (!window.React || !window.ReactDOM) {
+        document.getElementById("root").innerHTML =
+          '<div style="display:flex;align-items:center;justify-content:center;height:100vh;' +
+          'flex-direction:column;gap:12px;font-family:sans-serif;color:#EDEFF2;background:#0F1216;">' +
+          '<div style="font-size:16px;font-weight:600;">Astra3 could not load its interface</div>' +
+          '<div style="font-size:13px;color:#A7AFBC;max-width:420px;text-align:center;">' +
+          "Required scripts are missing from renderer/vendor/. Run " +
+          '<code style="background:#1D222A;padding:2px 6px;border-radius:4px;">scripts/vendor-deps.sh</code> ' +
+          "once (with internet access), then relaunch Astra3.</div></div>";
+      }
+    }, 800);
+  });
+</script>
+<script src="./app.bundle.js"></script>
+</body>
+</html>

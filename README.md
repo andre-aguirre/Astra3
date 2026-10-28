@@ -4,9 +4,9 @@
 
 Version 2.0.1 · macOS 12 or later · universal (Intel and Apple Silicon)
 
-[Website](https://andre-aguirre.github.io/Astra3/) |
-[Documentation](https://andre-aguirre.github.io/Astra3/docs/) |
-[Download](https://andre-aguirre.github.io/Astra3/download/) |
+[Website](https://andre-aguirre.github.io/Astra3/) ·
+[Documentation](https://andre-aguirre.github.io/Astra3/docs/) ·
+[Download](https://andre-aguirre.github.io/Astra3/download/) ·
 [Changelog](https://andre-aguirre.github.io/Astra3/changelog/)
 
 Astra3 automates the structure work otherwise repeated by hand in PyMOL or
@@ -68,7 +68,8 @@ Advanced Console.
   with its analysis engine, a cancelled run no longer leaves a second
   engine running, and a ChimeraX you open yourself is never taken by
   Astra3's. Entries with thousands of chains (3J3Q) no longer fail with
-  "maximum recursion depth exceeded" under ChimeraX or the Astra3 Engine.
+  "maximum recursion depth exceeded"; the largest of them need PyMOL or
+  ChimeraX (see Limitations).
 - **Changed defaults.** Images are medium quality unless chosen otherwise
   (previously excellent). Astra3 needs macOS 12 Monterey or later
   (previously 10.15), and links in reports and in the app open in your web
@@ -123,6 +124,19 @@ If the results folder is on the Desktop or in Documents or Downloads,
 macOS asks once for permission. If that was denied, analyses fail when
 saving; allow it under System Settings → Privacy & Security → Files and
 Folders.
+
+**From source.** The `python/` and `gui/` folders are the whole app. With
+Node 22.12 or newer:
+
+```
+cd gui
+npm ci
+npm start
+```
+
+`npm run build:mac:universal` builds the app; `npm run vendor` re-downloads
+the bundled React, 3Dmol.js and Pyodide files and checks them against their
+SHA-256.
 
 ---
 
@@ -469,7 +483,9 @@ Options go after the IDs:
   `pse_binary_dump` on, or by PyMOL before 1.8, cannot be imported without
   PyMOL. For files without helix and sheet records, secondary structure
   comes from DSSP and can differ slightly from PyMOL's. TERMINI close-ups
-  may show a terminus from the side opposite to PyMOL's.
+  may show a terminus from the side opposite to PyMOL's. Its memory is
+  limited to 4 GB, so the largest entries (3J3Q, 2.4 million atoms) stop
+  with an error under it and need PyMOL or ChimeraX.
 - **ChimeraX** shows its Dock icon for a moment the first time it draws
   images in a session, because it needs a window to render.
 
