@@ -17,16 +17,15 @@
 #   Shrake A, Rupley JA (1973) J Mol Biol 79:351-371. Each atom is a sphere of
 #   its van der Waals radius plus a 1.4 A water probe; its accessible area is
 #   the fraction of points on that sphere not inside any neighbouring sphere.
-#   Points are placed by the golden-section spiral, 10000 per atom. Radii are Bondi's (1964,
-#   J Phys Chem 68:441-451); elements Bondi does not list use 2.0 A. These are
-#   the radii Biopython's ShrakeRupley uses. The points are fixed in the
+#   Points are placed by the golden-section spiral, 10000 per atom. Radii are
+#   the table Biopython's ShrakeRupley uses: Bondi's (1964, J Phys Chem
+#   68:441-451), with calcium (2.31 A) from Mantina et al. (2009, J Phys Chem
+#   A 113:5806-5812); other elements use 2.0 A. The points are fixed in the
 #   structure's principal-axes frame (see principal_frame), so the area does
-#   not change when the structure is rotated, as it is by superposition; with
-#   points fixed in space instead, rotating 1HPV chain A by 0.06 degrees moved
-#   the area of its last ten residues by 0.1 A^2. Hydrogens are left
-#   out: whether a file carries them
-#   depends on how it was deposited, not on the structure, and counting them
-#   would make the same protein's surface depend on the file it came from.
+#   not change when the structure is rotated by superposition; with points
+#   fixed in space, rotating 1HPV chain A by 0.06 degrees moved the area of
+#   its last ten residues by 0.1 A^2. Hydrogens are left out: whether a file
+#   carries them depends on how it was deposited, not on the structure.
 #
 # Superposition
 #   Kabsch W (1976) Acta Cryst A32:922-923, least-squares rotation by singular
@@ -51,7 +50,8 @@ SASA_PROBE_RADIUS = 1.4
 SASA_SPHERE_POINTS = 10000
 DEFAULT_RADIUS = 2.0
 
-# Bondi (1964) van der Waals radii, keyed by upper-case element symbol.
+# Van der Waals radii in A, keyed by upper-case element symbol: Bondi (1964),
+# and Mantina et al. (2009) for calcium.
 VDW_RADII = {
     "H": 1.20, "HE": 1.40, "C": 1.70, "N": 1.55, "O": 1.52, "F": 1.47,
     "NA": 2.27, "MG": 1.73, "P": 1.80, "S": 1.80, "CL": 1.75, "K": 2.75,
@@ -205,7 +205,10 @@ def kabsch(mobile, target, weights=None):
     qc = (w[:, None] * q).sum(axis=0)
     h = ((p - pc) * w[:, None]).T @ (q - qc)
     u, _s, vt = np.linalg.svd(h)
-    d = np.sign(np.linalg.det(vt.T @ u.T))
+    # -1 undoes a reflection. A zero determinant (collinear or coplanar
+    # points) leaves the rotation about the degenerate axis free; +1 keeps
+    # the result a rotation.
+    d = -1.0 if np.linalg.det(vt.T @ u.T) < 0 else 1.0
     rot = vt.T @ np.diag([1.0, 1.0, d]) @ u.T
     return rot, qc - pc @ rot.T
 

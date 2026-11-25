@@ -22,26 +22,26 @@
 #   - saves a finished PyMOL session (.pse), falling back to a
 #     plain .pdb only if the .pse save fails
 #   - renders 6 high-resolution, transparent-background images
-#   - writes a Protein_Information.txt report built only from
-#     data actually available in PyMOL and the PDB header (no
-#     fabricated values -- sections that can't be determined
-#     say so explicitly)
+#   - writes <ID>_Information.txt and the HTML report from data
+#     available in PyMOL and the PDB header; sections that cannot
+#     be determined say so
 #
 # Special commands (typed at the "Enter a PDB ID" prompt):
-#   DONE   - finish and quit
-#   -t     - runs a full analysis of 1AKE into a single,
-#            always-overwritten TEST/ folder (regression check)
+#   DONE     - finish and quit
+#   -t       - analyses 1AKE into Protein_outputs/TEST, overwritten
+#              each time (regression check)
 #   OVERLAY  - aligns multiple structures through the registered
-#            overlay-operation dispatcher
+#              overlay-operation dispatcher
 #
 # Folder layout produced (per PDB ID):
-#   <ID>Protein_outputs/
-#	Astra3_Report.html
-#       Session/
-#           <ID>.pse   (or <ID>.pdb if .pse saving fails)
-#           Protein_Information.txt
-#       Images/
-#           view_front.png, view_back.png, ... (6 angles)
+#   Protein_outputs/
+#       <ID>_Output/            (a re-run adds " (1)", " (2)", ...)
+#           Astra3_Report.html
+#           Session/
+#               <ID>.pse   (or <ID>.pdb if .pse saving fails)
+#               <ID>_Information.txt
+#           Images/
+#               view_front.png, view_back.png, ... (6 angles)
 #
 # ------------------------------------------------------------
 # MODULE: Entry point & orchestration
@@ -53,8 +53,7 @@
 #     parsers
 #   - the interactive command loop (the "Enter a PDB ID" prompt)
 #
-# Astra3 is split across four files that must stay together in
-# the same folder:
+# The astra3_*.py modules must stay together in the same folder:
 #   astra3_core.py           - shared constants, paths, registry
 #   astra3_structure.py      - structure analysis / processing
 #   astra3_render_report.py  - image rendering & HTML report
@@ -62,6 +61,7 @@
 # ------------------------------------------------------------
 
 import os
+import platform
 import re
 import sys
 
@@ -71,45 +71,24 @@ import sys
 sys.dont_write_bytecode = True
 import time
 import itertools
-import difflib
 from dataclasses import dataclass
 from pathlib import Path
 
-# astra3.py is always shipped in the same folder as its sibling modules
-# (astra3_core.py, astra3_structure.py, astra3_render_report.py). PyMOL runs
-# this file by exec'ing its source into a namespace it reuses across every
-# `run` invocation, NOT via a real Python import -- so sys.path never gets
-# this folder added automatically, and the sibling imports below fail with
-# ModuleNotFoundError unless PyMOL's cwd happens to already be this folder.
+# PyMOL runs this file by exec'ing its source, not by importing it, so this
+# folder is not on sys.path and the sibling imports below would fail unless
+# PyMOL's working directory happened to be here.
 #
-# The correct, reliable way to find this file's own path here is __script__,
-# NOT __file__. PyMOL's own parsing.py sets global_ns['__script__'] = file
-# immediately before exec'ing the script's source -- this is freshly
-# overwritten on every single `run` invocation, so it is always this exact
-# file's real path, however Astra3 was launched (an interactive `run
-# astra3.py`, or PyMOL spawned directly with `-cq astra3.py` as
-# pymol-bridge.js does).
-#
-# __file__ is NOT a safe substitute here: plain exec() with a compiled
-# filename does NOT auto-populate __file__ (verified directly -- a bare exec()
-# leaves it undefined, raising NameError if referenced). Yet `global_ns` is
-# the SAME dict PyMOL reuses across every `run` call in a session, so if
-# __file__ was ever set in it by something else (PyMOL's own startup, an
-# earlier script, an earlier import) it can persist as a stale leftover with
-# no connection to astra3.py at all -- silently resolving to the wrong
-# directory rather than raising, which is the failure mode this
-# replaces: no crash on this line, but sys.path gets the wrong folder added,
-# and the very next import still fails with ModuleNotFoundError.
+# __script__ is the reliable path: PyMOL's parsing.py sets it immediately
+# before every `run`, however Astra3 was launched (`run astra3.py`, or
+# `-cq astra3.py` from the bridge). __file__ is only a fallback: exec() does
+# not set it, and the namespace is reused across runs, so it may be left over
+# from something else.
 _this_script = globals().get("__script__") or globals().get("__file__")
 if _this_script:
     _THIS_DIR = os.path.dirname(os.path.abspath(_this_script))
     if _THIS_DIR not in sys.path:
         sys.path.insert(0, _THIS_DIR)
 else:
-    # Neither is set -- extremely unlikely for any real launch path (both the
-    # GUI's spawn and a manual `run astra3.py` set __script__), but if it ever
-    # happens, fail with a clear, actionable message instead of a confusing
-    # ModuleNotFoundError two lines down with no explanation of why.
     print("Astra3 could not determine its own file location (neither "
           "__script__ nor __file__ is set). This usually means astra3.py "
           "was run in an unsupported way. Launch it via `run astra3.py` "
@@ -126,11 +105,9 @@ elif os.environ.get("ASTRA3_ENGINE", "").strip().lower() == "astra3":
 
 from pymol import cmd
 
-# Astra3's modules may be distributed as bytecode, which CPython will only
-# load under the exact minor version that produced it. PyMOL supplies its own
-# interpreter, so a mismatch between the build machine and the installed
-# PyMOL surfaces here as an opaque "bad magic number" ImportError. Translated
-# into something that identifies the cause and the fix.
+# The modules may ship as bytecode, which CPython only loads under the minor
+# version that produced it. A mismatch with PyMOL's interpreter shows up as a
+# "bad magic number" ImportError; this names the cause and the fix.
 try:
     import astra3_core as _astra3_core_probe  # noqa: F401
 except ImportError as _import_error:
@@ -157,19 +134,18 @@ from astra3_core import (structure_file_kind, structure_file_stem, structure_fil
     active_operation_objects, OperationCancelled,
     clear_cancellation, check_for_cancellation, cancel_active_operation,
     register_structure, resolve_structure, is_ast_id, loaded_structures,
-    get_output_folders, get_overlay_output_folders, get_termini_output_folders,
-    clear_stale_run_images, report_cleared_images, summarize_chain_reduction, homomer_rule_outcome, HOMOMER_RULES,
-    select_reference_by_ligand_count, structure_palette,
+    get_output_folders, get_overlay_output_folders, get_termini_output_folders, run_display_name, app_base_dir,
+    summarize_chain_reduction, homomer_rule_outcome, select_reference_by_ligand_count, structure_palette,
     describe_fetch_failure,
     parse_header, parse_remark_465, parse_header_cif, parse_missing_residues_cif,
     parse_structure_ids_with_format_flags, MMCIF_FLAG,
-    AA_3TO1, OVERLAY_PROTEIN_COLORS, OVERLAY_LIGAND_COLORS, format_yn_prompt, engine_color, load_color_palette,
+    OVERLAY_PROTEIN_COLORS, OVERLAY_LIGAND_COLORS, format_yn_prompt, engine_color, load_color_palette,
     load_functional_readouts, ASTRA3_VERSION,
 )
 from astra3_security import (
-    validate_structure_id, InvalidStructureIdError, classic_pdb_id, is_extended_only_id,
+    validate_structure_id, classic_pdb_id, is_extended_only_id,
     validate_input_file, InvalidPathError, UnsupportedFileTypeError,
-    open_path_in_file_manager, AstraSecurityError,
+    open_path_in_file_manager,
 )
 from astra3_structure import (forget_protein_mean_b, inherit_in_chain_decision, set_in_chain_residue_policy,
     residue_ca_bfactors, b_factor_summary, keep_first_model, structure_run_notes,
@@ -178,15 +154,14 @@ from astra3_structure import (forget_protein_mean_b, inherit_in_chain_decision, 
     reset_session_state, refresh_terminus_surface_metrics, reference_tie_scores,
     build_overlay_report, apply_terminus_colors, process_structure,
     build_protein_information, purge_orphaned_state, analyze_ligand_environment,
-    compare_termini, draw_termini_vectors, recompute_terminus_metrics,
+    compare_termini, recompute_terminus_metrics,
     prompt_terminus_mismatch, show_termini_offset_and_confirm, match_terminus_windows,
     reconcile_termini_coloring, refresh_terminus_residue_cache,
     detect_intra_structure_homomer, prompt_intra_structure_homomer_reduction,
-    create_intra_structure_reduced_object, apply_intra_structure_homomer_reduction,
+    apply_intra_structure_homomer_reduction,
     get_chain_sequences, compute_sequence_metrics, match_chains_across_structures,
     compute_overall_sequence_identity, compute_whole_structure_sequence_metrics,
-    prompt_overall_sequence_identity, classify_overall_sequence_identity,
-    reset_sequence_identity_decisions,
+    prompt_overall_sequence_identity, reset_sequence_identity_decisions,
     TERMINUS_SEARCH_EXTRA_ADVANCED, LARGE_TERMINUS_OFFSET,
     validate_terminus_selections, validate_terminus_coloring,
     validate_metrics_match_selection, validate_no_scratch_objects, purge_scratch_objects,
@@ -275,24 +250,15 @@ MISSING_RESIDUES_SOURCE_LABEL = {
 
 
 def header_info_from_downloaded_files(new_files, fetched_format, fetched_id=None, before_files=None):
-    """Read a fetched structure's downloaded file (if any survived --
-    AST_ID/imported structures never reach this, see callers) and parse
-    header_info + the missing-residues map from it, using whichever
-    parser matches the format that was actually fetched.
+    """Header information and the missing-residues map from a fetched
+    structure's downloaded file (imported structures do not come through here).
 
-    fetched_format is the ACTUAL format obtained (from
-    load_structure_source's returned metadata) -- not necessarily what
-    was requested, since a request can silently fall back to the other
-    format (see load_structure_source's own disclosure print for that
-    case). Using the true fetched format here, rather than the
-    requested one, is what keeps header parsing from silently coming
-    back empty whenever a fallback occurred: a -mmCIF request that fell
-    back to legacy PDB must still be parsed as PDB text, and vice versa.
+    fetched_format is the format actually obtained (load_structure_source's
+    metadata), which can differ from the one requested when a fetch fell back
+    to the other format; the file is parsed as what it is.
 
-    Returns (header_info, downloaded_files_deleted) where header_info
-    already has 'missing_residues_map' and 'missing_residues_source'
-    populated, matching every existing header_info consumer's expected
-    shape.
+    Returns (header_info, downloaded_files_deleted); header_info includes
+    'missing_residues_map' and 'missing_residues_source'.
     """
     ext = ".cif" if fetched_format == "cif" else ".pdb"
     raw_text = ""
@@ -348,12 +314,9 @@ def header_info_from_downloaded_files(new_files, fetched_format, fetched_id=None
     return header_info, deleted
 
 
-# A PDB entry code is four characters (wwPDB accession format: four
-# characters, the first a digit). PyMOL's own fetch reads a fifth character as
-# a chain within that entry, so "1AKEA" resolves to chain A of entry 1AKE --
-# a different analysis from the whole entry, run without ever saying so. The
-# five-character form is a real, useful thing to ask for; it just should not
-# be assumed.
+# A PDB entry code is four characters. PyMOL's fetch reads a fifth as a
+# chain, so "1AKEA" is chain A of 1AKE: a different analysis from the whole
+# entry, and it should be asked for, not assumed.
 ENTRY_PLUS_CHAIN_RE = re.compile(r"^([0-9][A-Za-z0-9]{3})([A-Za-z0-9])$")
 
 
@@ -386,9 +349,8 @@ def prompt_chain_suffix(structure_id):
         try:
             choice = input().strip().lower()
         except KeyboardInterrupt:
-            # Taken as typed: the smaller of the two analyses, and the one the
-            # command literally asked for. The cancellation checkpoint that
-            # follows the load stops the run in either case.
+            # Taken as typed. The cancellation checkpoint after the load stops the run
+            # either way.
             print("", flush=True)
             return structure_id
         if choice in ("y", "yes"):
@@ -440,7 +402,7 @@ def _starts_with_bom(path):
     try:
         with opener(path, "rb") as fh:
             return fh.read(3) == b"\xef\xbb\xbf"
-    except Exception:  # noqa: BLE001 -- the load itself reports an unreadable file
+    except Exception:  # noqa: BLE001 # the load itself reports an unreadable file
         return False
 
 
@@ -624,13 +586,10 @@ def load_structure_source(structure_id, requested_format="pdb"):
     format to choose. Legacy default ("pdb") preserves every existing
     call site's behavior exactly when a caller doesn't pass this.
     """
-    # Validate BEFORE resolve_structure/cmd.fetch ever see this value -- this
-    # is the one chokepoint every fetch path (single-ID, OVERLAY, TERMINI,
-    # BATCH) funnels through, so validating here covers all of them at once
-    # rather than needing a check at each call site. A syntactically AST-
-    # shaped ID that isn't actually registered is rejected here too, rather
-    # than silently falling through to be treated as a literal PDB ID and
-    # handed to cmd.fetch() under that string. See astra3_security.py.
+    # Every fetch path (single ID, OVERLAY, TERMINI, BATCH) passes through here,
+    # so the ID is validated once, before resolve_structure or cmd.fetch see it.
+    # An AST-shaped ID that is not registered is rejected rather than fetched.
+    # See astra3_security.py.
     typed_id = str(structure_id or "").strip()
     structure_id = validate_structure_id(structure_id, known_ast_ids=loaded_structures)
     if classic_pdb_id(typed_id):
@@ -680,16 +639,11 @@ def load_structure_source(structure_id, requested_format="pdb"):
         settle_session_labels(obj, resolved)
         return obj, resolved
     else:
-        # Re-running the same structure ID within one PyMOL session can leave
-        # a stale object of the same name in the scene (with its own leftover
-        # camera/view state) from a previous run. cmd.fetch's exact behavior
-        # when an object of that name already exists is version-dependent --
-        # rather than relying on it, explicitly clear any colliding object
-        # first so every fetch is guaranteed to produce a genuinely fresh
-        # object. This prevents images intermittently saving blank: a
-        # stale/empty selection during orient+zoom silently leaves the camera
-        # wherever the previous run left it, and ray-tracing then captures
-        # nothing but background.
+        # A re-run in the same PyMOL session can leave an object of the same name
+        # with its old view state, and cmd.fetch's handling of that varies by
+        # version. Deleting it first guarantees a fresh object; a stale or empty
+        # selection during orient and zoom leaves the camera where it was, and the
+        # image comes out blank.
         likely_name = structure_id.strip().lower()
         for stale_name in (likely_name, likely_name.upper()):
             if stale_name in cmd.get_names("objects"):
@@ -697,36 +651,15 @@ def load_structure_source(structure_id, requested_format="pdb"):
                     cmd.delete(stale_name)
                 except Exception:
                     pass
-        # Deleting a stale object above does not automatically clean up named
-        # selections that were built from its atoms (e.g. the per-ligand/per-
-        # ion selections process_structure creates, "lig_NDP_1" etc.) -- PyMOL
-        # selections are atom-membership sets, so a selection built purely
-        # from the deleted object's atoms collapses to zero atoms once those
-        # atoms are gone, but the name itself still exists in
-        # cmd.get_names("selections") until something explicitly removes it.
-        # purge_orphaned_state() (called once at the very start of
-        # _run_single_analysis, before this function even runs) cannot catch
-        # this: it runs BEFORE the stale object above is deleted, so at the
-        # moment it ran, those selections still had real atoms and correctly
-        # looked alive. If left alone, a re-run's freshly created selection of
-        # the exact same name can then collide with this now-empty stale entry
-        # (process_structure's own collision check looks at
-        # cmd.get_names("selections"), which still lists it), or a PyMOL-
-        # internal reference to the zero-atom stale selection can surface as a
-        # Selector-Error during later geometry queries (e.g.
-        # analyze_ligand_environment's "byres (X around 4.0)" selections) that
-        # reused the id but got the collision-renamed variant instead. Re-
-        # running the same zero-atom sweep here, right after the deletion that
-        # actually creates the zero-atom selections, closes that gap.
+        # Selections built from the deleted object's atoms (lig_NDP_1 and so on)
+        # now have no atoms but keep their names, and purge_orphaned_state ran
+        # before the deletion. A re-run's selection of the same name would collide
+        # with them, or a later geometry query would hit a Selector-Error. Sweep
+        # again now.
         purge_orphaned_state()
-        # requested_format picks which fetch is tried first; the other format
-        # is always the fallback if the first attempt returns no new objects.
-        # This preserves the pre-existing PDB-first, mmCIF-fallback behavior
-        # when requested_format="pdb" (the default, used by every caller that
-        # doesn't pass -mmCIF), and mirrors it (mmCIF-first, PDB-fallback)
-        # when the user explicitly asked for mmCIF -- so a -mmCIF request that
-        # RCSB genuinely can't serve as mmCIF still has the same recovery path
-        # legacy PDB requests already had, rather than a one-way street.
+        # requested_format is tried first and the other format is the fallback when
+        # it yields no objects: PDB then mmCIF by default, mmCIF then PDB with
+        # -mmCIF.
         if is_extended_only_id(structure_id):
             requested_format = "cif"  # extended-ID entries are issued in mmCIF only
         first_format = "cif" if requested_format == "cif" else "pdb"
@@ -739,15 +672,9 @@ def load_structure_source(structure_id, requested_format="pdb"):
         new_objects = [o for o in after_objects if o not in before_objects]
         fetched_format = first_format if new_objects else None
         if len(new_objects) == 0:
-            # Neither format is guaranteed to exist for every current RCSB
-            # entry independent of the other (legacy PDB-format files in
-            # particular aren't mirrored for some entries, regardless of the
-            # structure's age or size) -- retry once with the other format
-            # before concluding the ID itself is invalid. mmCIF is universally
-            # available for every current PDB entry, so a pdb-first attempt
-            # that fails here almost always recovers on the cif retry; a cif-
-            # first attempt (explicit -mmCIF request) recovers on the rarer
-            # case where mmCIF itself is unavailable but legacy PDB still is.
+            # Either format can be missing for an entry (legacy PDB files are not
+            # mirrored for some), so retry with the other before deciding the ID is
+            # invalid.
             for stale_name in (likely_name, likely_name.upper()):
                 if stale_name in cmd.get_names("objects"):
                     try:
@@ -766,25 +693,18 @@ def load_structure_source(structure_id, requested_format="pdb"):
         after_files = set(os.listdir(FETCH_DIR))
         new_files = after_files - before_files
         if len(new_objects) == 0:
-            # A failed fetch has two very different causes and the fix differs:
-            # a wrong ID is a typo, no network is an environment problem. The
-            # message used to name only the first, which sends someone to
-            # re-check an ID that was never wrong.
+            # A wrong ID and no network need different fixes, so the message names both.
             raise Exception(describe_fetch_failure(structure_id))
 
-        # An object exists -- but it may hold no atoms. PyMOL's fetch accepts a
-        # trailing chain identifier, so a mistyped 5-character id like "1ERTJ"
-        # is read as entry 1ERT plus chain J. When that chain does not exist it
-        # prints "no such chain" and leaves a zero-atom object behind, which
-        # every later step processed without complaint: the run reported
-        # success, the interface showed a completion notification, and a
-        # history entry appeared for an analysis that never had a structure in
-        # it.
+        # An object can exist with no atoms: fetch reads a fifth character as a
+        # chain, so a mistyped "1ERTJ" is entry 1ERT, chain J. When the chain does
+        # not exist PyMOL prints "no such chain" and leaves an empty object, which
+        # would otherwise be reported as a successful analysis.
         loaded_atoms = 0
         for candidate in new_objects:
             try:
                 loaded_atoms += cmd.count_atoms(f"%{candidate}")
-            except Exception:  # noqa: BLE001 -- an unreadable object counts as empty
+            except Exception:  # noqa: BLE001 # an unreadable object counts as empty
                 continue
         if loaded_atoms == 0:
             for empty_name in new_objects:
@@ -796,18 +716,13 @@ def load_structure_source(structure_id, requested_format="pdb"):
             if len(structure_id) == 5:
                 hint = (f" A 5-character id is read as a 4-character entry plus a chain, so "
                         f"'{structure_id}' means entry '{structure_id[:4]}' chain "
-                        f"'{structure_id[4:]}' -- an entry without that chain loads nothing.")
+                        f"'{structure_id[4:]}'; an entry without that chain loads nothing.")
             raise Exception(f"'{structure_id}' did not load any atoms; check the ID.{hint}")
 
         obj = new_objects[-1]
         active_operation_objects.add(obj)
         if fetched_format != requested_format:
-            # The requested format wasn't what actually got used (fell back to
-            # the other one) -- disclose this rather than silently
-            # substituting, consistent with Astra3 never silently applying a
-            # different decision than what was asked for. Doesn't block the
-            # run; the structure still loads and analysis still proceeds on
-            # whichever format was actually obtained.
+            # The other format was used; say so. The run continues.
             fmt_label = {"pdb": "legacy PDB", "cif": "mmCIF"}
             print(f"{YELLOW}{structure_id}: requested {fmt_label[requested_format]} format was not available; "
                   f"fetched as {fmt_label[fetched_format]} instead.{RESET}", flush=True)
@@ -820,9 +735,9 @@ def load_structure_source(structure_id, requested_format="pdb"):
 
 
 def _run_single_analysis(structure_id, is_test=False, image_quality="medium", image_skip=False, report_skip=False, render_only=False, csv_export=False, homomer_skip_state=None, requested_format="pdb", homomer_auto_decision=None, homomer_priority_order=None, homomer_assembly_fallback=None):
-    # Clean slate. Anything left by a previous run in this same PyMOL session
-    # -- renamed reduction products, per-chain selections, CGO overlays --
-    # made a re-run behave differently from a first run.
+    # Clear anything a previous run in this PyMOL session left (reduction
+    # products, per-chain selections, CGO overlays), so a re-run behaves like a
+    # first run.
     cleared = reset_session_state()
     if cleared:
         print(f"{YELLOW}Cleared {len(cleared)} object(s)/selection(s) left by a previous run.{RESET}",
@@ -837,19 +752,12 @@ def _run_single_analysis(structure_id, is_test=False, image_quality="medium", im
         return None
     check_for_cancellation()
     obj = obj.upper()
-    # obj is uppercased for display and for naming the output folder. It is
-    # NOT necessarily the literal name PyMOL holds: a fetched structure is
-    # created under the ID as passed, but an IMPORTED one is named after its
-    # file, so "6f7r.cif" loads as "6f7r" and this makes obj "6F7R".
-    #
-    # That is safe for everything selection-based below, because PyMOL matches
-    # names case-insensitively inside the selection language. Any code that
-    # compares obj against cmd.get_names() must do the same -- see
-    # render_views, which compared exactly and aborted every imported run.
-    #
-    # Renaming the object to match was tried and does not work: PyMOL treats
-    # the two spellings as the same name, so a case-only set_name reports
-    # success and changes nothing.
+    # obj is uppercased for display and the folder name; it is not always the
+    # name PyMOL holds. An imported file's object is named after the file, so
+    # "6f7r.cif" loads as "6f7r" and obj is "6F7R". Selections match names
+    # case-insensitively, but any comparison with cmd.get_names() must too (see
+    # render_views). Renaming does not help: PyMOL treats both spellings as the
+    # same name, so a case-only set_name changes nothing.
 
     header_info = {}
     if resolved.get("type") == "PDB_ID":
@@ -866,26 +774,18 @@ def _run_single_analysis(structure_id, is_test=False, image_quality="medium", im
     measure.register_unobserved(obj, header_info.get("missing_residues_map"))
 
     output_dir, session_dir, images_dir = get_output_folders(obj, is_test=is_test)
-    # Output folders are named from the structure IDs, so re-running the same
-    # analysis reuses this folder. Clear Astra3's own images from any previous
-    # run first, or its output sits alongside this run's and is presented as
-    # part of it.
-    report_cleared_images(clear_stale_run_images(images_dir), images_dir)
 
-    # The Viewer page's own "Show waters" toggle is hidden accordingly (see
-    # ViewerPage's own `selected?.kind === "single"` gate in app.jsx) so it
-    # doesn't promise something that isn't actually being delivered.
+    # The Viewer's Show waters toggle is hidden for these runs (see ViewerPage
+    # in app.jsx).
     models_in_file = keep_first_model(obj)
     blank_chain_label = label_blank_chains(obj)
     occupancy_filled = fill_missing_occupancy(obj)
     process_result = process_structure(obj, deposited_unobserved=mmcif_unobserved_map(header_info))
     check_for_cancellation()
 
-    # Intra-structure homomer detection: flags chains within THIS structure
-    # that are near-identical (e.g. crystallographic copies of the same
-    # protein), and -- if the user approves -- actually reduces the loaded
-    # object down to just the kept chain(s), the same way OVERLAY/TERMINI
-    # already do.
+    # Flags near-identical chains within this structure (crystallographic
+    # copies) and, if the person agrees, reduces the object to the kept chains,
+    # as OVERLAY and TERMINI do.
     chain_reduction_applied = []
     homomer_clusters = []
     homomer_rule = None
@@ -910,11 +810,10 @@ def _run_single_analysis(structure_id, is_test=False, image_quality="medium", im
         print(f"{YELLOW}Intra-structure homomer detection encountered an error and will be skipped: {e}{RESET}", flush=True)
     check_for_cancellation()
 
-    # Every report below describes the analyzed object. When chains were
-    # removed by homomer reduction, the deposited entry's missing-residue
-    # records for those chains no longer describe anything that was analyzed,
-    # and the reduction itself has to be recorded so readers know the
-    # results cover one chain chosen from several.
+    # The reports describe the analysed object. After homomer reduction, the
+    # missing-residue records of removed chains no longer apply, and the
+    # reduction itself is recorded so readers know the results cover one chain
+    # chosen from several.
     removed_chains = {removed for removed, _kept in chain_reduction_applied}
     missing_residues_all = header_info.get("missing_residues_map")
     if removed_chains and isinstance(missing_residues_all, dict):
@@ -949,14 +848,14 @@ def _run_single_analysis(structure_id, is_test=False, image_quality="medium", im
     ligand_environment = analyze_ligand_environment(obj, process_result["ligand_info"])
     check_for_cancellation()
     if report_skip or render_only:
-        print(f"{YELLOW}Report skipped by user (-skipreport).{RESET}", flush=True)
+        print(f"{YELLOW}Report skipped by user ({'-ro' if render_only else '-skipreport'}).{RESET}", flush=True)
     else:
         annotations = collect_annotations(header_info, process_result.get("chain_list", []))
         txt_n_terms, txt_c_terms = [], []
         try:
             cmd.iterate(process_result["n_term_name"], "items.append((chain, resi))", space={"items": txt_n_terms})
             cmd.iterate(process_result["c_term_name"], "items.append((chain, resi))", space={"items": txt_c_terms})
-        except Exception:  # noqa: BLE001 -- cross-checks simply find no terminus overlaps
+        except Exception:  # noqa: BLE001 # cross-checks simply find no terminus overlaps
             pass
         annotation_notes = annotation_warnings(obj.upper(), annotations["file"], annotations["rcsb"],
                                                txt_n_terms, txt_c_terms, ligand_environment,
@@ -994,7 +893,7 @@ def _run_single_analysis(structure_id, is_test=False, image_quality="medium", im
         print(f"{RED}Session save failed: {str(e)}{RESET}", flush=True)
 
     if image_skip or render_only:
-        print(f"{YELLOW}Images skipped by user (-skipimage). Report and session generation complete.{RESET}", flush=True)
+        print(f"{YELLOW}Images skipped by user ({'-ro' if render_only else '-skipimage'}).{RESET}", flush=True)
     else:
         os.makedirs(images_dir, exist_ok=True)
         take_pictures(obj, images_dir, image_quality=image_quality)
@@ -1108,7 +1007,7 @@ def run_single_analysis(structure_id, is_test=False, image_quality="medium", ima
         cancel_active_operation()
         print(f"{YELLOW}Analysis cancelled. Cleaning up and returning to the PDB prompt.{RESET}", flush=True)
         return None
-    except Exception as e:  # noqa: BLE001 -- one structure's failure must not end the session
+    except Exception as e:  # noqa: BLE001 # one structure's failure must not end the session
         print(f"{RED}Analysis of {structure_id} failed: {e}{RESET}", flush=True)
         return None
     finally:
@@ -1130,7 +1029,7 @@ class OverlayRequest:
     render_only: bool = False
     csv_export: bool = False
     format_map: dict = None  # {structure_id_upper: "pdb"|"cif"}, from a -mmCIF flag
-    homomer_auto_decision: str = None  # "reduce"|"keep"|"assembly"|None -- see prompt_intra_structure_homomer_reduction's own auto_decision
+    homomer_auto_decision: str = None  # "reduce", "keep", "assembly" or None; see prompt_intra_structure_homomer_reduction
     homomer_priority_order: list = None  # see rank_homomer_chain_by_priority
     homomer_assembly_fallback: str = None  # "ask"|"reduce"|"keep"|None, for "assembly"
 
@@ -1154,12 +1053,10 @@ class OverlayOperationRegistry:
 
 class OverlayExecution:
     """Shared state and primitives used by every registered overlay operation."""
-    # Same thresholds and reasoning as TERMINI's intra-structure homomer
-    # detector (INTRA_HOMOMER_IDENTITY_THRESH/COVERAGE_THRESH in
-    # astra3_structure.py): identity and coverage, both computed over the
-    # resv-matched overlap via the shared compute_sequence_metrics, are
-    # sufficient on their own to determine "same chain, different resolved
-    # range".
+    # The same thresholds as TERMINI's intra-structure detector
+    # (INTRA_HOMOMER_IDENTITY_THRESH and COVERAGE_THRESH in astra3_structure.py):
+    # identity and coverage over the resv-matched overlap
+    # (compute_sequence_metrics).
     HOMOMER_IDENTITY_THRESH = 0.98
     HOMOMER_COVERAGE_THRESH = 0.95
 
@@ -1259,27 +1156,10 @@ class OverlayExecution:
                 b_values = [b for _c, _r, _n, b in residue_ca_bfactors(obj)]
                 self.structure_data[obj] = {
                     "pdb_id": display_name,
-                    # The literal token the user typed for this structure
-                    # (e.g. "AST-5391" for an imported/offline file), kept
-                    # separately from "pdb_id" above. for an AST-XXXX import,
-                    # "pdb_id" here is resolve_structure()'s own display_name,
-                    # which for an import is the ORIGINAL FILENAME stored at
-                    # register_structure() time (see astra3.py's IMPORT
-                    # handler), not the AST-XXXX id itself, and "obj" is
-                    # whatever object name load_structure_source() derived
-                    # from that (also not the AST-XXXX id). The reference-
-                    # structure lookup below only checked pdb_id/obj, so
-                    # whenever the FIRST structure in an OVERLAY/TERMINI
-                    # request was specified by its AST-XXXX id, the only way
-                    # to reference an imported, offline, or unpublished .pse
-                    # structure at all (there is no real PDB ID to type for
-                    # one), that lookup could never match, even though both
-                    # structures had just finished processing successfully
-                    # seconds earlier. This is not specific to a structure's
-                    # file happening to share a name with a real published PDB
-                    # entry; it reproduces for any AST-XXXX reference,
-                    # including a genuinely unpublished file with no real ID
-                    # at all.
+                    # The token as typed ("AST-5391" for an import), kept apart from pdb_id. For
+                    # an import, pdb_id is the original filename from register_structure and
+                    # obj the object name derived from it, so the reference lookup below also
+                    # matches on this; an imported structure can only be named by its AST ID.
                     "requested_id": structure_id,
                     "header_info": header_info,
                     "process_result": process_result,
@@ -1314,9 +1194,7 @@ class OverlayExecution:
         return get_chain_sequences(obj, chains)
 
     def _compute_sequence_metrics(self, seq_a, seq_b):
-        # Delegates to the shared, resv-aware implementation in
-        # astra3_structure.py (compute_sequence_metrics) -- see
-        # _get_chain_sequences above for why the old local copy was removed.
+        # See compute_sequence_metrics in astra3_structure.py.
         return compute_sequence_metrics(seq_a, seq_b)
 
     def detect_homomer_reduction_candidates(self):
@@ -1435,7 +1313,9 @@ class OverlayExecution:
                 # display and object names are resolved.
                 if obj == requested or self.structure_data[obj]["pdb_id"].upper() == requested or self.structure_data[obj].get("requested_id", "") == requested:
                     return obj, "Manually specified by user (-reference" + requested + ")."
-            self.warnings.append("Requested reference '" + requested + "' was not loaded; automatic selection was used.")
+            not_loaded = "Requested reference '" + requested + "' was not loaded; automatic selection was used."
+            print(f"{YELLOW}{not_loaded}{RESET}", flush=True)
+            self.warnings.append(not_loaded)
         # Shared with TERMINI via astra3_core so both commands select a
         # reference by the same rule rather than each having its own.
         ligand_counts = {obj: len(self.structure_data[obj]["process_result"]["ligand_info"]) for obj in loaded}
@@ -1483,11 +1363,9 @@ class OverlayExecution:
             check_for_cancellation()
             if obj == reference_obj:
                 continue
-            # Whole-structure sequence identity check, same severity bands and
-            # confirm-to-proceed behavior as TERMINI's equivalent check -- see
-            # compute_overall_sequence_identity's docstring. A warning only;
-            # declining skips alignment for this one comparison structure, the
-            # rest of the run continues.
+            # Whole-structure identity check with the same bands and confirmation as
+            # TERMINI (compute_overall_sequence_identity). Declining skips alignment for
+            # this structure only.
             cmp_chain_list = self.structure_data[obj]["process_result"].get("chain_list", [])
             try:
                 overall_identity = compute_overall_sequence_identity(reference_obj, ref_chain_list, obj, cmp_chain_list)
@@ -1553,7 +1431,6 @@ class OverlayExecution:
         check_for_cancellation()
         ids = [self.structure_data[obj]["pdb_id"] for obj in self.loaded_objects]
         output_dir, session_dir, images_dir = get_overlay_output_folders(ids)
-        report_cleared_images(clear_stale_run_images(images_dir), images_dir, self.warnings)
         for tmp in list(self.reduction_temp_objects):
             try:
                 if tmp in cmd.get_names("objects"):
@@ -1579,13 +1456,10 @@ class OverlayExecution:
                 render_views(selection_expr, images_dir, self.request.image_quality,
                              frame_selection=selection_expr, label="aligned overlay")
                 check_for_cancellation()
-                # Per-pair sets, one subfolder per comparison structure, the
-                # same layout TERMINI writes. The combined shot above answers
-                # "do these all superimpose"; it cannot answer "where does
-                # THIS one differ from the reference", because with more than
-                # two structures every comparison is drawn over every other.
-                # render_views draws only what its selection names, so each
-                # pass here is genuinely that pair alone.
+                # Per-pair images, one subfolder per comparison, as TERMINI writes. The
+                # combined shot shows whether they all superimpose; with more than two
+                # structures it cannot show where one differs from the reference.
+                # render_views draws only its selection, so each pass is that pair alone.
                 ref_pid = self.structure_data[reference_obj]["pdb_id"]
                 # With two structures there is one comparison, and the combined
                 # views above already show exactly that pair; drawing it again
@@ -1699,13 +1573,9 @@ class AlignmentOverlayHandler:
                 return None
             execution.load_and_prepare(structure_ids, format_map=request.format_map)
 
-            # Intra-structure homomer detection: catches a structure with
-            # redundant chains WITHIN ITSELF (e.g. a homodimer where chain A
-            # and chain B are the same protein) -- a different, narrower
-            # question than detect_homomer_reduction_candidates below, which
-            # only compares chain counts ACROSS structures and can never fire
-            # when, say, every loaded structure has the same number of chains,
-            # or only one structure is loaded so far.
+            # Redundant chains within one structure (a homodimer's identical A and B).
+            # detect_homomer_reduction_candidates below only compares chain counts
+            # across structures, so it misses these.
             for obj in list(execution.loaded_objects):
                 d = execution.structure_data[obj]
                 try:
@@ -1772,18 +1642,14 @@ OVERLAY_OPERATIONS.register("ALIGN", AlignmentOverlayHandler())
 class TerminiExecution:
     """Comparative N-/C-terminus structural analysis (the TERMINI command).
 
-    Reuses OverlayExecution purely as a loading/alignment engine (composition,
-    not inheritance) -- OverlayExecution already knows how to resolve
-    AST-XXXX/PDB IDs, load structures, build structure_data, and run
-    cmd.align, none of which is specific to OVERLAY's own reference-selection
-    or homomer-reduction logic. TerminiExecution only adds what's actually
-    new: per-chain terminus geometry (via compare_termini), visualization,
-    and the TERMINI-specific output artifacts.
+    Uses an OverlayExecution to resolve IDs, load structures, choose the
+    reference (-reference, otherwise the structure with the fewest bound
+    ligands, as OVERLAY does) and superpose, and adds the per-chain terminus
+    geometry (compare_termini), the visualizations and TERMINI's own outputs.
 
-    The first structure_id is always the reference; every other structure
-    is independently aligned and compared to it. No pairwise matrix is
-    computed (unlike OVERLAY) since TERMINI's comparisons are always
-    reference-vs-each, never comparison-vs-comparison.
+    Every other structure is compared with the reference; there is no
+    pairwise matrix, since no comparison is made between two non-reference
+    structures.
     """
 
     def __init__(self, structure_ids, image_quality="medium", image_skip=False,
@@ -1810,12 +1676,9 @@ class TerminiExecution:
         self.results = {}       # {comparison_obj: {chain: {"N":..., "C":...}}}
         self.warnings = []
         self.failed_comparisons = []
-        # {structure_id_upper: [{"readout_name":..., "value":...,
-        # "terminus":..., "units":...}, ...]} Auto-detected from readouts.csv
-        # in the working folder, if present (see load_functional_readouts) --
-        # empty dict when no such file exists, so every downstream consumer
-        # can treat "no readouts" and "file not found" identically without a
-        # special case.
+        # {structure_id_upper: [{"readout_name", "value", "terminus", "units"},
+        # ...]} from readouts.csv in the working folder (load_functional_readouts);
+        # empty when there is no such file.
         self.functional_readouts = {}
 
     def _recolor_for_reference(self, reference_obj):
@@ -1892,9 +1755,7 @@ class TerminiExecution:
         # the TERMINI report as well.
         self.warnings.extend(w for w in self._overlay_engine.warnings if w not in self.warnings)
 
-        # Checked here for every structure TERMINI actually loaded (reference
-        # and comparisons alike), before alignment, so the user is informed
-        # regardless of which structure the redundancy is in.
+        # For every structure TERMINI loaded, reference included, before alignment.
         for obj in list(self._overlay_engine.loaded_objects):
             d = self._overlay_engine.structure_data[obj]
             try:
@@ -1927,11 +1788,8 @@ class TerminiExecution:
                       f"and will be skipped: {e}{RESET}", flush=True)
         check_for_cancellation()
 
-        # Reference selection matches OVERLAY: the structure with the fewest
-        # bound ligands, unless one was named with -reference.
-        #
-        # Fewest ligands is the same rule and the same reasoning as OVERLAY --
-        # the less ligand-encumbered structure is the more neutral baseline.
+        # Reference selection matches OVERLAY: the structure with the fewest bound
+        # ligands, the more neutral baseline, unless one was named with -reference.
         reference_obj, reference_reason = self._overlay_engine.choose_reference()
         self.warnings.extend(w for w in self._overlay_engine.warnings if w not in self.warnings)
         if reference_obj is None:
@@ -1940,7 +1798,7 @@ class TerminiExecution:
             return None
         self.reference_reason = reference_reason
         ref_pid = self._overlay_engine.structure_data[reference_obj]["pdb_id"]
-        print(f"{GREEN}Reference structure: {ref_pid} -- {reference_reason}{RESET}", flush=True)
+        print(f"{GREEN}Reference structure: {ref_pid}. {reference_reason}{RESET}", flush=True)
 
         comparison_objs = [o for o in self._overlay_engine.loaded_objects if o != reference_obj]
         if not comparison_objs:
@@ -1969,15 +1827,10 @@ class TerminiExecution:
 
             cmp_chain_list = cmp_data["process_result"]["chain_list"]
 
-            # Whole-structure sequence identity check: independent of the per-
-            # chain matching below, this asks the broader question "are these
-            # plausibly the same protein at all", with a severity-banded
-            # warning (and, for low-identity bands, a confirm-to-proceed
-            # prompt) since alignment/displacement/SASA /B-factor metrics all
-            # become hard to interpret meaningfully once two structures aren't
-            # actually the same protein or a close homolog. Purely a warning
-            # -- declining skips only this one comparison, the rest of the run
-            # continues normally.
+            # Whole-structure identity check, separate from the per-chain matching
+            # below: are these plausibly the same protein? Displacement, SASA and
+            # B-factor comparisons mean little otherwise. Low bands ask for
+            # confirmation; declining skips this comparison only.
             try:
                 overall_identity = compute_overall_sequence_identity(reference_obj, ref_chain_list, cmp_obj, cmp_chain_list)
                 cmp_data["whole_structure_sequence"] = \
@@ -2006,10 +1859,8 @@ class TerminiExecution:
             if not chain_pairs:
                 skip_msg = (cmp_data["pdb_id"] + ": no protein chains could be matched to the reference "
                            "(by ID or by sequence); TERMINI comparison skipped.")
-                # Printed immediately, not just recorded for the report -- a
-                # comparison being dropped entirely is a severe outcome a user
-                # needs to notice in the moment, not discover later by opening
-                # the HTML/JSON after the run has finished.
+                # Printed now as well as recorded: a dropped comparison should be noticed
+                # during the run.
                 print(f"{RED}{skip_msg}{RESET}", flush=True)
                 self.warnings.append(skip_msg)
                 self.failed_comparisons.append(cmp_data["pdb_id"])
@@ -2053,10 +1904,8 @@ class TerminiExecution:
                 approved_termini = []
                 auto_held = {}
                 if offset_needed:
-                    # One combined summary, as before, but the answer is
-                    # recorded per terminus: the two ends can genuinely differ
-                    # (one lines up, the other does not), and forcing a single
-                    # decision on both discards that.
+                    # One combined summary, but the answer is recorded per terminus: one end
+                    # can line up while the other does not.
                     decision = show_termini_offset_and_confirm(
                         ref_data["pdb_id"], cmp_data["pdb_id"], ref_chain,
                         offset_needed.get("N"), offset_needed.get("C"),
@@ -2132,8 +1981,8 @@ class TerminiExecution:
                                     per_chain_results[chain_key][terminus] = recomputed
                                 else:
                                     print(f"{YELLOW}Corrected window for {cmp_data['pdb_id']} chain {cmp_chain} "
-                                          f"({terminus}-terminus) was too short to recompute numeric metrics "
-                                          f"-- numbers remain on the original naive window.{RESET}", flush=True)
+                                          f"({terminus}-terminus) was too short to recompute numeric metrics; "
+                                          f"the numbers are for the uncorrected window.{RESET}", flush=True)
                             except Exception as e:
                                 print(f"{YELLOW}Could not recompute {terminus}-terminus metrics for "
                                       f"{cmp_data['pdb_id']} chain {cmp_chain}: {e}{RESET}", flush=True)
@@ -2152,14 +2001,10 @@ class TerminiExecution:
                                    "in this run is measured against the trimmed reference." if offset < 0 else "")
                             )
                             if abs(offset) >= LARGE_TERMINUS_OFFSET:
-                                # An offset this large is not terminal
-                                # disorder: the two structures begin at
-                                # different points in the construct (an
-                                # expression tag, a cloning scar, a different
-                                # domain boundary). Said plainly, because the
-                                # corrected window is then measuring a region
-                                # one structure has and the other does not
-                                # start until much later.
+                                # An offset this large is not terminal disorder: the structures start at
+                                # different points in the construct (a tag, a cloning scar, a different
+                                # domain boundary), so the corrected window measures a region one
+                                # structure has and the other only starts much later.
                                 self.warnings.append(
                                     f"{cmp_data['pdb_id']} chain {cmp_chain} (ref chain {ref_chain}): the "
                                     f"{terminus}-terminus offset of {abs(offset)} residues is larger than ordinary "
@@ -2185,12 +2030,9 @@ class TerminiExecution:
                                 f"on the original naive window."
                             )
                     elif match_result.get("identity", 1.0) < 1.0:
-                        # Offset is 0 (no shift needed) but the termini still
-                        # aren't perfectly identical -- e.g. a single
-                        # substituted residue, not an insertion or deletion.
-                        # Always reported now, with the severity of the
-                        # wording still scaled by how low identity actually is
-                        # via prompt_terminus_mismatch/ confident_match.
+                        # No shift needed, but the termini still differ (a substitution rather than
+                        # an indel). Reported, with the wording scaled by identity
+                        # (prompt_terminus_mismatch, confident_match).
                         prompt_terminus_mismatch(ref_data["pdb_id"], cmp_data["pdb_id"], ref_chain, terminus,
                                                  match_result, window=self.tip_n + self.orientation_n,
                                                  cmp_chain=cmp_chain)
@@ -2232,14 +2074,11 @@ class TerminiExecution:
             refresh_terminus_residue_cache(self._overlay_engine.structure_data, reference_obj)
             refresh_terminus_residue_cache(self._overlay_engine.structure_data, cmp_obj)
 
-            # Checkpoint: measurement is finished and any approved offset
-            # correction has been applied, but nothing has been rendered or
-            # saved yet. This is the last moment at which the session state
-            # and the numbers can still be compared against each other before
-            # both are committed to images, a .pse and a report. A structure
-            # whose terminus selection is empty or has been recolored by a
-            # later step produces a correct-looking report next to a session
-            # that shows something else, which is not detectable afterwards.
+            # Checkpoint: measurement is finished and any offset correction applied,
+            # but nothing is rendered or saved yet. This is the last point where the
+            # session state and the numbers can be checked against each other; an
+            # empty or recoloured terminus selection would otherwise give a
+            # correct-looking report beside a session showing something else.
             problems = []
             for role, obj_name in (("reference", reference_obj), ("comparison", cmp_obj)):
                 pr = self._overlay_engine.structure_data[obj_name].get("process_result")
@@ -2259,26 +2098,6 @@ class TerminiExecution:
             report_state_problems(problems, self.warnings, checkpoint="after terminus reconciliation")
 
         return reference_obj, comparison_objs
-
-    def draw_visualizations(self):
-        """Draw and return {comparison_obj: cgo_name} for every comparison
-        that produced at least one measurable terminus.
-
-        NOTE: this method is not currently called by the live TERMINI
-        command handler (which draws/renders/deletes its own CGO inline,
-        per comparison, immediately after rendering -- see the TERMINI
-        command handler's use of draw_termini_vectors directly). Kept for
-        now since removing a class method outright is a bigger, less
-        obviously-safe change than leaving unused code in place; if
-        nothing ever comes to call this, it's a candidate for removal.
-        """
-        drawn = {}
-        for cmp_obj, per_chain_results in self.results.items():
-            cgo_name = "termini_viz_" + cmp_obj
-            result = draw_termini_vectors(cgo_name, per_chain_results)
-            if result:
-                drawn[cmp_obj] = result
-        return drawn
 
     def cleanup(self):
         if self._overlay_engine is not None:
@@ -2307,18 +2126,12 @@ def reproducing_command(name, structure_ids, format_map=None, reference_override
 
 
 def parse_overlay_arguments(tokens):
-    """Returns (pdb_ids, reference_override, format_map).
+    """Returns (pdb_ids, reference_override, format_map), where format_map
+    is {structure_id_upper: "pdb"|"cif"}.
 
-    format_map is {structure_id_upper: "pdb"|"cif"}, built in the same
-    single pass as pdb_ids/reference_override rather than via a second,
-    separate parsing pass over the same tokens (see
-    parse_structure_ids_with_format_flags in astra3_core.py) -- OVERLAY's
-    -reference<ID> / -reference <ID> flag can itself consume a following
-    token as its value, and only this loop actually knows when that
-    happened. Running -mmCIF detection as a fully separate pass over the
-    raw tokens would misread that consumed reference-value token as a
-    structure ID in its own right, double-counting it. Keeping both
-    concerns in one loop is what avoids that.
+    Parsed in one pass: -reference can take the following token as its value
+    ("-reference 1AKE"), and a separate pass for -mmCIF would read that value
+    as a structure ID.
     """
     pdb_ids = []
     reference_override = None
@@ -2356,17 +2169,9 @@ def parse_overlay_invocation(tokens):
 
 
 def _normalize_batch_ids(raw_id_format_pairs):
-    """Normalize a list of (structure_id, format) pairs for BATCH
-    processing -- uppercases each ID, drops anything blank, and removes
-    duplicate IDs while preserving the first occurrence's position (and
-    that occurrence's format), so BATCH processes each requested
-    structure exactly once, in the order the user listed it.
-
-    Takes (id, format) pairs rather than bare ID strings so a per-line
-    '-mmCIF' (inline BATCH) or trailing '-mmCIF' token (BATCH file) can
-    ride along with its ID through deduplication, instead of being
-    handled as a separate parallel list that could drift out of sync
-    with the deduplicated ID list's order/length.
+    """(structure_id, format) pairs for BATCH: IDs upper-cased, blanks
+    dropped, and duplicates removed keeping the first occurrence and its
+    format, so each structure runs once, in the order listed.
     """
     seen = set()
     normalized = []
@@ -2383,13 +2188,12 @@ def _normalize_batch_ids(raw_id_format_pairs):
 
 def parse_batch_file(file_path):
     """Read a BATCH input file: one structure ID per line, blank lines and
-    lines starting with '#' ignored. A line may optionally end with
-    '-mmCIF' (case-insensitive) to request that one structure be fetched
-    as mmCIF, e.g. "9BOX -mmCIF" or "9BOX  -mmCIF  # some note".
+    lines starting with '#' ignored. A line may end with '-mmCIF'
+    (case-insensitive) to fetch that structure as mmCIF, e.g. "9BOX -mmCIF"
+    or "9BOX  -mmCIF  # some note".
 
-    Returns (id_format_pairs, error) where id_format_pairs is a list of
-    (structure_id, "pdb"|"cif") tuples and error is a human-readable
-    string if the file couldn't be read, else None.
+    Returns (id_format_pairs, error): a list of (structure_id, "pdb"|"cif")
+    tuples, and a message if the file could not be read, else None.
     """
     try:
         with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
@@ -2413,10 +2217,8 @@ def parse_batch_file(file_path):
         if tokens and tokens[-1].lower() == MMCIF_FLAG:
             fmt = "cif"
             tokens = tokens[:-1]
-        # Everything remaining on the line is treated as the one structure ID
-        # for that line (a batch file is one ID per line, not a token stream)
-        # -- rejoin defensively in case of stray internal whitespace rather
-        # than silently taking only the first token and dropping the rest.
+        # A batch file is one ID per line; stray internal whitespace is rejoined
+        # rather than the rest of the line dropped.
         sid = " ".join(tokens).strip()
         if sid:
             pairs.append((sid, fmt))
@@ -2439,6 +2241,9 @@ print("", flush=True)
 print(f"{CYAN}Astra3{RESET}{WHITE} > {engine_name()} ready. Script is loaded.{RESET}", flush=True)
 # Read by the desktop app for the engine indicator in its top bar.
 print(f"{WHITE}Engine: {engine_label()}{RESET}", flush=True)
+# The interpreter's own architecture. On an Apple silicon Mac the desktop app
+# reads it to tell an Intel engine, which runs through Rosetta.
+print(f"{WHITE}Python: {platform.python_version()} ({platform.machine()}){RESET}", flush=True)
 print(f"{ASTRA_PURPLE}Working folder: {BASE_DIR_STR}{RESET}", flush=True)
 print("", flush=True)
 # ------------------------------------------------------------
@@ -2485,22 +2290,16 @@ def _astra3_main():
             render_only = True
         if "-csv" in flags:
             csv_export = True
-        # TERMINI-specific -- ignored by every other command, same as -csv is
-        # effectively single-structure/OVERLAY-oriented but harmless if present
-        # elsewhere. Close-ups are on by default (they're the main point of the
-        # vector visualization); this is an explicit opt-out for someone who wants
-        # the whole-structure views without the extra render time/output.
+        # TERMINI only; other commands ignore it. Close-ups are on by default; this
+        # skips them.
         termini_skip_closeups = "-skipcloseup" in flags
 
-        # Homomer-reduction auto-decision -- skips the interactive prompt entirely
-        # (see prompt_intra_structure_homomer_reduction's own auto_decision
-        # parameter). -alwaysreduce always picks a chain via
-        # rank_homomer_chain_by_priority; -keephomomers always keeps every chain;
-        # -keepassembly keeps the chains of the depositor's preferred biological
-        # assembly. Several at once resolve to the more conservative choice, in
-        # that order: keeping chains never destroys data, so it's the safer
-        # thing to default to on a contradictory command rather than picking
-        # one arbitrarily or raising an error mid-run.
+        # Homomer auto-decisions that skip the prompt (auto_decision in
+        # prompt_intra_structure_homomer_reduction): -alwaysreduce picks a chain by
+        # rank_homomer_chain_by_priority, -keephomomers keeps every chain,
+        # -keepassembly keeps the preferred biological assembly's chains. If several
+        # are given, the most conservative wins, in that order: keeping chains never
+        # loses data.
         homomer_auto_decision = None
         if "-keephomomers" in flags:
             homomer_auto_decision = "keep"
@@ -2521,12 +2320,10 @@ def _astra3_main():
                     homomer_assembly_fallback = None
                 break
 
-        # Priority order for -alwaysreduce (and -keepassembly's reduce
-        # fallback), e.g. "-reducepriority:missing,leastligands,chainA" --
-        # colon-separated from the flag name, comma-separated for the ranked
-        # list itself. Falls back to rank_homomer_chain_by_priority's own
-        # default ordering when -alwaysreduce is given without this. Flags
-        # arrive in lower case, so each criterion is restored to its own name.
+        # Priority order for -alwaysreduce and -keepassembly's reduce fallback, as
+        # "-reducepriority:missing,leastligands,chainA". Without it,
+        # rank_homomer_chain_by_priority's default order applies. Flags arrive in
+        # lower case, so each criterion's name is restored.
         homomer_priority_order = None
         for flag in flags:
             if flag.startswith("-reducepriority:"):
@@ -2535,10 +2332,9 @@ def _astra3_main():
                                           for tok in flag.split(":", 1)[1].split(",") if tok.strip()]
                 break
 
-        # Terminus-offset-correction auto-decision -- same pattern, see
-        # show_termini_offset_and_confirm's own auto_decision parameter. TERMINI-
-        # specific in practice (single-structure/OVERLAY never call that
-        # function), but parsed globally like every other flag here.
+        # Terminus-offset auto-decision (auto_decision in
+        # show_termini_offset_and_confirm). Only TERMINI uses it, but it is parsed
+        # with the other flags.
         termini_auto_decision = None
         if "-nevermatch" in flags:
             termini_auto_decision = "never"
@@ -2566,24 +2362,14 @@ def _astra3_main():
             print(f"{WHITE}Enter file path:{RESET}", flush=True)
             try:
                 import_path_raw = input("> ").strip()
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, EOFError):
                 print(f"\n{YELLOW}Import cancelled. Ready for the next command.{RESET}", flush=True)
                 continue
-            # validate_input_file centralizes the existence/file-vs-directory/
-            # extension checks this used to do ad hoc with os.path.isfile +
-            # os.path.splitext, and additionally resolves the path (handles "." /
-            # ".." segments and symlinks via Path.resolve()) rather than using the
-            # raw string the person typed -- IMPORT is intentionally unrestricted
-            # in WHICH file the person can choose (that's the whole point of the
-            # command), only in what TYPE of file, so this doesn't add any new
-            # restriction, just resolves + validates the same checks that already
-            # existed.
+            # Any file the person chooses, of an accepted type. validate_input_file
+            # resolves the path (".", "..", symlinks) and checks it exists and is a file.
             try:
-                # mmCIF is accepted alongside legacy PDB and PyMOL sessions.
-                # PyMOL loads it natively, and it is the format the PDB now
-                # issues for entries too large for the legacy format, so refusing
-                # it locally meant a file Astra3 could fetch itself could not be
-                # opened from disk.
+                # mmCIF is accepted alongside PDB and PyMOL sessions: PyMOL loads it, and
+                # it is the only format for entries too large for PDB.
                 import_path = str(validate_input_file(import_path_raw, [".pdb", ".ent", ".pse", ".cif", ".mmcif", ".gz"]))
                 if structure_file_kind(import_path) is None:
                     raise UnsupportedFileTypeError(import_path)
@@ -2661,7 +2447,7 @@ def _astra3_main():
                 try:
                     from astra3_pse import session_extras
                     extras = session_extras(import_path)
-                except Exception:  # noqa: BLE001 -- the session loaded; this is only a notice
+                except Exception:  # noqa: BLE001 # the session loaded; this is only a notice
                     extras = []
                 if extras:
                     kinds = {}
@@ -2702,13 +2488,12 @@ def _astra3_main():
             print("", flush=True)
             continue
         elif command == "CHANGEDIR":
-            # Lets the user update the saved PyMOL executable location from inside
-            # a running session (e.g. after moving/updating PyMOL) without needing
-            # to quit Astra3 and edit Tools/pymol_path.txt by hand. New path is
-            # added as the FIRST line so it becomes the preferred path on next
-            # launch, without discarding any previously saved paths (they remain
-            # as fallbacks -- see astra3.command's own path-detection logic, which
-            # this mirrors).
+            # Updates the PyMOL location the launcher scripts read (Tools/
+            # pymol_path.txt beside Astra3). The app keeps its own setting.
+            if app_base_dir() is not None:
+                print(f"{WHITE}Set the PyMOL location in Settings > Analysis engine.{RESET}", flush=True)
+                print("", flush=True)
+                continue
             tools_dir = os.path.join(BASE_DIR, "Tools")
             pymol_path_file = os.path.join(tools_dir, "pymol_path.txt")
             existing_paths = []
@@ -2727,15 +2512,13 @@ def _astra3_main():
                 print(f"{WHITE}(Typical Windows path: %LOCALAPPDATA%\\Schrodinger\\PyMOL2\\PyMOLWin.exe){RESET}", flush=True)
             else:
                 print(f"{WHITE}(Typical Mac path: /Applications/PyMOL.app/Contents/MacOS/PyMOL){RESET}", flush=True)
-            new_path = input("> ").strip()
-            # Windows has no real equivalent of Unix's executable bit --
-            # os.access(path, os.X_OK) on Windows just checks the file exists,
-            # regardless of whether it's genuinely runnable, so relying on it
-            # there would be misleading (it would look like a real validation but
-            # wouldn't actually validate anything extra beyond existence). Use the
-            # same "does this path point at an existing file" check the launcher
-            # itself uses on Windows, and keep the stricter executable-bit check
-            # on Mac/Linux where it's meaningful.
+            try:
+                new_path = input("> ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print(f"\n{YELLOW}Cancelled. Nothing was changed.{RESET}", flush=True)
+                print("", flush=True)
+                continue
+            # Windows has no executable bit, so only existence is checked there.
             if sys.platform == "win32":
                 path_is_valid = bool(new_path) and os.path.isfile(new_path)
             else:
@@ -2755,14 +2538,12 @@ def _astra3_main():
         elif command == "DONE":
             if processed_list:
                 print(f"{WHITE}Open the Protein_outputs folder?{RESET} {format_yn_prompt()}: ", end="", flush=True)
-                open_choice = input().strip().lower()
+                try:
+                    open_choice = input().strip().lower()
+                except (KeyboardInterrupt, EOFError):
+                    open_choice = "n"
                 if open_choice == "y":
-                    # open_path_in_file_manager uses subprocess.run([...]) /
-                    # os.startfile (never a shell) instead of the previous
-                    # os.system(f'open "{path}"') -- os.system always invokes a
-                    # shell to interpret its argument, which was unnecessary here
-                    # and is the exact pattern this project's security hardening
-                    # pass removes throughout. See astra3_security.py.
+                    # subprocess or os.startfile, never a shell. See astra3_security.py.
                     open_path_in_file_manager(PROTEIN_OUTPUTS_DIR)
             break
         elif command == "-T":
@@ -2774,37 +2555,22 @@ def _astra3_main():
             print("", flush=True)
         elif command == "BATCH":
             batch_args = parts[1:]
-            # Drop any -flags from the argument list before deciding file-vs-
-            # inline, so "BATCH 1AKE 4AKE -low" doesn't treat "-low" as a
-            # structure ID. -mmCIF is excluded from this drop (kept alongside the
-            # IDs) since unlike -low/-skipimage/etc it's per-ID, not a run-wide
-            # flag -- parse_structure_ids_with_format_flags below is what actually
-            # attaches it to the ID immediately preceding it.
+            # Run-wide flags are dropped before deciding between a file and inline IDs,
+            # so "-low" is not read as an ID. -mmCIF stays: it applies to the ID before
+            # it (parse_structure_ids_with_format_flags).
             batch_args_no_flags = [a for a in batch_args if not a.startswith("-") or a.lower() == MMCIF_FLAG]
             if not batch_args_no_flags:
                 print(f"{RED}BATCH requires structure IDs or a batch file, e.g. BATCH 1AKE 4AKE 2AK3 or BATCH batch.txt{RESET}", flush=True)
                 print("", flush=True)
             else:
-                # A single argument ending in a common text-file extension is
-                # treated as a batch file; anything else (or multiple arguments)
-                # is inline IDs. (A lone "-mmCIF" with nothing else can't be a
-                # filename, so this check naturally still only matches real
-                # filenames.)
+                # A single argument with a text-file extension is a batch file; anything
+                # else is inline IDs.
                 first_arg = batch_args_no_flags[0]
                 looks_like_file = len(batch_args_no_flags) == 1 and os.path.splitext(first_arg)[1].lower() in (".txt", ".csv", ".list")
                 if looks_like_file:
-                    # A relative batch-file argument is resolved relative to
-                    # BASE_DIR (matching the pre-existing behavior for a bare
-                    # filename like "batch.txt" sitting next to Astra3), but the
-                    # person can also point this at any file elsewhere on their
-                    # own filesystem with an absolute or ".."-relative path --
-                    # same as IMPORT, this is intentionally NOT confined to
-                    # BASE_DIR (that would break the legitimate "my batch list
-                    # lives in a different folder" case). validate_input_file
-                    # still resolves the path properly (Path.resolve(), handling
-                    # "." / ".." / symlinks) and checks existence/file-type before
-                    # it's ever opened, rather than the previous os.path.isfile on
-                    # an unresolved, possibly-relative string.
+                    # A relative path is resolved against BASE_DIR ("batch.txt" beside Astra3);
+                    # absolute and ".." paths may point anywhere, as with IMPORT.
+                    # validate_input_file resolves the path and checks it before it is opened.
                     candidate_path = first_arg if os.path.isabs(first_arg) else os.path.join(BASE_DIR, first_arg)
                     try:
                         file_path = str(validate_input_file(candidate_path, [".txt", ".csv", ".list"]))
@@ -2905,42 +2671,28 @@ def _astra3_main():
                         # The session and the report's Analysis ID take the
                         # folder's name, so an imported file's session is not
                         # named after an ID that ends with this session.
-                        termini_run_name = os.path.basename(output_dir.rstrip(os.sep))
+                        termini_run_name = run_display_name(output_dir)
                         if termini_run_name.endswith("_Output"):
                             termini_run_name = termini_run_name[:-len("_Output")]
-                        report_cleared_images(clear_stale_run_images(images_dir), images_dir,
-                                              termini_engine.warnings)
-                        # A per-comparison subfolder under Images/ only exists to
-                        # prevent filename collisions when TERMINI compares the
-                        # reference against MULTIPLE structures at once (each
-                        # comparison would otherwise overwrite the same
-                        # view_front.png, etc.) -- with exactly one comparison
-                        # (reference + 1, len(termini_ids) == 2, the common case),
-                        # there's nothing to collide with, so the subfolder is
-                        # just unnecessary nesting for no reason. Single-structure
-                        # analysis has never had this subfolder either, for the
-                        # same reason.
+                        # A per-comparison subfolder only prevents several comparisons overwriting
+                        # each other's view_front.png and so on; a single comparison writes
+                        # straight into Images/, as a single-structure run does.
                         termini_needs_subfolders = len(termini_ids) > 2
                         # Whole-structure views and close-ups are independent
                         # switches: either, both, or neither can be produced.
                         # Whole-structure views also follow render_only.
                         do_core_images = not (image_skip or render_only)
                         do_closeups = not termini_skip_closeups
-                        # Best match first, the order the report lists them in.
-                        # Rendering in that order keeps the console in step with
-                        # the report, and each comparison's position is what
-                        # picks its arrow colours, so the close-ups and the
-                        # report's colour key cannot disagree.
+                        # Best match first, as the report lists them. Each comparison's position
+                        # picks its arrow colours, so the close-ups and the report's colour key
+                        # agree.
                         ranked_comparisons = _comparison_display_order(
                             termini_engine._overlay_engine.structure_data, reference_obj,
                             results=termini_engine.results)
                         ranked_comparisons += [o for o in termini_engine.results if o not in ranked_comparisons]
-                        # With three or more structures every image lives in a
-                        # per-comparison subfolder, so the run had no whole-run
-                        # image and no view of the structures together. The same
-                        # six views OVERLAY writes of everything aligned, at the
-                        # top level. No terminus arrows: those belong to the
-                        # close-ups, where each comparison is shown on its own.
+                        # With three or more structures the per-comparison images live in
+                        # subfolders, so the six OVERLAY views of everything aligned are written at
+                        # the top level. No terminus arrows; those are in the close-ups.
                         if termini_needs_subfolders and do_core_images:
                             try:
                                 combined_sel = " or ".join(termini_engine._overlay_engine.loaded_objects)
@@ -2975,17 +2727,10 @@ def _astra3_main():
                                 cmp_images_dir = Path(images_dir) / cmp_obj if termini_needs_subfolders else Path(images_dir)
                                 cmp_images_dir.mkdir(parents=True, exist_ok=True)
 
-                                # Close-ups first, before the main wide shots
-                                # below -- isolated per-terminus renders with the
-                                # real orientation arrows (see render_termini_closeups'
-                                # own docstring in astra3_render_report.py for why
-                                # this uses cmd.create() copies rather than
-                                # hiding/fading the rest of either structure). One
-                                # close-up dict per matched chain, since a multi-
-                                # chain comparison (e.g. a homodimer) can have
-                                # more than one chain_key. Gated on do_closeups
-                                # alone now, independent of whether core images
-                                # are also being rendered this run.
+                                # Close-ups first: isolated per-terminus renders with the orientation
+                                # arrows (see render_termini_closeups for why it uses cmd.create copies).
+                                # One per matched chain, since a multi-chain comparison can match several.
+                                # Gated on do_closeups alone.
                                 closeups_for_cmp = []
                                 if do_closeups:
                                     print(f"{YELLOW}Rendering close-up terminus views for {cmp_pid}...{RESET}", flush=True)
@@ -3002,17 +2747,9 @@ def _astra3_main():
                                 if closeups_for_cmp:
                                     closeup_images[cmp_pid] = closeups_for_cmp
 
-                                # Main six-view whole-structure render. No CGO
-                                # vector overlay here anymore -- the orientation arrows
-                                # are now the close-ups' whole purpose (a clear,
-                                # unobstructed, correctly-framed view of exactly
-                                # the vectors that matter), and drawing every
-                                # terminus's arrows again here, tiny and layered
-                                # over a full whole-structure orientation shot,
-                                # was cluttered and hard to read. Gated on
-                                # do_core_images alone now, independent of close-
-                                # ups -- a close-ups-only run (core images off)
-                                # genuinely renders nothing here.
+                                # The six whole-structure views, without terminus arrows (they are too
+                                # small and cluttered at this scale; the close-ups show them). Gated on
+                                # do_core_images alone, so a close-ups-only run renders nothing here.
                                 rendered_pngs = []
                                 if do_core_images:
                                     print(f"{YELLOW}Rendering whole-structure views for {cmp_pid}...{RESET}", flush=True)
@@ -3031,14 +2768,9 @@ def _astra3_main():
                                 total_for_cmp = len(rendered_pngs) + closeup_count
                                 print(f"{GREEN}{total_for_cmp} image(s) rendered for {cmp_pid} "
                                       f"({len(rendered_pngs)} whole-structure, {closeup_count} close-up).{RESET}", flush=True)
-                            # Total across every comparison in this run -- TERMINI
-                            # can render noticeably more images than a single-
-                            # structure run once close-ups are counted (up to 2
-                            # angles x 2 termini x however many chains matched,
-                            # PER comparison), so a person watching the console
-                            # has a clear sense of how much work just happened,
-                            # not just per-comparison counts that could be easy to
-                            # lose track of across several comparisons.
+                            # The total across every comparison: with close-ups (up to 2 angles x 2
+                            # termini x matched chains per comparison) a TERMINI run can render many
+                            # more images than a single-structure run.
                             grand_total = sum(len(v) for v in visualization_images.values()) + sum(
                                 len(images) for per_chain_list in closeup_images.values()
                                 for entry in per_chain_list for images in (entry.get("N", []), entry.get("C", []))
@@ -3055,15 +2787,10 @@ def _astra3_main():
                                 images_rendered=not render_only and not (image_skip and termini_skip_closeups),
                                 image_skip=image_skip, csv_export=csv_export,
                                 extra_flags=["-skipcloseup"] if termini_skip_closeups else [])
-                            # Checkpoint: rendering is complete and the session is
-                            # about to be written. Rendering creates isolation
-                            # copies and toggles object visibility; anything it
-                            # left behind is about to be saved into the .pse the
-                            # person opens.
-                            # Remove the scratch selections cmd.align leaves behind
-                            # before writing the session, then verify nothing else
-                            # survived. Detecting them and saving them anyway left
-                            # the person with a warning and a polluted .pse.
+                            # Checkpoint: rendering is done and the session is about to be written.
+                            # Rendering creates isolation copies and toggles visibility; anything left
+                            # behind would be saved into the .pse. The scratch selections cmd.align
+                            # leaves are removed first, then the scene is verified.
                             purge_scratch_objects()
                             report_state_problems(validate_no_scratch_objects(), termini_engine.warnings,
                                                   checkpoint="before saving session")
@@ -3118,7 +2845,7 @@ def _astra3_main():
                     cancel_active_operation()
                     print(f"{YELLOW}TERMINI cancelled. Cleaning up and returning to the PDB prompt.{RESET}", flush=True)
                     print("", flush=True)
-                except Exception as e:  # noqa: BLE001 -- one failed comparison must not end the session
+                except Exception as e:  # noqa: BLE001 # one failed comparison must not end the session
                     print(f"{RED}TERMINI failed: {e}{RESET}", flush=True)
                     print("", flush=True)
                 finally:
@@ -3135,7 +2862,7 @@ def _astra3_main():
                 overlay_request = OverlayRequest(overlay_pdb_ids, overlay_reference_override, image_quality, image_skip, report_skip, overlay_render_only, csv_export, overlay_format_map, homomer_auto_decision, homomer_priority_order, homomer_assembly_fallback)
                 try:
                     overlay_result = OVERLAY_OPERATIONS.dispatch(overlay_operation, overlay_request)
-                except Exception as e:  # noqa: BLE001 -- one failed overlay must not end the session
+                except Exception as e:  # noqa: BLE001 # one failed overlay must not end the session
                     print(f"{RED}OVERLAY failed: {e}{RESET}", flush=True)
                     overlay_result = None
                 if overlay_result:
@@ -3153,17 +2880,7 @@ def _astra3_main():
     print("", flush=True)
     print(f"{WHITE}============================================================{RESET}", flush=True)
     if processed_list:
-        print(f"{WHITE}Process complete! Your structural analysis is finished.{RESET}", flush=True)
-        if render_only:
-            print(f"{WHITE}Only the {engine_name()} session was generated (render-only mode).{RESET}", flush=True)
-        elif report_skip and image_skip:
-            print(f"{WHITE}Only the {engine_name()} session was generated. Reports and images were skipped.{RESET}", flush=True)
-        elif report_skip:
-            print(f"{WHITE}{engine_name()} sessions and structural images were generated. Reports were skipped.{RESET}", flush=True)
-        elif image_skip:
-            print(f"{WHITE}Your report and {engine_name()} session were generated without image rendering.{RESET}", flush=True)
-        else:
-            print(f"{WHITE}Your report, {engine_name()} session, and structural images were generated.{RESET}", flush=True)
+        print(f"{WHITE}Process complete. Each run's files are in its own folder in Protein_outputs.{RESET}", flush=True)
         print(f"{VIOLET}Processed: {', '.join(processed_list)}{RESET}", flush=True)
     else:
         print(f"{WHITE}No structures were processed. Astra3 closed without generating analysis files.{RESET}", flush=True)

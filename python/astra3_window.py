@@ -1,3 +1,11 @@
+# ============================================================
+# astra3_window.py
+# Astra3: Structural Analysis Toolkit for PDB Rendering Automation
+# Created by Andre Aguirre
+# Copyright (c) 2026 Andre Aguirre
+# Licensed under the GNU General Public License, version 3 or later (GPL-3.0-or-later).
+# See LICENSE file for details.
+# ============================================================
 """Astra3: the drawing window for PyMOL and ChimeraX runs.
 
 The Astra3 app can list each image as it is made, with a 3D view turned to
@@ -80,7 +88,7 @@ def _pymol_scene(cmd):
     background = (1.0, 1.0, 1.0)
     try:
         background = tuple(float(c) for c in cmd.get_color_tuple(cmd.get("bg_rgb")))
-    except Exception:  # noqa: BLE001 -- a named or listed colour PyMOL could not resolve
+    except Exception:  # noqa: BLE001 # a named or listed colour PyMOL could not resolve
         pass
     return {"molecules": molecules, "cgo": cgos, "view": list(cmd.get_view()),
             "fov": float(cmd.get("field_of_view")), "background": background,
@@ -113,5 +121,5 @@ def show_image(png_path, width, height, engine_key):
         with open(temp, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(job))   # the same text as json.dump, encoded in one pass
         os.replace(temp, os.path.join(folder, name + ".json"))
-    except Exception:  # noqa: BLE001 -- the window is optional; the image is saved
+    except Exception:  # noqa: BLE001 # the window is optional; the image is saved
         pass

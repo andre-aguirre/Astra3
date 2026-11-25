@@ -21,9 +21,8 @@
 # This is the module to edit for report styling/layout changes
 # or rendering behavior. It depends on astra3_core for shared
 # constants/paths and on astra3_structure for purge_orphaned_state
-# and draw_termini_vectors (the latter used by
-# render_termini_closeups, below, to draw a orientation arrow overlay
-# scoped to a single terminus).
+# and draw_termini_vectors (used by render_termini_closeups to draw
+# the orientation arrows of a single terminus).
 # ------------------------------------------------------------
 
 import os
@@ -41,14 +40,17 @@ from pymol import cmd
 from astra3_core import (
     format_method, engine_name, session_extension,
     GREEN, RED, YELLOW, WHITE, RESET,
-    BASE_DIR, check_for_cancellation, format_residue_ranges, count_missing_residues, resolution_display, display_ranges,
+    check_for_cancellation, format_residue_ranges, count_missing_residues, resolution_display, display_ranges,
     display_date,
     ASTRA3_VERSION, get_pymol_version_string, get_pymol_license_string,
 )
 from astra3_security import safe_join, safe_output_dirname
+from astra3_geometry import SASA_PROBE_RADIUS, SUPERPOSE_CUTOFF, SUPERPOSE_CYCLES
 from astra3_structure import (purge_orphaned_state, draw_termini_vectors, TERMINUS_WINDOW, chain_label,
                               comparison_arrow_colors,
-                              REFERENCE_ARROW_COLORS)
+                              REFERENCE_ARROW_COLORS,
+                              BNORM_SHIFT_THRESHOLD, SASA_SHIFT_THRESHOLD,
+                              LIGAND_CONTACT_CUTOFF, POLAR_CONTACT_CUTOFF)
 
 # ------------------------------------------------------------
 # Session save, image capture, and HTML report generator (save_session,
@@ -81,7 +83,7 @@ def _tag_viewer_segments(structure_labels):
             # (an imported x.cif loads as "x" and is labelled "X").
             cmd.iterate(f"({o})", "originals[index] = segi", space={"originals": originals})
             cmd.alter(f"({o})", f"segi='{tag}'")
-        except Exception:  # noqa: BLE001 -- an object that cannot be tagged is simply left unlabeled
+        except Exception:  # noqa: BLE001 # an object that cannot be tagged is simply left unlabeled
             continue
         tags[tag] = label
         restore.append((o, originals))
@@ -107,46 +109,23 @@ def _prepend_structure_remarks(pdb_path, tags):
 
 
 def save_session(obj, session_dir, water_viewer_copy_name=None, structure_labels=None):
-    """Save the final PyMOL session for this object, AND a plain-coordinate
-    .pdb copy alongside it.
+    """Save the PyMOL session for this object, and a plain .pdb beside it.
 
-    The .pdb copy exists specifically for Astra3's own GUI structure
-    viewer (see the Electron app's Viewer page) -- the .pse PyMOL session
-    format is proprietary and binary; there is no way for a web-based
-    renderer (3Dmol.js, or anything else) to read it directly, and
-    Astra3's own downloaded source .pdb/.cif file is deliberately deleted
-    after processing (see _run_single_analysis's cleanup) to avoid
-    littering the working directory with stale downloads. Without this
-    second export, there would be no surviving artifact anywhere with
-    real atom coordinates for the viewer to load once a run finishes --
-    this closes that gap at the one place both outputs are already
-    being written, rather than the GUI trying to reconstruct coordinates
-    some other way.
+    The .pdb is for the app's viewer: a web renderer cannot read .pse, and the
+    downloaded source file is deleted after processing, so nothing else with
+    coordinates survives the run.
 
-    water_viewer_copy_name, if given (see process_structure's own
-    "water_viewer_copy_name" return field), is a separate object
-    holding a water-INCLUDED copy of obj, saved BEFORE Astra3's
-    unconditional water removal ran. When present, the viewer's .pdb
-    export is built from THIS object instead of obj itself -- so the
-    Viewer page's "Show waters" toggle has real water atoms to reveal,
-    without changing what obj itself (used for the real analysis,
-    metrics, report, and rendered images) ever contained. Deleted
-    after use either way, so it never lingers as clutter in the
-    working PyMOL session.
+    water_viewer_copy_name, if given (from process_structure), is a copy of
+    obj saved before water removal. The viewer's .pdb is written from it, so
+    Show waters has waters to show; obj itself is unchanged. It is deleted
+    afterwards.
 
-    Returns (pse_path_or_None, pdb_path_or_None) so callers can report
-    exactly what was actually written.
+    Returns (pse_path_or_None, pdb_path_or_None).
     """
     purge_orphaned_state()
-    # obj is normally a PyMOL object name here (post cmd.fetch/cmd.load, which
-    # PyMOL itself sanitizes when assigning object names), so this is lower-
-    # risk in practice than the output-folder construction functions in
-    # astra3_core.py -- but it is still a value that ultimately traces back to
-    # user input, and this is cheap to make unconditionally safe rather than
-    # relying on that assumption holding forever. safe_output_dirname (despite
-    # the name, it just sanitizes a string to a safe filename fragment) strips
-    # anything that isn't alphanumeric/underscore/hyphen; safe_join
-    # independently verifies the final resolved path stays inside session_dir.
+    # obj traces back to user input, so it is sanitised here too:
+    # safe_output_dirname keeps letters, digits, underscore and hyphen, and
+    # safe_join checks the resolved path stays inside session_dir.
     safe_name = safe_output_dirname(obj, suffix="")
     pse_path = str(safe_join(session_dir, safe_name + session_extension()))
     pdb_path = str(safe_join(session_dir, safe_name + ".pdb"))
@@ -163,21 +142,8 @@ def save_session(obj, session_dir, water_viewer_copy_name=None, structure_labels
     if water_viewer_copy_name and water_viewer_copy_name in cmd.get_names("objects"):
         pdb_source_obj = water_viewer_copy_name
     elif obj not in cmd.get_names("objects"):
-        # obj is not always a real PyMOL object name -- OVERLAY/TERMINI pass a
-        # synthetic label here ("Overlay_Session", "Termini_<ids>") used only
-        # as a filename fragment via safe_output_dirname, never as an actual
-        # loaded object. The previous version of this function always called
-        # cmd.save(pdb_path) with NO selection argument at all, which PyMOL's
-        # own documentation confirms defaults to "(all)" -- correctly saving
-        # every currently loaded object together for these multi-structure
-        # cases. Passing that same fake label as an explicit selection
-        # argument (as this function started doing when water-copy support was
-        # added) is what broke this: PyMOL's selector engine correctly rejects
-        # a name that isn't a real object or named selection ("Selector-Error:
-        # Invalid selection name"), which is the exact error this was
-        # confirmed to produce for a real TERMINI run. None means "no
-        # selection filter" to cmd.save, restoring the original, correct
-        # "(all)" behavior for these callers.
+        # OVERLAY and TERMINI pass a label ("Overlay_Session", "Termini_<ids>"),
+        # not an object. PyMOL rejects it as a selection, so None saves "(all)".
         pdb_source_obj = None
 
     saved_pdb = None
@@ -229,29 +195,11 @@ def image_dimensions(image_quality):
     return 3000, 2250
 
 
-# Shared by render_views (the standard six-view render) and
-# render_termini_closeup (the single-shot close-up render added for TERMINI's
-# up-close terminus images). Pulled to module level so there is exactly one
-# implementation of "reliably save a ray-traced PNG" for every image Astra3
-# produces.
-#
-# A PNG save never raises just because
-# the frame is blank -- a blank capture is still a syntactically valid,
-# correctly-sized PNG -- so every previous layer of try/except here saw "no
-# exception" and reported success, even though the image was empty. This
-# matches the exact symptom reported: fast (no real ray trace time spent),
-# correctly-dimensioned, but transparent/blank output, with no visible error
-# anywhere.
-#
-# Fix: verify the file that actually got written, rather than only checking
-# whether the write call raised. A real ray-traced molecular scene at these
-# resolutions compresses to a substantial PNG (dense, non-uniform pixel data
-# defeats PNG's run-length/filter compression); a blank or near-blank
-# transparent/white frame compresses to a tiny fraction of that, reliably and
-# by a wide margin -- this is a property of PNG's compression, not a PyMOL-
-# specific heuristic, so it holds regardless of what caused the blank frame.
-# MIN_CONTENT_BYTES is set far below what any real render produces, so it only
-# catches genuinely blank/near-blank output, not just "simple" renders.
+# The one implementation of saving a ray-traced PNG, shared by render_views
+# and render_termini_closeup. A blank frame still saves as a valid PNG
+# without raising, so the written file is checked: a real ray-traced scene
+# compresses to a substantial file, a blank or near-blank frame to a small
+# fraction of that. MIN_CONTENT_BYTES sits far below any real render.
 MIN_CONTENT_BYTES = 8000
 MAX_RAY_ATTEMPTS = 3
 
@@ -354,22 +302,20 @@ def _looks_blank(path):
             return not visible
         return Path(path).stat().st_size < MIN_CONTENT_BYTES
     except Exception:
-        return True  # can't verify -- treat as unverified/blank rather than assume success
+        return True  # unverifiable counts as blank
 
 
 def _safe_save_png(file_path, w, h):
     last_error = None
     # Recorded once per image, before any attempt. PyMOL's OpenGL context
-    # belongs to its main thread; since the interactive loop moved onto a
-    # worker thread, ray runs from that worker. If rendering is happening off
-    # the main thread, that is the difference between an image with content
-    # and a blank file, and nothing else in the output distinguishes the two.
+    # belongs to its main thread, and a ray from another thread gives a blank
+    # file that the output alone cannot tell apart.
     try:
         import threading as _threading
         _render_diag(f"{Path(file_path).name}: ray on thread "
                      f"{_threading.current_thread().name!r} "
                      f"(main={_threading.current_thread() is _threading.main_thread()})")
-    except Exception:  # noqa: BLE001 -- tracing must never break a render
+    except Exception:  # noqa: BLE001 # tracing must never break a render
         pass
     for attempt in range(1, MAX_RAY_ATTEMPTS + 1):
         try:
@@ -382,12 +328,9 @@ def _safe_save_png(file_path, w, h):
                 # against an opaque background and discards the alpha channel.
                 cmd.png(str(file_path), dpi=300)
             else:
-                # Alternate to the single-call ray=1 form on retry, in case
-                # the failure is specific to the separate cmd.ray() call
-                # rather than rendering itself -- both are legitimate,
-                # genuinely-ray-tracing paths (unlike ray=0 with no prior ray,
-                # which is the unsafe front-buffer grab this function no
-                # longer falls back to).
+                # The retry alternates with the single-call ray=1 form, in case the failure
+                # is specific to cmd.ray(). Both ray trace; ray=0 without a prior ray (a
+                # front-buffer grab) is never used.
                 cmd.png(str(file_path), width=w, height=h, dpi=300, ray=1)
             if not _looks_blank(file_path):
                 if not _png_has_alpha(file_path):
@@ -409,12 +352,9 @@ def _safe_save_png(file_path, w, h):
             print(f"{YELLOW}Render attempt {attempt} for {Path(file_path).name} did not produce "
                   f"verified content ({last_error}); retrying...{RESET}", flush=True)
 
-    # Every ray-traced attempt either raised or produced verified-blank
-    # output. Deliberately NOT falling back to a raw ray=0-with-no-prior- ray
-    # front-buffer grab here -- that path is what silently produced blank
-    # images in the first place (see comment above); a fallback that can
-    # silently "succeed" while writing nothing is worse than a loud, visible
-    # failure the person can act on.
+    # Every ray-traced attempt raised or was blank. No front-buffer fallback:
+    # one that can succeed while writing nothing is worse than a visible
+    # failure.
     print(f"{RED}Render failed for {Path(file_path).name} after {MAX_RAY_ATTEMPTS} attempts "
           f"({last_error}). This image was NOT saved reliably. If this keeps happening, "
           f"check {engine_name()}'s window isn't minimized/occluded during rendering, or restart {engine_name()}.{RESET}",
@@ -443,17 +383,8 @@ def rotate_view_matrix(view, degrees, axis="y"):
     cos_a, sin_a = math.cos(radians), math.sin(radians)
     r = list(view[0:9])
 
-    # Post-multiply: new = current @ Rotation.
-    #
-    # This reproduces cmd.turn's own geometry, which is what these six views
-    # were framed with for their whole history and what they should keep
-    # looking like. An earlier attempt switched to pre-multiplication on the
-    # theory that duplicate views were a rotation-axis error; they were not.
-    # Post- and pre-multiplication both yield six distinct cameras -- the
-    # duplicates came from cmd.turn not being applied before the render, not
-    # from the axis it turned about. Changing the multiplication order only
-    # re-framed every view, tilting them off the orientation cmd.orient had
-    # chosen.
+    # Post-multiply, new = current @ Rotation, which reproduces cmd.turn's
+    # geometry and keeps the views framed as they always were.
     def _mul(rot):
         return [
             sum(r[row * 3 + k] * rot[k * 3 + col] for k in range(3))
@@ -481,28 +412,21 @@ def _render_diag(message):
     which thread ray runs on, whether set_view actually took effect, and how
     many atoms the selection resolved to at the moment of the render.
     """
-    # Off unless asked for. Set ASTRA3_RENDER_DIAG=1 to trace which camera each
-    # view was rendered from and which thread ray ran on -- the two things that
-    # cannot be told apart from the output files alone.
+    # Off unless asked for. ASTRA3_RENDER_DIAG=1 traces which camera each view
+    # was rendered from and which thread ray ran on, which the files alone
+    # cannot show.
     if os.environ.get("ASTRA3_RENDER_DIAG") == "1":
         print(f"{YELLOW}[render] {message}{RESET}", flush=True)
 
 
 def _apply_rotation(degrees, axis="y"):
-    """Turn the camera `degrees` about `axis`, and make sure it took effect.
-    cmd.turn is the primary path, because it defines the framing these six
-    views have always had -- reproducing it by hand risks re-framing every
-    image, which is what happened when the arithmetic was swapped for
-    it wholesale.
+    """Turn the camera `degrees` about `axis` and confirm it took effect.
 
-    The problem cmd.turn alone had was never the axis; it was that the turn
-    was not guaranteed to be applied before cmd.ray ran, so several views
-    rendered from whatever camera happened to be current and came out
-    identical.
-
-    If the view is unchanged after the turn, the arithmetic form is applied
-    directly as a fallback. It computes the same product cmd.turn does, so
-    the framing matches either way.
+    cmd.turn defines the framing of the six views, so it is used first. A
+    turn issued from a non-GUI thread may not be applied before cmd.ray runs,
+    which renders the previous view again; when the view is unchanged after
+    the turn, the same rotation is applied to the view matrix directly, which
+    gives the same framing.
     """
     if degrees == 0:
         _render_diag(f"axis={axis} deg=0 (no rotation applied)")
@@ -524,34 +448,28 @@ def _apply_rotation(degrees, axis="y"):
 
 
 def resolve_render_selection(requested):
-    """Return a selection that actually resolves to atoms, or None.
+    """Return a selection that resolves to atoms, or None.
 
-    render_views was handed a structure id and trusted it. On a re-run in the
-    same PyMOL session that id can no longer name a loaded object -- homomer
-    reduction rebuilds the object under a different name, and the stale-object
-    sweep deletes the original -- so the selection resolved to nothing. ray
-    then completed against an empty scene and wrote a blank PNG, three times
-    per view, and the failure surfaced as "output file looks blank" with a
-    suggestion to check for an occluded window. The window was never involved.
+    On a re-run in the same PyMOL session a structure ID may no longer name a
+    loaded object: homomer reduction rebuilds it under another name and the
+    stale-object sweep deletes the original. Rendering an empty selection
+    writes blank images.
 
     Resolution order:
       1. The name as given.
-      2. "%name", PyMOL's explicit object-name prefix. A bare name beginning
-         with a digit ("1ERJ") is ambiguous in a selection expression, which
-         is exactly the shape of id this program is usually handed.
+      2. "%name", PyMOL's explicit object-name prefix: a bare name beginning
+         with a digit ("1ERJ") is ambiguous in a selection.
       3. A case-insensitive match among loaded objects.
-      4. An object whose name contains the id, which is what reduction
-         produces (protein-chain_C_1ERJ).
-      5. Any loaded polymer, so a renamed object still renders something
-         rather than a blank file.
+      4. An object whose name contains the id, as reduction produces
+         (protein-chain_C_1ERJ).
+      5. Any loaded polymer.
 
-    Returns None only when nothing is loaded at all -- a real condition that
-    the caller should report rather than render past.
+    None means nothing is loaded at all, which the caller reports.
     """
     def _resolves(sel):
         try:
             return cmd.count_atoms(sel) > 0
-        except Exception:  # noqa: BLE001 -- an invalid selector raises rather than returning 0
+        except Exception:  # noqa: BLE001 # an invalid selector raises rather than returning 0
             return False
 
     if not requested:
@@ -597,18 +515,14 @@ def resolve_render_selection(requested):
 
 
 def _flush_camera():
-    """Force queued camera commands to execute before anything renders.
+    """Make queued camera commands run before anything renders.
 
-    Astra3 drives PyMOL from a background thread (see the AppHang work-around
-    in the Windows launcher), and camera commands issued from a non-GUI thread
-    are queued rather than applied immediately. cmd.ray() then rasterizes
-    whatever camera state has actually been applied, which is not necessarily
-    the one just requested -- so a view rendered right after a cmd.turn() can
-    capture the previous view's camera. Two files then differ only by
-    anti-aliasing noise while claiming to be different angles.
+    Astra3 drives PyMOL from a background thread, and camera commands from a
+    non-GUI thread are queued. cmd.ray() uses the camera state that has been
+    applied, so a view rendered straight after cmd.turn() can show the
+    previous camera, and two files then differ only by anti-aliasing noise.
 
-    Cheap to call and safe to call redundantly; a failure here must never
-    abort a render.
+    Cheap and safe to call repeatedly; a failure here never aborts a render.
     """
     try:
         cmd.sync()
@@ -656,17 +570,11 @@ def _orient(sel):
 
 
 def _safe_orient_zoom(sel):
-    """cmd.orient/cmd.zoom on a selection that includes a CGO object can
-    raise the same 'Invalid selection name' Selector-Error documented for
-    cmd.count_atoms (see render_views' own validation block) -- CGOs are
-    atomless and PyMOL's selector engine does not resolve that
-    combination cleanly in every command that has to evaluate it
-    internally. Both calls are wrapped so that quirk degrades to
-    'camera isn't framed for this step' rather than a visible crash; the
-    molecular objects in the selection still render correctly since PNG
-    output only depends on what's currently in view, not on
-    orient/zoom succeeding perfectly. Shared by render_views and
-    render_termini_closeup for the same reason as _safe_save_png above.
+    """cmd.orient and cmd.zoom, each guarded. On a selection that includes a
+    CGO object (atomless) they can raise PyMOL's 'Invalid selection name'
+    Selector-Error; the step then leaves the camera as it is, and the
+    molecular objects still render. Shared by render_views and
+    render_termini_closeup.
     """
     try:
         _orient(sel)
@@ -682,23 +590,12 @@ def _safe_orient_zoom(sel):
 
 
 def _apply_standard_render_settings():
-    """Background/quality settings shared by every Astra3 render (the
-    standard six views AND the TERMINI close-ups) -- pulled out so both
-    paths always produce visually consistent output and a future tweak
-    only needs to happen in one place. Returns prev_slab for
-    _restore_render_settings to hand back to cmd.set("slab", ...)
-    afterward.
-    """
-    try:
-        prev_slab = cmd.get("slab")
-    except Exception:
-        prev_slab = None
+    """Background and quality settings shared by every render (the six
+    standard views and the TERMINI close-ups), so both look the same."""
     try:
         cmd.bg_color("white")
-        # keep transparent background attempt, but ray rendering below will
-        # produce correct content PyMOL renamed this setting and kept the old
-        # name as an alias; which one a given build honours varies, so both
-        # are set.
+        # PyMOL renamed this setting and kept the old name as an alias; which
+        # one a build honours varies, so both are set.
         for _bg_setting in ("ray_opaque_background", "opaque_background"):
             try:
                 cmd.set(_bg_setting, 0)
@@ -712,38 +609,20 @@ def _apply_standard_render_settings():
             pass
     except Exception:
         pass
-    return prev_slab
-
-
-def _restore_render_settings(prev_slab):
-    try:
-        if prev_slab is not None:
-            cmd.set("slab", prev_slab)
-    except Exception:
-        pass
 
 
 def render_views(selection, images_dir, image_quality="medium", label="structure", frame_selection=None,
                  only_views=None):
-    """Render the standard six views with deterministic orientation & slab guards.
+    """Render the standard six views.
 
-    frame_selection, if given, is used for cmd.orient/cmd.zoom (camera
-    framing) instead of `selection`. `selection` itself is still what gets
-    rendered/rayed. This matters when `selection` combines molecular
-    objects with a CGO overlay (e.g. TERMINI's vector visualization): CGO
-    objects are atomless, and PyMOL's selector engine does not reliably
-    resolve orient/zoom against a selection that includes one, even though
-    the same combined selection renders/rays just fine. Passing a
-    molecular-only frame_selection avoids that failure mode entirely rather
-    than relying on try/except to silently no-op the camera commands (which
-    would otherwise risk reproducing the blank-image bug with no visible
-    error at all). Defaults to `selection` for full backward compatibility
-    with every other caller.
+    frame_selection, if given, is used for cmd.orient/cmd.zoom instead of
+    `selection`, which is still what is rendered. PyMOL cannot reliably
+    frame a selection that includes a CGO object (TERMINI's arrows), though
+    it renders one; a molecular-only frame_selection avoids a blank image.
+    Defaults to `selection`.
     """
-    # Resolve the selection before anything is rendered. An id that no longer
-    # names a loaded object produces six blank files and eighteen wasted ray
-    # traces, reported as a rendering fault rather than the naming problem it
-    # is.
+    # Resolve the selection first: an ID that names no loaded object would give
+    # six blank files and eighteen wasted ray traces.
     resolved = resolve_render_selection(selection)
     if resolved is None:
         print(f"{RED}Nothing is loaded to render for {label}: '{selection}' does not match any object "
@@ -755,7 +634,7 @@ def render_views(selection, images_dir, image_quality="medium", label="structure
     except Exception:  # noqa: BLE001
         pass
     if resolved != selection:
-        print(f"{YELLOW}Rendering '{resolved}' -- '{selection}' no longer names a loaded object "
+        print(f"{YELLOW}Rendering '{resolved}': '{selection}' no longer names a loaded object "
               f"(objects are renamed by chain reduction and re-runs).{RESET}", flush=True)
         selection = resolved
         if frame_selection is None:
@@ -770,26 +649,14 @@ def render_views(selection, images_dir, image_quality="medium", label="structure
     print(f"{YELLOW}Taking pictures of: {label}{view_note}{RESET}", flush=True)
     print(f"{YELLOW}Saving images to: {WHITE}{images_dir}{RESET}", flush=True)
 
-    # Validate the selection before rendering, without using cmd.count_atoms()
-    # on the whole (possibly compound) selection string: PyMOL's atom-counter
-    # is documented to raise a misleading "Invalid selection name" error
-    # whenever any operand in the expression is a CGO/non-atomic object --
-    # CGOs have no atoms by definition, and PyMOL's selector engine does not
-    # handle that combination cleanly (see e.g. the well-known "Show contacts"
-    # PyMOL script's own workaround for this exact behavior). TERMINI
-    # selections legitimately combine molecular objects with a CGO
-    # visualization overlay, so a plain count_atoms() check here would wrongly
-    # reject a perfectly valid render.
-    #
-    # Instead: split the selection on top-level " or "/" and " boundaries
-    # (best-effort -- this only needs to handle the simple space-joined
-    # object-name selections Astra3 itself builds, not arbitrary user-typed
-    # selection algebra) and confirm every plain object-name-looking token
-    # actually exists via cmd.get_names(), which -- unlike count_atoms --
-    # correctly includes CGO/non-molecular objects. Only the tokens that look
-    # like real molecular selections get atom-counted.
-    # Defined up front: the render-scoping block further down reads this, and
-    # it is only assigned inside the branch below.
+    # cmd.count_atoms() raises "Invalid selection name" when any operand is a
+    # CGO, and TERMINI selections combine objects with a CGO overlay. So the
+    # selection is split on top-level " or " and " and " (enough for the
+    # selections Astra3 builds), each object-like token is checked with
+    # cmd.get_names(), which includes CGOs, and only molecular tokens are
+    # atom-counted.
+    # Defined here: the render-scoping block below reads it, and it is only
+    # assigned inside the branch below.
     plain_name_tokens = []
     try:
         existing_names = set(cmd.get_names("objects")) | set(cmd.get_names("selections"))
@@ -799,19 +666,13 @@ def render_views(selection, images_dir, image_quality="medium", label="structure
     if existing_names is not None:
         tokens = [t.strip() for t in re.split(r"\s+(?:or|and)\s+", selection, flags=re.IGNORECASE)]
         plain_name_tokens = [t for t in tokens if re.fullmatch(r"[A-Za-z0-9_]+", t)]
-        # Compared case-insensitively, because that is how PyMOL itself
-        # matches names: "6F7R" and "6f7r" are one object to it, and a
-        # selection naming either resolves. An imported structure is named
-        # after its file ("6f7r.cif" -> "6f7r") while the analysis refers to
-        # it in upper case, so an exact comparison here declared the object
-        # missing and aborted the render after the whole run had succeeded.
+        # Case-insensitive, as PyMOL matches names: an imported structure is named
+        # after its file ("6f7r") while the analysis refers to "6F7R".
         existing_upper = {n.upper() for n in existing_names}
         missing = [t for t in plain_name_tokens if t.upper() not in existing_upper]
         if missing:
-            # The names that ARE loaded are printed alongside the ones that
-            # are not. Without them this message states only that something
-            # is missing, which is the one thing already known -- and the
-            # difference between the two lists is what identifies the cause.
+            # The loaded names are printed beside the missing ones; the difference
+            # identifies the cause.
             loaded = ", ".join(sorted(existing_names)) or "none"
             print(f"{RED}Render aborted: selection '{selection}' references a name that does not "
                   f"exist in the current PyMOL session ({', '.join(missing)}). Loaded right "
@@ -819,10 +680,9 @@ def render_views(selection, images_dir, image_quality="medium", label="structure
                   f"run. If this keeps happening, restart PyMOL and try again.{RESET}", flush=True)
             return
 
-    # Separately confirm there is at least one real atom to render. Counted
-    # against frame_selection (molecular-only when the caller provides one)
-    # rather than the full `selection`, which may include a CGO overlay that
-    # cmd.count_atoms cannot reliably evaluate (see note above).
+    # At least one atom must be there to render. Counted against
+    # frame_selection (molecular-only when the caller gives one), since
+    # cmd.count_atoms cannot reliably evaluate a selection with a CGO in it.
     try:
         atom_count = cmd.count_atoms(frame_selection)
     except Exception:
@@ -833,17 +693,11 @@ def render_views(selection, images_dir, image_quality="medium", label="structure
               f"happening, restart PyMOL and try again.{RESET}", flush=True)
         return
 
-    # Everything not named in the selection is switched off for the
-    # duration of the render, and switched back on afterwards.
-    #
-    # The selection only ever controlled framing: it decides what the
-    # camera is oriented and zoomed on, not what is drawn. Every other
-    # loaded object stayed visible and was raytraced along with it. A
-    # TERMINI run comparing three structures therefore produced three
-    # sets of images that each showed all three, correctly labelled as a
-    # pairwise comparison and showing something else entirely. Only
-    # objects that were enabled are recorded, so nothing the caller had
-    # deliberately hidden gets switched back on.
+    # Everything not named in the selection is switched off for the render and
+    # back on afterwards. The selection only decides framing, not what is drawn,
+    # so otherwise a three-structure TERMINI run drew all three into every
+    # pairwise image. Only objects that were enabled are recorded, so nothing
+    # the caller hid is switched back on.
     hidden_for_render = []
     if plain_name_tokens:
         wanted = {t.upper() for t in plain_name_tokens}
@@ -863,7 +717,7 @@ def render_views(selection, images_dir, image_quality="medium", label="structure
                     pass
             hidden_for_render = []
 
-    prev_slab = _apply_standard_render_settings()
+    _apply_standard_render_settings()
 
     width, height = image_dimensions(image_quality)
 
@@ -875,35 +729,12 @@ def render_views(selection, images_dir, image_quality="medium", label="structure
             pass
         check_for_cancellation()
 
-    # Camera angles are applied by rewriting the view matrix directly rather
-    # than by asking PyMOL to turn the camera.
-    #
-    # cmd.turn() is a request against PyMOL's own camera state, and whether it
-    # has been applied by the time cmd.ray() rasterizes is not something the
-    # caller controls -- Astra3 drives PyMOL from a background thread, where
-    # commands are queued. The visible result was view_front.png and
-    # view_back.png coming out as the same camera, differing only by
-    # anti-aliasing noise. Adding a sync between the turn and the ray did not
-    # fix it, which is what ruled the race out as the whole explanation.
-    #
-    # get_view/set_view is not a request: set_view installs the matrix, and
-    # the next ray uses it. Rotating the 3x3 rotation block here also makes
-    # each view independent of the one before it. One orient, one baseline,
-    # six derived cameras.
-    #
-    # Every view used to re-run orient and then ask cmd.turn to rotate from
-    # wherever that left the camera. That made each image depend on two things
-    # behaving identically six times over: orient returning the same camera,
-    # and turn composing from it rather than from the previous view's result.
-    # When either slipped, whole pairs collapsed onto the same picture -- left
-    # matching right, top matching bottom -- while front and back still
-    # differed, because a 180 turn survives a compounding error that +/-90
-    # does not.
-    #
-    # Capturing the oriented camera once and computing each view from THAT
-    # baseline removes the dependency: no view is derived from another, so no
-    # view can inherit another's error. It also drops five orient/zoom passes
-    # per structure, which is the slowest part of this loop.
+    # Each camera is computed from one oriented baseline by rewriting the view
+    # matrix, not by cmd.turn. turn is a request against PyMOL's camera, and
+    # whether it has been applied when cmd.ray() runs is not under the caller's
+    # control; when it slipped, left matched right and top matched bottom.
+    # set_view installs the matrix the next ray uses, no view derives from
+    # another, and orient and zoom run once per structure instead of six times.
     _safe_orient_zoom(frame_selection)
     baseline = None
     try:
@@ -916,12 +747,8 @@ def render_views(selection, images_dir, image_quality="medium", label="structure
     except Exception as e:  # noqa: BLE001
         _render_diag(f"could not read a baseline view ({e})")
     if baseline is None:
-        # Worth saying out loud. The per-view cmd.turn fallback below has a
-        # demonstrated failure on this exact set: turning -90 and +90 from the
-        # same starting camera produced byte-identical images, so left/right
-        # and top/bottom came out as one view each while front/back (180
-        # apart) were fine. Deriving every camera from one baseline matrix
-        # avoids relying on turn at all.
+        # The per-view cmd.turn fallback has produced identical images for opposite
+        # views (-90 and +90 from the same camera).
         print(f"{YELLOW}Could not establish a camera baseline for {label}; falling back to per-view "
               f"turns. Opposite views (left/right, top/bottom) may come out identical.{RESET}",
               flush=True)
@@ -1002,72 +829,57 @@ def take_pictures(obj, images_dir, image_quality="medium", frame_selection=None,
 
 
 def _safe_chain_key_for_filename(chain_key):
-    """chain_key from TERMINI's per_chain_results is either a single
-    chain letter ("A") or "ref/cmp" when the matched chains differ
-    ("A/B") -- "/" is a path separator and cannot appear in a filename.
+    """A chain key as a file-name part. TERMINI's keys are a chain letter
+    ("A"), or "ref/cmp" when the matched chains differ ("A/B"), and "/"
+    cannot appear in a file name.
     """
     return re.sub(r"[^A-Za-z0-9_-]", "-", chain_key)
 
 
 def render_termini_closeup(frame_selection, render_selection, images_dir, filename, image_quality="medium",
                            extra_turn_y=0):
-    """Render ONE tight, isolated close-up PNG. Unlike render_views'
-    orient (built for whole-structure framing, buffer=3, four
-    90-degree-apart views plus top/bottom), this is deliberately a
-    single, closer shot with a small corrective turn after orient --
-    orient's principal-axis alignment already tends to put a short
-    backbone segment's long axis along screen-horizontal rather than
-    pointing at the camera, but a short, near-straight or helical
-    terminus window can still orient close to end-on; the extra turn
-    is a cheap, reliable safeguard against a close-up that ends up
-    looking straight down the segment instead of across it.
+    """Render one isolated close-up PNG: a single closer shot (buffer 2) with a
+    25-degree turn after orient, since a short straight or helical window can
+    orient nearly end-on.
 
-    extra_turn_y, if given, adds this many additional degrees of
-    rotation around the vertical axis on top of the standard 25-degree
-    corrective turn -- used by render_termini_closeups to render a
-    second angle (90 degrees further around) for the same terminus, so
-    a vector that happens to be foreshortened from one camera position
-    is very unlikely to also be foreshortened from the other.
+    extra_turn_y adds degrees about the vertical axis on top of that, for
+    render_termini_closeups' second angle.
 
-    Returns True/False (whether the file was verified non-blank),
-    exactly like render_views' own per-view result -- callers should
-    treat a False return as "this one image didn't save", not raise.
+    Returns whether the file was verified non-blank, as render_views does
+    per view; False means this image did not save.
     """
     check_for_cancellation()
-    prev_slab = _apply_standard_render_settings()
+    _apply_standard_render_settings()
     width, height = image_dimensions(image_quality)
+    _safe_orient_zoom(frame_selection)
     try:
-        _safe_orient_zoom(frame_selection)
-        try:
-            cmd.zoom(frame_selection, buffer=2)  # tighter than render_views' buffer=3 -- this is meant to read as a close-up, not another wide shot
-        except Exception:
-            pass
-        try:
-            cmd.turn("y", 25 + extra_turn_y)
-            _flush_camera()
-        except Exception:
-            pass
-        saved = _safe_save_png(Path(images_dir) / filename, width, height)
-        try:
-            cmd.sync()
-        except Exception:
-            pass
-        check_for_cancellation()
-        if saved:
-            print(f"{GREEN}Saved {filename}{RESET}", flush=True)
-        else:
-            print(f"{RED}Close-up render failed for {filename}; see the render-failure message above.{RESET}", flush=True)
-        return saved
-    finally:
-        _restore_render_settings(prev_slab)
+        cmd.zoom(frame_selection, buffer=2)  # tighter than render_views' buffer=3, for a close-up
+    except Exception:
+        pass
+    try:
+        cmd.turn("y", 25 + extra_turn_y)
+        _flush_camera()
+    except Exception:
+        pass
+    saved = _safe_save_png(Path(images_dir) / filename, width, height)
+    try:
+        cmd.sync()
+    except Exception:
+        pass
+    check_for_cancellation()
+    if saved:
+        print(f"{GREEN}Saved {filename}{RESET}", flush=True)
+    else:
+        print(f"{RED}Close-up render failed for {filename}; see the render-failure message above.{RESET}", flush=True)
+    return saved
 
 
 def _chains_from_chain_key(chain_key):
     """Split a chain key into (reference_chain, comparison_chain).
 
-    match_chains_across_structures can pair chains whose letters differ, in
-    which case the key is "A/B" -- reference chain first. A plain key means
-    both structures use the same letter.
+    match_chains_across_structures can pair chains whose letters differ; the
+    key is then "A/B", reference chain first. A plain key means both
+    structures use the same letter.
     """
     text = str(chain_key)
     if "/" in text:
@@ -1079,43 +891,22 @@ def _chains_from_chain_key(chain_key):
 def render_termini_closeups(reference_obj, cmp_obj, chain_key, per_chain_result,
                             ref_structure_data, cmp_structure_data,
                             images_dir, image_quality="medium", comparison_index=0):
-    """Render one close-up PNG per available terminus (N and/or C) for one
-    matched chain of one TERMINI comparison: reference and comparison
-    structures' already-red/green-colored terminus windows (see
-    apply_terminus_colors in astra3_structure.py), isolated with a TPV
-    arrow overlay scoped to just this one terminus.
+    """Render the close-ups for one matched chain of one TERMINI comparison:
+    both structures' coloured terminus windows (apply_terminus_colors in
+    astra3_structure.py), with this terminus's orientation arrows.
 
-    Isolation technique, two parts:
-    1. cmd.create() copies of JUST the terminus-window atoms
-       (ref_structure_data["n_term_name"]/["c_term_name"], the exact
-       same named selections already used for the red/green coloring)
-       into their own temporary objects.
-    2. reference_obj and cmp_obj themselves are DISABLED for the
-       duration of this render, then re-enabled afterward. ray/png
-       render everything currently enabled in the scene -- there is no
-       per-render selection filter -- so isolation copies alone would
-       still show the rest of the protein behind the close-up.
-       cmd.disable()/cmd.enable() toggle a whole object's visibility
-       without touching its representation state (unlike a
-       per-selection cartoon_transparency fade, which PyMOL does not
-       apply reliably), so the main six-view render that runs right
-       after this is unaffected either way.
+    Isolation: cmd.create() copies of the terminus-window atoms
+    (n_term_name, c_term_name), with every other object disabled for the
+    render and re-enabled afterwards. ray and png draw whatever is enabled,
+    and disable/enable leaves representations untouched, so the six-view
+    render that follows is unaffected.
 
-    Returns {terminus: [image_path, ...]} -- two close-up angles per
-    terminus rendered (rotated 90 degrees apart), so a vector that
-    happens to point mostly toward/away from one camera (foreshortened,
-    hard to read) is very unlikely to also be foreshortened in the
-    other. A terminus with nothing rendered is simply absent from the
-    dict, not present with an empty list.
+    Returns {terminus: [image_path, ...]}, two angles 90 degrees apart per
+    terminus; a terminus with nothing rendered is absent.
 
-    Side effect beyond the return value: for each terminus actually
-    rendered, a real CGO object named "Orientation_<cmp_obj>_chain<chain>_
-    <terminus>term" is left in the PyMOL session, DISABLED (not
-    deleted, not enabled) -- so it never appears in the main six-view
-    whole-structure render that runs right after this, but survives
-    into the final saved .pse, where the person can click it on in
-    PyMOL's own object panel to see the same orientation arrows shown in the
-    close-up PNG, labeled by comparison/chain/terminus.
+    For each terminus rendered, a disabled CGO named
+    "Orientation_<cmp_obj>_chain<chain>_<terminus>term" stays in the session,
+    so the saved .pse can show the same arrows from the object panel.
     """
     closeups = {}
     safe_chain = _safe_chain_key_for_filename(chain_key)
@@ -1132,33 +923,19 @@ def render_termini_closeups(reference_obj, cmp_obj, chain_key, per_chain_result,
         if not ref_term_sel or not cmp_term_sel:
             continue
 
-        # Scope the isolation copies to the chain this close-up is actually
-        # about. The n_term_name/c_term_name selections cover EVERY eligible
-        # chain in their structure, so creating from them unscoped pulls in
-        # the termini of every other chain as well -- on a multi-chain entry
-        # that renders several unrelated terminus pairs into one image, which
-        # reads as "the arrows are pointing at nothing" because the framing is
-        # then centred on a group of unrelated windows rather than this one.
+        # Isolation copies scoped to this close-up's chain: n_term_name and
+        # c_term_name cover every eligible chain, so unscoped copies would frame
+        # several unrelated terminus pairs in one image.
         ref_chain, cmp_chain_letter = _chains_from_chain_key(chain_key)
         ref_term_sel = f"({ref_term_sel}) and chain {ref_chain}"
         cmp_term_sel = f"({cmp_term_sel}) and chain {cmp_chain_letter}"
 
         temp_ref = f"_closeup_ref_{cmp_obj}_{safe_chain}_{terminus}"
         temp_cmp = f"_closeup_cmp_{cmp_obj}_{safe_chain}_{terminus}"
-        # NOT underscore-prefixed, unlike temp_ref/temp_cmp above -- PyMOL
-        # treats a leading "_" as an internal/hidden name by its own
-        # convention, so a name like "_closeup_viz_..." would never even
-        # appear for the user to toggle. This object is real, meaningful
-        # output -- the actual orientation arrows -- kept in the final saved session
-        # (not deleted like the temp_ref/temp_cmp isolation copies below)
-        # precisely so it shows up, labeled and toggleable, in PyMOL's own
-        # object panel when the person opens the .pse. Safe to leave loaded
-        # indefinitely: CGO objects are atomless, so purge_orphaned_state()'s
-        # "delete anything with 0 atoms" sweep (which also runs again inside
-        # save_session() itself, right before the final .pse write) never
-        # touches it -- count_atoms() raises on a CGO object rather than
-        # returning 0, and that exception is caught and skipped, not treated
-        # as "delete this".
+        # Not underscore-prefixed: PyMOL hides names starting with "_", and these
+        # arrows are kept in the saved session to be toggled from the object panel.
+        # purge_orphaned_state's zero-atom sweep skips CGOs (count_atoms raises on
+        # them), so it is never removed.
         viz_name = f"Orientation_{cmp_obj}_chain{safe_chain}_{terminus}term"
         for stale in (temp_ref, temp_cmp, viz_name):
             if stale in cmd.get_names("objects"):
@@ -1188,11 +965,8 @@ def render_termini_closeups(reference_obj, cmp_obj, chain_key, per_chain_result,
                     pass
             continue
 
-        # Scoped to just this one chain+terminus -- the whole point of the
-        # close-up is one clear arrow pair, not every terminus in the
-        # comparison layered on top of each other.
-        # comparison_index picks this comparison's own arrow colours, the
-        # same pair the report's close-up key names for it.
+        # Only this chain and terminus. comparison_index picks this comparison's
+        # arrow colours, the pair the report's close-up key names.
         drawn = draw_termini_vectors(viz_name, {chain_key: {terminus: metrics}},
                                      comparison_index=comparison_index)
 
@@ -1201,21 +975,10 @@ def render_termini_closeups(reference_obj, cmp_obj, chain_key, per_chain_result,
         if drawn:
             render_selection += " or " + drawn
 
-        # Everything except this close-up's own scaffolding is switched off
-        # for the duration of the render. ray/png draw everything currently
-        # enabled, with no per-render selection filter, and the isolation
-        # copies above only ever ADDED geometry -- they never removed the
-        # originals from the scene.
-        #
-        # Disabling just the reference and comparison sufficed while a run
-        # held two structures and nothing else. With a third structure
-        # loaded, that one stayed enabled and was raytraced into the
-        # background of a view whose whole purpose is an unobstructed look
-        # at one terminus pair.
-        #
-        # try/finally guarantees these are re-enabled even if rendering
-        # raises, so a failure here can never leave the session with a
-        # structure silently missing.
+        # Everything but this close-up's own objects is switched off for the
+        # render: ray and png draw whatever is enabled, and the isolation copies
+        # only add geometry. Disabling just the two structures is not enough once a
+        # third is loaded. The finally re-enables them even if rendering raises.
         keep_enabled = {temp_ref.upper(), temp_cmp.upper()}
         if drawn:
             keep_enabled.add(str(drawn).upper())
@@ -1229,11 +992,8 @@ def render_termini_closeups(reference_obj, cmp_obj, chain_key, per_chain_result,
             pass
         try:
             saved_paths = []
-            # Two angles per terminus, not one -- a second view rotated 90
-            # degrees around the vertical axis from the first, so a vector
-            # pointing mostly toward/away from the first camera
-            # (foreshortened, hard to read) is very unlikely to also be
-            # foreshortened in the second.
+            # Two angles per terminus, the second rotated 90 degrees about the vertical
+            # axis, so a vector foreshortened in one is unlikely to be in both.
             for angle_idx, extra_turn in enumerate((0, 90)):
                 filename = f"closeup_{terminus}term_{safe_chain}_angle{angle_idx + 1}.png"
                 saved = render_termini_closeup(frame_selection, render_selection, images_dir, filename,
@@ -1249,21 +1009,11 @@ def render_termini_closeups(reference_obj, cmp_obj, chain_key, per_chain_result,
                 except Exception:
                     pass
 
-        # temp_ref/temp_cmp were only ever scaffolding for this one render --
-        # the person already has the real, full reference_obj and cmp_obj in
-        # the session with everything these isolated copies contain and more,
-        # so keeping them around would just be confusing duplicate clutter.
-        # The CGO (drawn), in contrast, is real new information found nowhere
-        # else -- kept, but DISABLED rather than left enabled: ray-traced
-        # renders show whatever is currently enabled in the whole scene
-        # (there's no per-render selection filter -- see render_views' own
-        # docstring on this), so an enabled CGO here would leak into the main
-        # six-view whole-structure render that runs right after this in
-        # astra3.py, undoing the "only in the close-ups" separation that
-        # render is specifically meant to have now. Disabled here, it's
-        # invisible until the person explicitly clicks it on in PyMOL's own
-        # object panel after opening the saved session -- exactly the "enabled
-        # from view in the session file" behavior.
+        # The isolation copies duplicate objects already in the session, so they
+        # are deleted. The arrows are kept, but disabled: renders draw everything
+        # enabled, so an enabled CGO would appear in the six-view render that
+        # follows. In the saved session they can be switched on from the object
+        # panel.
         for stale in (temp_ref, temp_cmp):
             try:
                 cmd.delete(stale)
@@ -1282,19 +1032,15 @@ def render_termini_closeups(reference_obj, cmp_obj, chain_key, per_chain_result,
 
 
 def append_unobserved_residue_notes(lines_accumulator, structures_unobserved, deposited_numbering=None):
-    """Report zero-occupancy residues per structure, alongside the missing-
-    residue table.
+    """Report zero-occupancy residues per structure, with the missing-residue
+    table.
 
-    structures_unobserved is {struct_id: {chain: [resi, ...]}}, as produced by
-    process_structure. Written for every command that reports structural notes
-    -- single-structure, OVERLAY and TERMINI -- because the consequence is not
-    specific to terminal analysis. A zero-occupancy residue has coordinates but
-    was never seen in the density, so it is a placeholder position rather than
-    a measurement, and any geometry computed over it is describing a guess.
-    Astra3 excludes these residues from resolved-residue counts, sequence
-    extraction and terminus selection, which changes what a chain's reported
-    first and last residues are, so the exclusion is always stated rather than
-    applied silently.
+    structures_unobserved is {struct_id: {chain: [resi, ...]}}, from
+    process_structure. A zero-occupancy residue has coordinates but was not
+    seen in the density: a placeholder, not a measurement. Astra3 leaves
+    these residues out of resolved-residue counts, sequences and terminus
+    selection, which changes a chain's reported first and last residues, so
+    every command that reports structural notes states the exclusion.
     """
     entries = {sid: chains for sid, chains in (structures_unobserved or {}).items() if chains}
     if not entries:
@@ -1324,13 +1070,11 @@ def append_unobserved_residue_notes(lines_accumulator, structures_unobserved, de
 
 def append_warnings_structural_notes(lines_accumulator, structures_missing_info, missing_residues_sources=None,
                                      structures_unobserved=None, structures_unobserved_deposited=None):
-    """missing_residues_sources: optional {struct_id: source_label} (e.g.
-    "PDB REMARK 465" or "mmCIF pdbx_unobs_or_zero_occ_residues", from
-    header_info['missing_residues_source'] -- see
-    header_info_from_downloaded_files in astra3.py). Falls back to "PDB
-    REMARK 465" for any struct_id not present, which preserves every
-    existing caller's behavior exactly for callers that don't pass this
-    (they were always legacy-PDB-only before -mmCIF existed).
+    """missing_residues_sources: optional {struct_id: source_label} ("PDB
+    REMARK 465" or "mmCIF pdbx_unobs_or_zero_occ_residues", from
+    header_info['missing_residues_source']; see
+    header_info_from_downloaded_files in astra3.py). A struct_id without an
+    entry is labelled "PDB REMARK 465".
     """
     missing_residues_sources = missing_residues_sources or {}
     lines_accumulator.append("WARNINGS / STRUCTURAL NOTES")
@@ -1460,8 +1204,8 @@ _INFO_TIPS = {
     "similarity": ("Similarity", [
         ("What it shows", "Like identity, but also counting substitutions that keep a residue's character."),
         ("How it's calculated", "Identical positions plus conservative substitutions, divided by aligned positions. "
-         "A substitution counts as conservative when a standard amino-acid substitution matrix scores it zero or "
-         "higher."),
+         "A substitution counts as conservative when the BLOSUM62 substitution matrix scores it above zero, "
+         "the rule BLAST uses for its positives."),
         ("Reading it", "Similarity is never lower than identity. A large gap between the two means many "
          "substitutions, most of them conservative."),
     ]),
@@ -1511,7 +1255,7 @@ _INFO_TIPS = {
     "delta_sasa": ("&Delta;SASA", [
         ("What it shows", "The change in how exposed to solvent the terminus is."),
         ("How it's calculated", "Solvent-accessible surface area of every atom in the ten-residue terminus window, traced by a "
-         "rolling 1.4 &Aring; probe over the full structure (one conformation, observed heavy atoms), so packing "
+         f"rolling {SASA_PROBE_RADIUS:.1f} &Aring; probe over the full structure (one conformation, observed heavy atoms), so packing "
          "against other chains and ligands counts as burial. &Delta;SASA is the comparison value minus the reference value, in "
          "&Aring;&sup2;."),
         ("Reading it", "Positive: the terminus is more exposed in the comparison structure. Negative: more buried."),
@@ -1520,14 +1264,15 @@ _INFO_TIPS = {
          "target='_blank' rel='noopener'>Shrake &amp; Rupley 1973</a> method and Bondi radii."),
     ]),
     "sasa_shift": ("SASA shift", [
-        ("How it's labelled", "<strong>More Exposed/Unmasked</strong> when &Delta;SASA is above +26 &Aring;&sup2;, <strong>More "
-         "Buried/Masked</strong> below &minus;26 &Aring;&sup2;, and <strong>Little change</strong> in "
+        ("How it's labelled", f"<strong>More Exposed/Unmasked</strong> when &Delta;SASA is above +{SASA_SHIFT_THRESHOLD:.0f} &Aring;&sup2;, <strong>More "
+         f"Buried/Masked</strong> below &minus;{SASA_SHIFT_THRESHOLD:.0f} &Aring;&sup2;, and <strong>Little change</strong> in "
          "between."),
-        ("Why 26 &Aring;&sup2;", "It is a quarter of <a href='https://doi.org/10.1371/journal.pone.0080635' target='_blank' "
+        (f"Why {SASA_SHIFT_THRESHOLD:.0f} &Aring;&sup2;", "It is a quarter of <a href='https://doi.org/10.1371/journal.pone.0080635' target='_blank' "
          "rel='noopener'>glycine's maximum solvent-accessible surface</a> (104 &Aring;&sup2;): the "
-         "smallest change that can carry even the smallest residue across the <a "
+         "least by which a fully buried residue's area must grow to reach the <a "
          "href='https://doi.org/10.1016/j.jmb.2010.09.028' target='_blank' rel='noopener'>25% "
-         "relative-accessibility line</a> that best separates surface from interior residues. Smaller "
+         "relative-accessibility line</a> used to separate surface from interior residues. Glycine is "
+         "the smallest residue; every other needs more. Smaller "
          "changes over a ten-residue window are labelled Little change."),
         ("Source", "<a href='https://doi.org/10.1371/journal.pone.0080635' target='_blank' rel='noopener'>Tien et "
          "al. 2013</a>; <a href='https://doi.org/10.1016/j.jmb.2010.09.028' target='_blank' "
@@ -1549,10 +1294,10 @@ _INFO_TIPS = {
          "rel='noopener'>Sun et al. 2019</a> (limitations)."),
     ]),
     "flex_shift": ("Flexibility shift", [
-        ("How it's labelled", "<strong>Rigidified</strong> when &Delta; normalized B-factor is below &minus;0.2, "
-         "<strong>Disordered/Flexible</strong> above +0.2, and <strong>Little change</strong> in between."),
-        ("Why 0.2", "Since <a href='https://doi.org/10.1021/acs.chemrev.8b00290' target='_blank' rel='noopener'>B = "
-         "8&pi;&sup2;&lang;u&sup2;&rang;</a>, a change of 0.2 in B relative to the protein average is "
+        ("How it's labelled", f"<strong>Rigidified</strong> when &Delta; normalized B-factor is below &minus;{BNORM_SHIFT_THRESHOLD:g}, "
+         f"<strong>Disordered/Flexible</strong> above +{BNORM_SHIFT_THRESHOLD:g}, and <strong>Little change</strong> in between."),
+        (f"Why {BNORM_SHIFT_THRESHOLD:g}", "Since <a href='https://doi.org/10.1021/acs.chemrev.8b00290' target='_blank' rel='noopener'>B = "
+         f"8&pi;&sup2;&lang;u&sup2;&rang;</a>, a change of {BNORM_SHIFT_THRESHOLD:g} in B relative to the protein average is "
          "about a 10% change in relative RMS atomic displacement. B-factors also shift with resolution, "
          "refinement and crystal packing, so smaller differences are labelled Little change."),
         ("Reading it", "Describes how the terminus is modelled relative to each protein's own average. B-factors combine "
@@ -1574,8 +1319,8 @@ _INFO_TIPS = {
     "rmsd": ("RMSD", [
         ("What it shows", "How closely a comparison structure superimposes on the reference, in &Aring;."),
         ("How it's calculated", "Residues are paired by sequence alignment and matching atoms are superposed by "
-         "least-squares fitting, then refined over up to 5 cycles that set aside atom pairs further apart than "
-         "2.0 &times; RMSD. RMSD is the "
+         f"least-squares fitting, then refined over up to {SUPERPOSE_CYCLES} cycles that set aside atom pairs further apart than "
+         f"{SUPERPOSE_CUTOFF:.1f} &times; RMSD. RMSD is the "
          "root-mean-square distance over the atom pairs kept."),
         ("Reading it", "Lower is closer. Because outliers are set aside, read it together with the number of aligned "
          "atoms: a low RMSD over few atoms describes only part of the structure."),
@@ -1646,8 +1391,8 @@ _INFO_TIPS = {
         ("How to read it", "Lower is better, and the value scales with resolution: roughly 0.2 or below is typical "
          "for a well-refined structure at high resolution. A recalculated value far from the depositor's is worth "
          "investigating."),
-        ("Why it matters", "It is the standard guard against over-fitting, and is the best single indicator of how "
-         "well the model is supported by the data."),
+        ("Why it matters", "It is the standard guard against over-fitting: it tests the model against data that "
+         "refinement never saw."),
     ]),
     "r_factors": ("R-work / R-free (depositor)", [
         ("What it is", "The depositor's own R-factors from refinement. R-work measures agreement with the reflections "
@@ -1660,10 +1405,10 @@ _INFO_TIPS = {
          "of any measurement in this report."),
     ]),
     "nearby_residues": ("Nearby residues", [
-        ("What it shows", "Protein residues with any atom within 4.0 &Aring; of any atom of the ligand."),
+        ("What it shows", f"Protein residues with any atom within {LIGAND_CONTACT_CUTOFF:.1f} &Aring; of any atom of the ligand."),
     ]),
     "polar_contacts": ("Possible polar contacts", [
-        ("What it shows", "Pairs of ligand nitrogen or oxygen atoms and protein nitrogen or oxygen atoms within 3.5 &Aring; "
+        ("What it shows", f"Pairs of ligand nitrogen or oxygen atoms and protein nitrogen or oxygen atoms within {POLAR_CONTACT_CUTOFF:.1f} &Aring; "
          "of each other."),
         ("Reading it", "A distance check only. Hydrogen-bond angles are not assessed, so these are candidate hydrogen "
          "bonds."),
@@ -1817,7 +1562,7 @@ def _astra3_report_css():
     so both templates stay visually consistent without duplicating ~290 lines
     of stylesheet text."""
     return """
-    /* Terminus sequence table -- one box, one row per structure, reference
+    /* Terminus sequence table: one box, one row per structure, reference
        first. Differences from the reference are marked on the residue itself,
        which scales to any number of comparisons where a connector line
        between two adjacent rows does not. */
@@ -1846,7 +1591,7 @@ def _astra3_report_css():
     .interp-head { font-size: 12px; font-weight: 700; color: #4a2b6b; letter-spacing: 0.03em;
       text-transform: uppercase; margin-bottom: 2px; }
 
-    /* Image group dividers. A label and a rule -- enough to tell sections
+    /* Image group dividers. A label and a rule: enough to tell sections
        apart when scanning, not enough to compete with the section heading. */
     .img-group-head { display: flex; align-items: center; gap: 10px;
       margin: 22px 0 10px; font-size: 12px; font-weight: 600; color: #6b6478;
@@ -2417,7 +2162,7 @@ def _prepare_annotations(structure_data, reference_obj, warnings_list):
     for d in structure_data.values():
         try:
             ensure_structure_annotations(d)
-        except Exception as e:  # noqa: BLE001 -- a report must never fail because annotations did
+        except Exception as e:  # noqa: BLE001 # a report must never fail because annotations did
             print(f"{YELLOW}Annotation data could not be prepared: {e}{RESET}", flush=True)
             d["annotations"] = {"file": {"available": False, "reference_sequences": [], "sequence_differences": [], "source": None},
                                 "rcsb": {"status": "unavailable", "reason": f"internal error: {e}", "chains": {}, "validation": None}}
@@ -2582,10 +2327,10 @@ def generate_html_report(output_dir, analysis_id, command_str,
         html.append(f"<div class='{cls}'><div class='exec-label'>{html_escape.escape(label)}{tip_html}</div><div class='exec-value'>{value}</div></div>")
 
     def _append_ligand_environment_section(d):
-        """Append a Ligand Environment section (nearby residues + possible polar
-        contacts) for one structure's data dict d, if it has any ligands.
-        Geometric observations only -- see the same disclaimer used in the
-        TXT report's BINDING SITE INFORMATION section.
+        """Append a Ligand Environment section (nearby residues and possible
+        polar contacts) for one structure's data dict d, if it has ligands.
+        Geometric observations only, as the text report's BINDING SITE
+        INFORMATION section says.
         """
         pr = d.get("process_result", {}) or {}
         ligand_info = pr.get("ligand_info", [])
@@ -2609,14 +2354,14 @@ def generate_html_report(output_dir, analysis_id, command_str,
             if near is None:
                 html.append("<p class='muted-note'>Nearby-residue data unavailable for this ligand.</p>")
             elif not near:
-                html.append("<p class='muted-note'>No protein residues found within 4.0 &Aring;.</p>")
+                html.append(f"<p class='muted-note'>No protein residues found within {LIGAND_CONTACT_CUTOFF:.1f} &Aring;.</p>")
             else:
                 html.append("<div class='table-wrap'><table><tr><th>Chain</th><th>Residue</th></tr>")
                 for r in near:
                     html.append(f"<tr><td>{html_escape.escape(r['chain'])}</td><td>{html_escape.escape(r['resn'] + r['resi'])}</td></tr>")
                 html.append("</table></div>")
             count_display = polar_count if polar_count is not None else "Not available"
-            html.append(f"<p class='muted-note' style='margin-bottom:6px;'>Possible polar contacts (N/O within 3.5 &Aring;): {html_escape.escape(str(count_display))}</p>")
+            html.append(f"<p class='muted-note' style='margin-bottom:6px;'>Possible polar contacts (N/O within {POLAR_CONTACT_CUTOFF:.1f} &Aring;): {html_escape.escape(str(count_display))}</p>")
             overlapping_pairs = lig_env.get("overlapping_pairs") or []
             if overlapping_pairs:
                 shown = "; ".join(f"{p['ligand_atom']} / {p['protein_resn']}{p['protein_resi']} {p['protein_atom']} ({p['distance_angstrom']} &Aring;)"
@@ -2648,14 +2393,10 @@ def generate_html_report(output_dir, analysis_id, command_str,
         successful = [r for r in alignment_results.values() if r.get("success")]
         if successful:
             rmsd_vals = [r.get("rmsd") for r in successful if r.get("rmsd") is not None]
-            residues_vals = [r.get("residues") for r in successful if isinstance(r.get("residues"), (int, float))]
             rmsd_display = f"{min(rmsd_vals):.3f} – {max(rmsd_vals):.3f} Å" if rmsd_vals else "N/A"
-            # Per structure rather than a single sum, matching how
-            # Resolution and Experimental Method are already reported. A
-            # total across comparisons is not a quantity anything is
-            # measured in: each alignment covers its own residue count
-            # against the reference, and adding them describes no
-            # alignment that was actually performed.
+            # Per structure, as resolution and method are: each alignment covers its
+            # own residue count against the reference, and a sum describes no
+            # alignment.
             per_structure = []
             for obj, entry in alignment_results.items():
                 if not entry.get("success"):
@@ -2664,7 +2405,7 @@ def generate_html_report(output_dir, analysis_id, command_str,
                 if not isinstance(count, (int, float)):
                     continue
                 pid = structure_data.get(obj, {}).get("pdb_id", obj)
-                per_structure.append(f"{pid}: {int(count)} residues")
+                per_structure.append(f"{html_escape.escape(str(pid))}: {int(count)} residues")
             # One per line rather than a comma run: these are a list of
             # structures, and a reader scans them by structure.
             residues_display = "<br>".join(per_structure) if per_structure else "N/A"
@@ -2802,12 +2543,12 @@ def generate_html_report(output_dir, analysis_id, command_str,
             ions = _counted_codes(i['resn'] for i in pr.get('ion_info', [])) if pr.get('ion_info') else "None"
             html.append(f"<tr><td>Ions</td><td>{html_escape.escape(ions)}</td></tr>")
             if d.get('mean_b') is not None:
-                html.append(f"<tr><td>Mean Cα B-factor" + _tip("mean_b") + f"</td><td>{d['mean_b']:.2f} Å²" + "</td></tr>")
+                html.append("<tr><td>Mean Cα B-factor" + _tip("mean_b") + f"</td><td>{d['mean_b']:.2f} Å²" + "</td></tr>")
                 html.append(f"<tr><td>B-factor Range</td><td>{d['min_b']:.2f} - {d['max_b']:.2f} Å²</td></tr>")
             else:
                 html.append("<tr><td>Mean Cα B-factor" + _tip("mean_b") + f"</td><td>{html_escape.escape(d.get('b_factor_note') or 'Not available')}</td></tr>")
-            html.append(f"<tr><td>Alternate Conformations" + _tip("altloc") + f"</td><td>{'Yes' if d.get('has_altloc') else 'No'}</td></tr>")
-            html.append(f"<tr><td>Water Removed" + _tip("water_removed") + f"</td><td>{pr.get('water_removed','Not available')}</td></tr>")
+            html.append("<tr><td>Alternate Conformations" + _tip("altloc") + f"</td><td>{'Yes' if d.get('has_altloc') else 'No'}</td></tr>")
+            html.append("<tr><td>Water Removed" + _tip("water_removed") + f"</td><td>{pr.get('water_removed','Not available')}</td></tr>")
             from astra3_annotations import html_validation_rows
             html.extend(html_validation_rows(d.get("annotations"), pr.get("chain_list")))
             html.append("</table></div>")
@@ -2967,7 +2708,7 @@ def generate_html_report(output_dir, analysis_id, command_str,
         html.append(f"<tr><td>Ligands (session identifiers)</td><td>{html_escape.escape(', '.join(l['sel_name'] for l in pr.get('ligand_info', [])) if pr.get('ligand_info') else 'None')}</td></tr>")
         html.append(f"<tr><td>Ions (session identifiers)</td><td>{html_escape.escape(', '.join(i['sel_name'] for i in pr.get('ion_info', [])) if pr.get('ion_info') else 'None')}</td></tr>")
         if d.get('mean_b') is not None:
-            html.append(f"<tr><td>Mean Cα B-factor" + _tip("mean_b") + f"</td><td>{d['mean_b']:.2f} Å² (min {d['min_b']:.2f}, max {d['max_b']:.2f})" + "</td></tr>")
+            html.append("<tr><td>Mean Cα B-factor" + _tip("mean_b") + f"</td><td>{d['mean_b']:.2f} Å² (min {d['min_b']:.2f}, max {d['max_b']:.2f})" + "</td></tr>")
         else:
             html.append("<tr><td>Mean Cα B-factor" + _tip("mean_b") + f"</td><td>{html_escape.escape(d.get('b_factor_note') or 'Not available')}</td></tr>")
         html.append(f"<tr><td>Alternate conformations</td><td>{'Yes' if d.get('has_altloc') else 'No'}</td></tr>")
@@ -3094,15 +2835,13 @@ def generate_html_report(output_dir, analysis_id, command_str,
 def generate_json_export(output_dir, analysis_id, command_str,
                          structure_data, alignment_results, pairwise_matrix, warnings_list,
                          reference_obj=None, reference_reason=None, run_parameters=None):
-    """Write Astra3_Report.json into output_dir/Session, alongside the .pse
-    session file and Protein_Information.txt, built from the same validated
-    data passed to generate_html_report -- no independent recalculation, so
-    the JSON, HTML, and TXT reports for a given run can never disagree.
+    """Write Astra3_Report.json into output_dir/Session, from the same data
+    generate_html_report receives, so the JSON, HTML and text reports of a
+    run agree.
 
-    Fields left unavailable in the source data (e.g. resolution not found in
-    a PDB header) are written as JSON null rather than a placeholder string,
-    so downstream tooling can distinguish "unknown" from a real value without
-    string-matching against text like "Not available".
+    Values the source data lacks (a resolution missing from a header) are
+    written as null, so other tools can tell "unknown" from a value without
+    matching text such as "Not available".
     """
     outdir = Path(output_dir)
     session_dir = outdir / "Session"
@@ -3200,6 +2939,7 @@ def generate_json_export(output_dir, analysis_id, command_str,
             if res.get("success"):
                 entry["rmsd_angstrom"] = res.get("rmsd")
                 entry["aligned_atoms"] = res.get("atoms")
+                entry["atom_pairs_before_rejection"] = res.get("paired_atoms")
                 entry["aligned_residues"] = res.get("residues")
             else:
                 entry["error"] = res.get("error")
@@ -3236,7 +2976,9 @@ def generate_json_export(output_dir, analysis_id, command_str,
         "structures_analyzed": len(structure_data),
         "reference_structure": reference_pid,
         "reference_selection_reason": reference_reason,
-        "alignment_method": "Least-squares fit (Kabsch) of matching atoms in sequence-aligned residues; up to 5 cycles rejecting pairs beyond 2.0 x RMSD" if is_overlay_mode else None,
+        "alignment_method": ("Least-squares fit (Kabsch) of matching atoms in sequence-aligned residues; "
+                             f"up to {SUPERPOSE_CYCLES} cycles rejecting pairs beyond {SUPERPOSE_CUTOFF:.1f} x RMSD"
+                             ) if is_overlay_mode else None,
         "structures": structures_out,
         "alignment_results": alignment_out,
         "pairwise_rmsd_matrix": pairwise_out,
@@ -3257,17 +2999,12 @@ def generate_json_export(output_dir, analysis_id, command_str,
 
 
 # ------------------------------------------------------------
-# CSV export (-csv, opt-in only -- never generated by default)
+# CSV export (-csv, opt-in)
 # ------------------------------------------------------------
-# CSV is built from the same structure_data/alignment_results/pairwise_matrix
-# used by the HTML/TXT/JSON reports -- no independent recalculation. Fields
-# not currently captured as structured data anywhere else in Astra3 (e.g.
-# disulfide bond count, which today only exists as report text inside
-# report_disulfides()) are intentionally left out of the CSV schema rather
-# than being recomputed a second time or estimated; adding that field properly
-# means having report_disulfides() return structured data that
-# _run_single_analysis/OverlayExecution store back into structure_data, which
-# is a larger change than the CSV export itself.
+# Built from the same structure_data, alignment_results and pairwise_matrix
+# as the other reports, with no recalculation. Values that only exist as
+# report text (the disulfide count, in report_disulfides) are left out
+# rather than recomputed.
 def _shown_path(path):
     """A path as the computer names it. Python in the Astra3 Engine sees drive C: of a Windows
     computer as /C:/; everywhere else the path is already the computer's own."""
@@ -3275,7 +3012,7 @@ def _shown_path(path):
         try:
             from astra3_engine import host_path
             return host_path(str(path))
-        except Exception:  # noqa: BLE001 -- the path as Python sees it is still a usable record
+        except Exception:  # noqa: BLE001 # the path as Python sees it is still a usable record
             pass
     return str(path)
 
@@ -3318,13 +3055,10 @@ def _csv_none_if_placeholder(value):
 
 
 def _write_ligand_environment_csv(session_dir, structure_data):
-    """Write Ligand_Environment.csv: one row per (ligand, nearby residue) pair,
-    plus polar-contact distance columns when a polar contact was found for
-    that specific residue. Kept as its own file (rather than folded into
-    Astra3_Export.csv / Overlay_Summary.csv) because a structure can have
-    multiple ligands, each with a variable number of nearby residues -- that
-    doesn't fit a one-row-per-structure schema without either truncating data
-    or repeating the same structure row many times.
+    """Write Ligand_Environment.csv: one row per (ligand, nearby residue),
+    with polar-contact distance columns where that residue has one. A file
+    of its own because a structure can have several ligands, each with any
+    number of nearby residues, which does not fit one row per structure.
     """
     csv_path = session_dir / "Ligand_Environment.csv"
     fieldnames = [
@@ -3492,12 +3226,7 @@ def generate_overlay_csv(output_dir, structure_data, alignment_results, pairwise
                        warnings_list, reference_obj=None, reference_reason=None):
     """Write Overlay_Summary.csv (one row per aligned structure) and
     Pairwise_RMSD_Matrix.csv (one row per structure pair) into
-    output_dir/Session.
-
-    Kept as two separate files rather than one combined CSV because the two
-    tables have different keys/shapes (per-structure alignment stats vs.
-    pairwise comparisons) -- forcing them into one file would mean either
-    duplicating rows or leaving most cells blank on every row.
+    output_dir/Session. Two files because the tables have different keys.
     """
     outdir = Path(output_dir)
     session_dir = outdir / "Session"
@@ -3574,8 +3303,8 @@ def generate_overlay_csv(output_dir, structure_data, alignment_results, pairwise
 # ------------------------------------------------------------
 def _termini_rows(structure_data, reference_obj, results):
     """Flatten TerminiExecution.results into one row per (comparison
-    structure, chain, terminus) -- the shape both the CSV and JSON writers
-    below iterate over, so the two formats can never disagree on content.
+    structure, chain, terminus), the shape the CSV and JSON writers both
+    iterate over.
     """
     ref_pid = structure_data[reference_obj]["pdb_id"]
     rows = []
@@ -3596,16 +3325,13 @@ def _termini_rows(structure_data, reference_obj, results):
 
 def generate_termini_json(output_dir, reference_obj, structure_data, results, warnings_list, command_str, functional_readouts=None,
                           run_parameters=None):
-    """Write Termini_Analysis.json into output_dir/Session, using the same
-    structure/placeholder conventions as generate_json_export (None for
-    unavailable values, no independent recalculation -- built from the
-    TerminiExecution.results object that also backs the CSV and HTML output).
+    """Write Termini_Analysis.json into output_dir/Session, with
+    generate_json_export's conventions (null for unavailable values), from
+    the TerminiExecution.results that also back the CSV and HTML output.
 
     functional_readouts, if given, is the {structure_id_upper: [...]} dict
-    from load_functional_readouts (see astra3_core.py) -- user-supplied
-    experimental/functional data (e.g. signal change, affinity shift) tied
-    to a structure by ID, auto-detected from readouts.csv. Included
-    verbatim as its own top-level section; never computed or altered here.
+    from load_functional_readouts (astra3_core.py): the person's own data
+    from readouts.csv, written as given in its own top-level section.
     """
     outdir = Path(output_dir)
     session_dir = outdir / "Session"
@@ -3649,12 +3375,9 @@ def generate_termini_json(output_dir, reference_obj, structure_data, results, wa
             "bnorm_comparison": m.get("bnorm_comparison") if m else None,
             "delta_bnorm": m.get("delta_bnorm") if m else None,
             "bnorm_classification": m.get("bnorm_classification") if m else None,
-            # Sequence figures for this terminus window. Identity alone
-            # cannot distinguish a conservative substitution from an
-            # unrelated residue, and cannot distinguish a well-matched
-            # window from a short high-scoring fragment -- similarity and
-            # per-sequence coverage are exported alongside it for that
-            # reason.
+            # Identity alone cannot tell a conservative substitution from an unrelated
+            # residue, or a good window match from a short fragment, so similarity and
+            # coverage are exported with it.
             "sequence_identity": (m.get("sequence_match") or {}).get("alignment_identity") if m else None,
             "sequence_similarity": (m.get("sequence_match") or {}).get("alignment_similarity") if m else None,
             "sequence_coverage_reference": (m.get("sequence_match") or {}).get("alignment_coverage_reference") if m else None,
@@ -3723,12 +3446,10 @@ def generate_termini_json(output_dir, reference_obj, structure_data, results, wa
         # terminal window centroid, measured after alignment. Straight-line
         # centroid separations, not contact or binding distances.
         "ligand_terminus_distances": _ligand_terminus_rows(structure_data, results),
-        # Residues that could not be measured, split by reason -- "missing"
-        # (declared in the header, no coordinates) and "unobserved" (real
-        # coordinates, zero occupancy, never seen in the density). Unobserved
-        # residues are excluded from terminus selection and every terminal
-        # measurement, so a reported terminus is the first or last OBSERVED
-        # residue, not necessarily the first or last deposited one.
+        # Unmeasured residues by reason: "missing" (in the header, no coordinates)
+        # and "unobserved" (coordinates, zero occupancy). Unobserved residues are
+        # excluded from termini, so a reported terminus is the first or last
+        # observed residue.
         "unmeasurable_residues": _residue_coverage_rows(structure_data, reference_obj, results),
         "chain_reductions_applied": chain_reductions_out,
         # How each structure's clusters of redundant chains were decided.
@@ -3753,11 +3474,11 @@ def generate_termini_json(output_dir, reference_obj, structure_data, results, wa
             "local_rmsd_refit_angstrom": "C-alpha RMSD over the same pairs after superposing the two terminus "
                                          "windows onto each other.",
             "sasa_classification": "More Exposed/Unmasked or More Buried/Masked when the change in terminus-window "
-                                   "SASA is above 26 A^2, a quarter of glycine's 104 A^2 maximum accessible surface "
+                                   f"SASA is above {SASA_SHIFT_THRESHOLD:.0f} A^2, a quarter of glycine's 104 A^2 maximum accessible surface "
                                    "(Tien et al. 2013) at the 25% relative-accessibility boundary between surface "
                                    "and interior residues (Levy 2010); Little change otherwise.",
             "bnorm_classification": "Disordered/Flexible or Rigidified when the change in normalized B-factor is "
-                                    "above 0.2, about a 10% change in relative RMS atomic displacement since "
+                                    f"above {BNORM_SHIFT_THRESHOLD:g}, about a 10% change in relative RMS atomic displacement since "
                                     "B = 8*pi^2*<u^2> (see Sun et al. 2019 on the limits of B-factor comparisons); "
                                     "Little change otherwise.",
         },
@@ -3767,7 +3488,7 @@ def generate_termini_json(output_dir, reference_obj, structure_data, results, wa
             "four resolved residues; for a tag attached at that terminus it shows which way "
             "the chain points where the tag joins. \u0394SASA is comparison minus reference solvent "
             "accessible surface area (\u00c5\u00b2) over the terminus window, computed by Astra3 "
-            "(Shrake-Rupley, 1.4 \u00c5 probe, Bondi radii, one conformation, observed heavy atoms) "
+            f"(Shrake-Rupley, {SASA_PROBE_RADIUS:.1f} \u00c5 probe, Bondi radii, one conformation, observed heavy atoms) "
             "on the full structure (so burial from other chains/ligands is reflected); positive "
             "values indicate increased exposure. "
             "Normalized B-factor is the occupancy-weighted mean B-factor of the terminal window "
@@ -3813,18 +3534,13 @@ def generate_termini_json(output_dir, reference_obj, structure_data, results, wa
 
 
 def generate_termini_csv(output_dir, reference_obj, structure_data, results, functional_readouts=None):
-    """Write Termini_Analysis.csv into output_dir/Session, one row per
-    comparison structure (matching the exact column list from the TERMINI
-    spec). When a structure has multiple protein chains, one row is written
-    per chain, with the chain identified in its own column so multi-chain
-    structures don't silently collapse into a single ambiguous row.
+    """Write Termini_Analysis.csv into output_dir/Session: one row per
+    comparison structure, chain and terminus, the chain in its own column.
 
     functional_readouts, if given, is the {structure_id_upper: [...]} dict
-    from load_functional_readouts (see astra3_core.py) -- written as a
-    second, separate table appended after the main one (readouts are
-    per-structure, not per-chain/terminus, so mixing them into the main
-    row structure would misrepresent what they describe). User-supplied
-    data, written verbatim; never computed here.
+    from load_functional_readouts (astra3_core.py). It is written as given,
+    as a second table after the main one, since readouts describe a
+    structure, not a chain or terminus.
     """
     outdir = Path(output_dir)
     session_dir = outdir / "Session"
@@ -3936,11 +3652,6 @@ def _angle_cell(value):
 def _local_rmsd_cell(metrics, key="local_rmsd_angstrom"):
     """Local RMSD (in place by default, or the refit value), with the residue
     count appended only when it fell short.
-
-    The count used to have its own column, which was noise on every ordinary
-    run: it read the same on every row and only ever mattered in the
-    exceptional case. Shown inline where it applies, absent where it does
-    not.
     """
     value = metrics.get(key)
     if value is None:
@@ -4067,23 +3778,18 @@ def _ligand_terminus_rows(structure_data, results):
 
 
 def _residue_coverage_rows(structure_data, reference_obj, results):
-    """Per-structure account of residues that exist in the deposited sequence
-    but cannot be measured, split by reason.
-
-    Two different things get conflated as "missing" and they are not the same:
+    """Per-structure account of residues in the deposited sequence that
+    cannot be measured, split by reason:
 
       missing        declared in the header (PDB REMARK 465, mmCIF
-                     pdbx_unobs_or_zero_occ_residues) and carrying no
-                     coordinates at all. Nothing to measure, nothing to draw.
+                     pdbx_unobs_or_zero_occ_residues), with no coordinates.
 
-      unobserved     present as atoms with real coordinates but zero
-                     occupancy -- placeholder positions the depositor marked
-                     as never seen in the density. These load like ordinary
-                     atoms, which is why they are dangerous: left in,
-                     they can define a chain's terminus and put every terminal
-                     measurement on a region nobody observed.
+      unobserved     atoms with coordinates but zero occupancy: placeholder
+                     positions the depositor marked as not seen in the
+                     density. They load like ordinary atoms, and left in
+                     they could define a chain's terminus.
 
-    Both reduce what a report can actually claim, so both are stated.
+    Both limit what a report can state, so both are listed.
     """
     rows = []
     order = [reference_obj] + [o for o in results if o != reference_obj]
@@ -4129,11 +3835,8 @@ def _compact_resi_range(items):
     return ", ".join(str(a) if a == b else f"{a}-{b}" for a, b in runs)
 
 
-# Residue lists reach here in two shapes: actual residue numbers, and
-# pre-formatted range strings like "587-671" built elsewhere. Counting the
-# list length works for the first and is badly wrong for the second -- it
-# reports the number of RANGES, so "587-671", 85 residues, was summarised as
-# (1), and "0,103-107,587-671" as (3).
+# Residue lists arrive as numbers or as range strings ("587-671"), so the
+# count is of residues, not list items.
 RESI_RANGE_RE = re.compile(r"^\s*(-?\d+)\s*-\s*(-?\d+)\s*$")
 
 
@@ -4208,13 +3911,10 @@ def _residue_list_summary(by_chain, limit=3):
 
 
 def _sequence_comparison_rows(structure_data, reference_obj, results):
-    """Per-comparison sequence figures for the Sequence Comparison section.
-
-    Reads the alignment metrics match_terminus_windows already produced for
-    each terminus (identity, similarity, per-sequence coverage, residues
-    analyzed) plus each structure's resolved chain length. Nothing here is
-    recomputed -- these values were being calculated and then discarded at
-    report time.
+    """Per-comparison sequence figures for the Sequence Comparison section:
+    the alignment metrics match_terminus_windows produced for each terminus
+    (identity, similarity, per-sequence coverage, residues analyzed) and
+    each structure's resolved chain length.
     """
     ref_pid = structure_data[reference_obj]["pdb_id"]
     out = []
@@ -4292,16 +3992,13 @@ def _terminus_sequence_pairs(structure_data, reference_obj, results):
 
 def _comparison_display_order(structure_data, reference_obj, results=None,
                               alignment_results=None, loaded_objects=None):
-    """Comparison structures, best-matching first.
+    """Comparison structures, best-matching first: by mean terminus identity
+    where TERMINI measured it, otherwise by alignment RMSD. Ties and
+    unmeasurable structures keep their original order, so the order is the
+    same on every run.
 
-    Ordered by how well each one matches the reference -- mean terminus
-    identity where TERMINI measured it, otherwise alignment RMSD. Ties and
-    unmeasurable structures keep their original order, so the sequence is
-    always stable for a given run.
-
-    The ordering is never stated in the report. It is a way of putting the
-    most relevant comparison at the top of a long images section, not a
-    finding, and labelling it as one would give it more weight than it has.
+    The order puts the most relevant comparison first in a long images
+    section. It is not a finding, and the report does not present it as one.
     """
     order = list(loaded_objects or (results or {}).keys())
     order = [o for o in order if o != reference_obj]
@@ -4374,7 +4071,7 @@ def _arrow_key_item(name, n_rgb, c_rgb):
 
 
 def _structure_key_item(name, hex_color, note=None):
-    """One boxed entry: "[swatch] 1XGD", with an optional quiet note."""
+    """One boxed entry: "[swatch] 1XGD", with an optional note."""
     if not hex_color:
         return ""
     extra = f"<span class='key-note'>{html_escape.escape(note)}</span>" if note else ""
@@ -4430,26 +4127,19 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
                                  alignment_results=None, combined_images=None, run_parameters=None):
     """Generate Astra3_Report.html for a TERMINI run: a summary table, the
     largest N-/C-terminal displacement and rotation across all comparisons,
-    and per-comparison detail with any rendered visualization images.
+    and per-comparison detail with any rendered images.
 
-    visualization_images, if given, is {comparison_pdb_id: [image_paths...]}
-    of already-rendered whole-structure PNGs (relative to output_dir) to
-    embed -- these no longer include the TPV vector overlay (see
-    closeup_images below for that).
+    visualization_images, if given, is {comparison_pdb_id: [image_paths...]}:
+    the whole-structure PNGs (relative to output_dir), without arrows.
 
     closeup_images, if given, is {comparison_pdb_id: [{"chain": chain_key,
-    "N": path_or_None, "C": path_or_None}, ...]} of the isolated,
-    per-terminus close-up renders WITH the real orientation arrows (see
-    render_termini_closeups in this module) -- displayed in their own
-    gallery section, before the whole-structure visualization_images
-    gallery, since they're the more legible, direct answer to "what do the
-    termini actually look like" that the wide shots alone weren't.
+    "N": path_or_None, "C": path_or_None}, ...]}: the per-terminus close-ups
+    with the orientation arrows (render_termini_closeups), shown in their
+    own gallery before the whole-structure views.
 
     functional_readouts, if given, is the {structure_id_upper: [...]} dict
-    from load_functional_readouts (see astra3_core.py) -- user-supplied
-    experimental/functional data (e.g. signal change, affinity shift) tied
-    to a structure by ID, auto-detected from readouts.csv. Displayed
-    verbatim in its own section when present; never computed or altered.
+    from load_functional_readouts (astra3_core.py): the person's own data
+    from readouts.csv, shown as given in its own section.
     """
     outdir = Path(output_dir)
     html_path = outdir / "Astra3_Report.html"
@@ -4506,7 +4196,7 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
     html.append(f"<span class='label'>Analysis ID</span><span class='value'>{html_escape.escape(analysis_id)}</span>")
     html.append(f"<span class='label'>Date</span><span class='value'>{now}</span>")
     html.append(f"<span class='label'>Version</span><span class='value'>Astra3 v{html_escape.escape(ASTRA3_VERSION)}</span>")
-    html.append(f"<span class='label'>Report Type</span><span class='value'>Terminal Structural Analysis</span>")
+    html.append("<span class='label'>Report Type</span><span class='value'>Terminal Structural Analysis</span>")
     html.append("</div>")
     html.append(_theme_switch_html())
     html.append("</div>")
@@ -4517,9 +4207,8 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
     html.append(f"<strong>Command:</strong> <code>{html_escape.escape(command_str)}</code>")
     html.append("</div>")
 
-    # The saved session, offered the same way the single-structure and overlay
-    # reports offer it. A TERMINI report is the one most likely to send someone
-    # back into PyMOL -- the terminus arrows are in that .pse.
+    # The saved session, offered as in the other reports; the terminus arrows
+    # are in it.
     session_dir = Path(output_dir) / "Session"
     pse_rel = None
     if session_dir.exists():
@@ -4556,13 +4245,9 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
                    f"{largest_c_rot['metrics']['orientation_change_degrees']}&deg; "
                    f"<span class='exec-detail'>({html_escape.escape(largest_c_rot['comparison_structure'])}, chain {html_escape.escape(largest_c_rot['chain'])})</span>")
 
-    # The same per-structure facts the OVERLAY summary carries. Every
-    # comparison here is aligned to the reference before any terminus is
-    # measured, so how much of each chain that alignment covered, and at what
-    # resolution each structure was solved, both bear on how much weight the
-    # displacements below can carry. Experimental method is left out: these
-    # runs are overwhelmingly all-X-ray, and eight cards fill the grid evenly
-    # where nine would leave one stranded.
+    # The per-structure facts the OVERLAY summary gives: alignment coverage and
+    # resolution bear on how much the displacements below can carry. Method is
+    # left out (these runs are nearly all X-ray), so eight cards fill the grid.
     aligned_rows = []
     for cmp_obj in results:
         entry = (alignment_results or {}).get(cmp_obj) or {}
@@ -4612,11 +4297,8 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
     html.append("</div></div>")
 
     # ---------------- Sequence Comparison ----------------
-    # Two separate questions, so two separate tables. "Are these the same
-    # protein?" is answered over the whole chain; "do their termini
-    # correspond?" is answered over the terminus window only. Presenting one
-    # set of numbers for both invites a whole-structure figure to be read as
-    # a statement about a terminus, or the reverse.
+    # Two tables for two questions: whether these are the same protein (whole
+    # chain) and whether their termini correspond (terminus window only).
     seq_rows = _sequence_comparison_rows(structure_data, reference_obj, results)
     html.append("<div class='section'><div class='section-header'><h2>Sequence Comparison</h2></div><div class='section-body'>")
     html.append("<p class='muted-note' style='margin-top:0;'>The first table asks whether these are the same "
@@ -4685,10 +4367,8 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
     html.append("</div></div>")
 
     # ---------------- Terminus Sequences ----------------
-    # One box, one row per structure, the reference first. No connectors
-    # between rows: with several comparisons a connector can only ever join
-    # two adjacent rows, which says nothing useful about the rest and implies
-    # a pairing that is not there.
+    # One row per structure, reference first. No connectors: with several
+    # comparisons they could only join adjacent rows.
     seq_groups = _terminus_sequence_pairs(structure_data, reference_obj, results)
     if seq_groups:
         html.append("<div class='section'><div class='section-header'><h2>Terminus Sequences" + _tip("offset") + "</h2>")
@@ -4725,10 +4405,7 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
         html.append("</div></div>")
 
     # ---------------- Residue Coverage ----------------
-    # What could not be measured, and why. A terminal measurement is only as
-    # meaningful as the residues that were available to make it, and two
-    # different kinds of absence affect it differently -- see
-    # _residue_coverage_rows for the distinction.
+    # What could not be measured, and why (see _residue_coverage_rows).
     coverage_rows = _residue_coverage_rows(structure_data, reference_obj, results)
     html.append("<div class='section'><div class='section-header'><h2>Unmeasurable Residues" + _tip("unmeasurable") + "</h2></div><div class='section-body'>")
     if coverage_rows:
@@ -4820,13 +4497,10 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
     html.append("</table></div>")
     html.append("</div></div>")
 
-    # ---------------- Functional Readouts ---------------- Shown only when
-    # readouts.csv was found in the working folder and had at least one row
-    # matching a structure ID in this run. This is user-supplied
-    # experimental/functional data (e.g. signal change, affinity shift) --
-    # displayed verbatim next to the structural metrics above for side-by-side
-    # comparison; Astra3 does not compute, validate, or interpret these
-    # values.
+    # ---------------- Functional Readouts ----------------
+    # Only when readouts.csv had a row for a structure in this run. User data,
+    # shown as given beside the structural metrics; Astra3 does not compute or
+    # interpret it.
     any_readouts = functional_readouts and any(
         functional_readouts.get(structure_data[o]["pdb_id"].upper()) for o in structure_data
     )
@@ -4852,13 +4526,9 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
         html.append("</table></div>")
         html.append("</div></div>")
 
-    # ---------------- Chain Reductions Applied ---------------- Shown only
-    # when at least one structure had a chain physically removed (intra-
-    # structure homomer reduction, approved by the user) before this analysis
-    # ran. The removal is real and permanent for THIS session -- the report
-    # says so explicitly and names exactly which chain was removed and which
-    # was kept, so the saved .pse and this report can never be silently out of
-    # sync with each other.
+    # ---------------- Chain Reductions Applied ----------------
+    # Only when a chain was removed by an approved homomer reduction. Names the
+    # removed and kept chains, so the report and the saved .pse agree.
     any_reduction = any(structure_data[o].get("chain_reduction_applied") for o in structure_data)
     if any_reduction:
         # The rows come from the rule record, which names every chain kept
@@ -4913,14 +4583,9 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
         ranked = [p for p in _ranked_pids if p in image_map]
         return ranked + [k for k in keys if k not in ranked]
 
-    # ---------------- Close-up Terminus Views ---------------- Isolated, per-
-    # terminus close-ups with the real orientation arrows -- see
-    # render_termini_closeups' own docstring for why these are isolated
-    # (cmd.create() copies of just the terminus window, not the whole
-    # structure) and framed differently from the wide shots below. Displayed
-    # first: a direct, unobstructed view of exactly the vectors a TERMINI
-    # comparison is actually about, rather than starting with a whole-
-    # structure orientation shot.
+    # ---------------- Close-up Terminus Views ----------------
+    # Isolated per-terminus views with the orientation arrows (see
+    # render_termini_closeups), shown before the wide shots.
     if closeup_images:
         html.append("<div class='section'><div class='section-header'><h2>Close-up Terminus Views</h2></div><div class='section-body'>")
         html.append("<p class='muted-note' style='margin-top:0;'>Orientation arrows at each terminus"
@@ -4948,9 +4613,7 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
             for entry in per_chain_list:
                 chain_label = html_escape.escape(entry.get("chain", ""))
                 for terminus in ("N", "C"):
-                    # entry.get(terminus) is a LIST of image paths --
-                    # render_termini_closeups renders two angles per terminus
-                    # (see its own docstring), not one.
+                    # A list: two angles per terminus.
                     img_paths = entry.get(terminus) or []
                     for angle_idx, img in enumerate(img_paths, start=1):
                         img_path = Path(img)
@@ -5037,12 +4700,9 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
         html.append("<div class='no-warn'>No warnings detected.</div>")
     html.append("</div></div>")
 
-    # ---------------- Structural Interpretation ---------------- Dynamically
-    # generated from the already-computed per-row metrics
-    # (largest_n_disp/largest_c_disp, the same tip-displacement rankings used
-    # for the executive summary cards above) -- no separate calculation, just
-    # a plain-language readout of results already produced by
-    # compare_termini/recompute_terminus_metrics.
+    # ---------------- Structural Interpretation ----------------
+    # A plain-language readout of the metrics already computed
+    # (largest_n_disp, largest_c_disp), with no further calculation.
     html.append("<div class='section'><div class='section-header'><h2>Structural Interpretation</h2></div><div class='section-body'>")
     disp_candidates = [r for r in (largest_n_disp, largest_c_disp) if r is not None]
     if disp_candidates:
@@ -5050,14 +4710,8 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
         html.append(f"<p style='margin-top:0;'>Largest observed conformational difference: "
                     f"<strong>{html_escape.escape(largest_overall['comparison_structure'])} "
                     f"{largest_overall['terminus']}-terminus</strong>.</p>")
-        # Both termini are listed, each labelled, so the exposure and
-        # flexibility statements are attached to a named terminus and the two
-        # can be compared directly rather than one being described in prose
-        # and the other mentioned only as an aside.
-        # One block per comparison, not just the single structure that happened
-        # to hold the largest displacement. With three or more structures the
-        # previous form described one comparison and left the others with no
-        # readout at all, even though each was measured in full.
+        # One block per comparison, with both termini labelled, so exposure and
+        # flexibility statements can be compared directly.
         by_comparison = {}
         for row in available_rows:
             by_comparison.setdefault(row["comparison_structure"], []).append(row)
@@ -5088,7 +4742,6 @@ def generate_termini_html_report(output_dir, analysis_id, command_str, reference
             if n_row and c_row:
                 n_sasa = n_row["metrics"].get("delta_sasa_angstrom2")
                 c_sasa = c_row["metrics"].get("delta_sasa_angstrom2")
-                from astra3_structure import SASA_SHIFT_THRESHOLD
                 if n_sasa is not None and c_sasa is not None:
                     if abs(n_sasa) <= SASA_SHIFT_THRESHOLD and abs(c_sasa) <= SASA_SHIFT_THRESHOLD:
                         html.append(f"<p>Neither terminus changed solvent exposure by more than "

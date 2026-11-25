@@ -12,28 +12,17 @@
 # ------------------------------------------------------------
 # MODULE: Security & input validation utilities
 # ------------------------------------------------------------
-# Centralizes the checks Astra3 needs wherever a user-controlled value
-# (a typed structure ID, an imported file path, a batch-file line, an
-# output folder name derived from one of those) is about to become a
-# filesystem path, a PyMOL fetch/object-name argument, or a subprocess
-# argument. Nothing in this file talks to PyMOL, the filesystem beyond
-# existence/type checks, or the network directly -- it only decides
-# "is this value safe to use," and raises a clear, typed error when it
-# isn't. Every caller is expected to catch AstraSecurityError (or its
-# subclasses) and print the existing project's normal RED-colored
-# error line, exactly as astra3.py already does for other invalid-input
-# cases -- see each call site for the exact wording.
+# Checks for any user-controlled value (a typed structure ID, an imported
+# file path, a batch-file line, a folder name derived from one of those)
+# before it becomes a filesystem path, a PyMOL fetch or object name, or a
+# subprocess argument. Nothing here talks to PyMOL or the network; invalid
+# values raise AstraSecurityError, which callers report as an error line.
 #
-# Threat model this module addresses (see the project's own security
-# audit for the full writeup): Astra3 is a local, single-user desktop
-# tool with no server, no auth, and no telemetry. The realistic risks
-# here are a crafted structure ID / batch-file line / AST-style token
-# causing Astra3 to read or write outside its own output directory
-# (path traversal), or a value reaching a shell/subprocess call in a
-# way that lets shell metacharacters do something unintended. This
-# module is deliberately NOT designed against a hostile multi-user
-# server environment, malicious PyMOL builds, or a compromised RCSB --
-# none of those apply to how Astra3 is actually used.
+# Astra3 is a local, single-user tool with no server, accounts or telemetry.
+# The risks addressed are a crafted ID, batch line or AST token reading or
+# writing outside the output folder, and shell metacharacters reaching a
+# subprocess. A hostile multi-user host, a malicious PyMOL build or a
+# compromised RCSB are out of scope.
 # ------------------------------------------------------------
 
 import os
@@ -68,22 +57,12 @@ class UnsupportedFileTypeError(AstraSecurityError):
 # ------------------------------------------------------------
 # STRUCTURE / AST ID VALIDATION
 # ------------------------------------------------------------
-# Calibrated against the real identifier shapes Astra3 needs to accept, not an
-# arbitrary tightened pattern -- see PyMOL's own `fetch` and `load`
-# documentation and RCSB's extended-CCD-ID announcement: - classic 4-character
-# PDB IDs, e.g. "1AKE" - 5-character single-chain codes (4-letter PDB + chain
-# letter), e.g. "1A00A" -- PyMOL 1.6+ supports these directly in fetch() -
-# RCSB's newer extended alphanumeric IDs (the 5-character CCD-style codes
-# Astra3 already handles for mmCIF ligands elsewhere in this project, e.g.
-# "A1AQW") -- structure-level accession codes follow the same "letters and
-# digits, a handful of characters" shape All of the above are just
-# [A-Za-z0-9], typically 3-6 characters. This validator is deliberately
-# permissive within that character class and length range rather than
-# hardcoding "exactly 4 uppercase letters + digits", specifically so it
-# doesn't reject a legitimate ID Astra3 is already able to fetch and analyze
-# today. An ID of the right shape that is not an entry is caught when the
-# download fails. wwPDB's extended IDs ("pdb_" and eight letters or digits,
-# e.g. "pdb_00001ake") are accepted too.
+# Identifiers Astra3 accepts: 4-character PDB IDs ("1AKE"), 5-character
+# entry-plus-chain codes ("1A00A", which PyMOL's fetch accepts) and other
+# short accession codes, all [A-Za-z0-9] of 3 to 8 characters; and wwPDB's
+# extended IDs ("pdb_00001ake"). Permissive within that shape, so no ID
+# Astra3 can fetch is rejected. A well-formed ID that is not an entry fails
+# at download.
 STRUCTURE_ID_RE = re.compile(r"^(?:[A-Za-z0-9]{3,8}|PDB_[A-Za-z0-9]{8})$", re.IGNORECASE)
 
 # wwPDB's extended PDB ID. Every existing entry's extended ID is its
@@ -107,38 +86,28 @@ def is_extended_only_id(structure_id):
     sid = str(structure_id or "").strip()
     return bool(EXTENDED_ID_RE.match(sid)) and classic_pdb_id(sid) is None
 
-# AST IDs are ALWAYS generated internally by generate_ast_id() in
-# astra3_core.py ("AST-%04d" % random.randint(1, 9999)) -- a user can never
-# type an arbitrary string and have it become a valid AST ID; is_ast_id() only
-# returns True for a string that already exists as a key in the internally-
-# populated loaded_structures dict. This pattern exists so that a string which
-# merely LOOKS like an AST ID (typed by a user, or found in a shared batch
-# file) is recognized and rejected with a clear message before it can fall
-# through to the PDB-fetch branch and reach cmd.fetch() as a raw, unvalidated
-# "structure_id".
+# AST IDs are only created by generate_ast_id() in astra3_core.py, and
+# is_ast_id() is only true for one in loaded_structures. A string that merely
+# looks like one (typed, or in a shared batch file) is matched here and
+# rejected before it can reach cmd.fetch() as a structure ID.
 AST_ID_RE = re.compile(r"^AST-\d{4}$")
 
 MAX_STRUCTURE_ID_LENGTH = 12  # generous upper bound; the longest shape above is an extended ID
 
 
 def validate_structure_id(raw_id, known_ast_ids=None):
-    """Validate a user-supplied structure identifier (typed at the
-    prompt, read from a batch file, or embedded in an OVERLAY/TERMINI
-    command) BEFORE it is used to build a filesystem path or passed to
-    cmd.fetch().
+    """Validate a structure identifier (typed at the prompt, read from a
+    batch file, or part of an OVERLAY/TERMINI command) before it is used to
+    build a path or passed to cmd.fetch().
 
-    known_ast_ids: optional iterable/mapping of currently-registered
-    AST IDs (pass loaded_structures from astra3_core.py, or its
-    .keys()) -- when given, a syntactically AST-shaped ID that isn't
-    actually registered is rejected outright rather than silently
-    falling through to be treated as a PDB ID and fetched from RCSB
-    under that literal string.
+    known_ast_ids: the registered AST IDs (loaded_structures from
+    astra3_core.py, or its keys). When given, an AST-shaped ID that is not
+    registered is rejected instead of being fetched from RCSB as a PDB ID.
 
-    Returns the normalized (uppercased, stripped) ID on success; an
-    extended ID of an existing entry comes back as its 4-character ID.
-    Raises InvalidStructureIdError with a clear, user-facing message
-    on any rejection. Never raises for any ID shape Astra3 could
-    already legitimately fetch or resolve today.
+    Returns the normalized ID (stripped, upper case); an extended ID of an
+    existing entry comes back as its 4-character ID. Raises
+    InvalidStructureIdError with a message for the person. Every ID shape
+    Astra3 can fetch or resolve is accepted.
     """
     if raw_id is None:
         raise InvalidStructureIdError("No structure ID was provided.")
@@ -161,7 +130,7 @@ def validate_structure_id(raw_id, known_ast_ids=None):
         if known_ast_ids is not None and candidate not in known_ast_ids:
             raise InvalidStructureIdError(
                 f"'{raw_id}' is not a currently registered AST ID for this session. "
-                f"Temporary AST IDs only exist until Astra3 closes -- use IMPORT to "
+                f"Temporary AST IDs only exist until Astra3 closes; use IMPORT to "
                 f"register the file again if needed."
             )
         return candidate
@@ -178,28 +147,18 @@ def validate_structure_id(raw_id, known_ast_ids=None):
 # PATH SAFETY: normalization, containment, and traversal prevention
 # ------------------------------------------------------------
 def safe_join(base_dir, *parts):
-    """Join base_dir with the given path parts and verify the RESOLVED
-    result is still inside base_dir. Use this anywhere Astra3 builds a
-    path from a user-influenced value (a structure ID, an AST display
-    name, anything read from a batch file) that is meant to stay
-    inside a specific output/session/images directory.
+    """Join base_dir with the given parts and check that the resolved
+    result is still inside base_dir. For any path built from a value a person
+    or a file supplied (a structure ID, an imported file's name, a batch-file
+    line) that must stay inside an output, session or images folder.
 
-    Uses resolved-path comparison (Path.resolve() +
-    PurePath.relative_to()) rather than a string-prefix check, per the
-    the safer choice -- a prefix check like
-    str(target).startswith(str(base)) is fooled by e.g. base_dir
-    "/a/b" matching a sibling directory "/a/bc", and doesn't resolve
-    ".." segments or symlinks the way Path.resolve() does.
+    The check compares resolved paths (Path.resolve() and relative_to()). A
+    string-prefix test would accept "/a/bc" for base "/a/b" and would not
+    resolve ".." or symlinks. A part that merely contains ".." ("1..A") is
+    fine; only a path that resolves outside base_dir is refused.
 
-    Returns the resolved, safe Path. Raises PathTraversalError if the
-    joined path would resolve outside base_dir.
-
-    This does NOT reject a part merely for containing ".." as a
-    substring -- e.g. "1..A" or a filename with dots in it is fine as
-    long as the final resolved location is still inside base_dir. Only
-    the actual escape is rejected, per the project's explicit
-    preference for resolved-path validation over blind ".." string
-    matching.
+    Returns the resolved Path. Raises PathTraversalError when the path would
+    leave base_dir.
     """
     base_resolved = Path(base_dir).resolve()
     candidate = base_resolved.joinpath(*[str(p) for p in parts])
@@ -215,28 +174,20 @@ def safe_join(base_dir, *parts):
 
 
 def safe_output_dirname(identifier_or_ids, suffix="_Output"):
-    """Build a filesystem-safe directory name fragment from one or more
-    structure identifiers, for use in get_output_folders() and friends.
+    """A directory name built from one or more structure identifiers, for
+    get_output_folders() and the like.
 
-    Structure IDs reaching this point should already have passed
-    validate_structure_id() (which restricts them to [A-Za-z0-9], 3-8
-    chars, or an extended ID) -- this function is a second, cheap layer of defense that
-    strips anything that isn't alphanumeric/underscore/hyphen before
-    the name is used in a path, so even a value that reached here
-    through some path OTHER than validate_structure_id() (display
-    names for imported files can contain arbitrary characters from the
-    original filename, for instance) can't inject path separators or
-    ".." segments into the resulting directory name.
+    IDs normally arrive validated (validate_structure_id), but an imported
+    file's display name can hold any character. Everything except letters,
+    digits, underscore and hyphen becomes an underscore, so no path separator
+    or ".." can reach the name.
     """
     if isinstance(identifier_or_ids, (list, tuple)):
         raw = "_".join(str(x) for x in identifier_or_ids)
     else:
         raw = str(identifier_or_ids)
-    # Keep letters, digits, underscore, hyphen, and space (existing output
-    # folder names already use these, e.g. "AST-0001_Output" and multi-
-    # structure names like "Overlay_6DK3_9BOX_Output") -- strip everything
-    # else, INCLUDING path separators and ".." sequences, rather than trying
-    # to enumerate every dangerous character.
+    # Letters, digits, underscore and hyphen; everything else, path separators
+    # and dots included, becomes an underscore.
     cleaned = re.sub(r"[^A-Za-z0-9_\-]", "_", raw)
     cleaned = re.sub(r"_+", "_", cleaned).strip("_")
     if not cleaned:
@@ -245,17 +196,13 @@ def safe_output_dirname(identifier_or_ids, suffix="_Output"):
 
 
 def validate_output_path(path, base_dir, must_be_dir=False):
-    """Validate that `path` is a safe location to write Astra3 output
-    to: it must resolve to somewhere inside `base_dir`. Use this as a
-    final check before os.makedirs()/open(...) on any output path built
-    from user-influenced components, in addition to (not instead of)
-    building the path with safe_join() in the first place -- defense
-    in depth for the rare case a path reaches a write call without
-    having gone through safe_join().
+    """Check that `path` resolves inside `base_dir` before Astra3 writes
+    to it. A final check for output paths built from supplied values, in
+    addition to building them with safe_join().
 
-    Returns the resolved Path. Raises PathTraversalError if outside
-    base_dir, or InvalidPathError if must_be_dir is True and an
-    existing path at that location is not a directory.
+    Returns the resolved Path. Raises PathTraversalError when it is outside
+    base_dir, or InvalidPathError when must_be_dir is True and something
+    other than a directory is already there.
     """
     base_resolved = Path(base_dir).resolve()
     target_resolved = Path(path).resolve()
@@ -275,32 +222,18 @@ def validate_output_path(path, base_dir, must_be_dir=False):
 # INPUT FILE VALIDATION (IMPORT, BATCH file, etc.)
 # ------------------------------------------------------------
 def validate_input_file(path, allowed_extensions, must_exist=True):
-    """Validate a file the user is pointing Astra3 at for import/reading
-    (IMPORT's structure file, a BATCH .txt file, etc.).
+    """Validate a file a person points Astra3 at (IMPORT's structure
+    file, a BATCH list).
 
-    allowed_extensions: iterable of extensions WITHOUT the leading dot
-    is also accepted (e.g. "pdb" or ".pdb" both work), compared
-    case-insensitively.
+    allowed_extensions: extensions with or without the leading dot ("pdb" or
+    ".pdb"), compared case-insensitively.
 
-    Checks, in order:
-      1. the path is non-empty and resolves cleanly
-      2. (if must_exist) something actually exists there
-      3. it is a FILE, not a directory (a directory passed where a
-         file was expected is a common source of confusing downstream
-         errors, and is now caught here with a clear message instead)
-      4. its extension is one of allowed_extensions
+    Checks, in order: the path is not empty; (if must_exist) it exists; it is
+    a file, not a directory; its extension is allowed. File contents are not
+    examined here; structure_file_problem and the loader do that.
 
-    This intentionally does NOT try to sniff or validate file CONTENT
-    (e.g. parsing the PDB/PSE format itself) -- that is PyMOL's job
-    when it loads the file, and duplicating it here would risk
-    rejecting a legitimate-but-unusual structure file Astra3 could
-    otherwise handle fine. This function only answers "is this a real
-    file of a type Astra3 is supposed to accept," matching the
-    aim of avoiding unnecessarily restrictive
-    validation.
-
-    Returns the resolved Path on success. Raises InvalidPathError or
-    UnsupportedFileTypeError with a clear message on failure.
+    Returns the resolved Path. Raises InvalidPathError or
+    UnsupportedFileTypeError with a message for the person.
     """
     if not path or not str(path).strip():
         raise InvalidPathError("No file path was provided.")
@@ -332,23 +265,12 @@ def validate_input_file(path, allowed_extensions, must_exist=True):
 # SUBPROCESS SAFETY
 # ------------------------------------------------------------
 def open_path_in_file_manager(target_path):
-    """Cross-platform 'reveal this file/folder in Finder/Explorer/file
-    manager' -- replaces the previous os.system(f'open "{path}"') /
-    os.system(f'xdg-open "{path}"') calls, which invoke a real shell
-    (os.system always does) even though the path being opened wasn't
-    attacker-controlled in practice. Using subprocess.run with an
-    argument list removes shell interpretation entirely, so this stays
-    safe regardless of what target_path ever contains (spaces,
-    parentheses, unicode -- all handled correctly, since the OS/exec
-    layer receives the path as a single argument rather than a
-    shell-parsed string).
+    """Show a file or folder in Finder, Explorer or the file manager.
 
-    macOS uses `open`, Windows uses os.startfile (no subprocess needed
-    -- os.startfile never invokes a shell), Linux uses `xdg-open`.
-    Silently no-ops on failure (missing `open`/`xdg-open`, permissions,
-    etc.), matching the previous behavior's bare `except Exception:
-    pass` -- this is a convenience action, not a critical one, and
-    failing loudly here would be disproportionate.
+    No shell is involved, so the path is passed as written whatever it
+    contains: `open` on macOS and `xdg-open` on Linux through subprocess with
+    an argument list, os.startfile on Windows. A failure (no such program, no
+    permission) is ignored; this is a convenience.
     """
     import subprocess
     import sys as _sys

@@ -23,18 +23,15 @@
 #   Scoring uses BLOSUM62. I->L, D->E, K->R, S->T and F->Y are conservative
 #   substitutions: similar volume, charge or polarity, usually structurally
 #   silent. Treating them identically to W->P misrepresents relatedness, so
-#   similarity is reported alongside strict identity.
+#   similarity is reported alongside strict identity. A substitution counts
+#   toward similarity when its BLOSUM62 score is above zero, the rule behind
+#   the "positives" in BLAST output; a score of zero is neutral, not similar.
 #
 #   Identity is reported two ways. Over aligned columns is the conventional
 #   figure; over the shorter sequence is the one that is safe to act on,
 #   because a semi-global aligner can always find some short high-scoring
 #   segment between unrelated proteins and report a respectable identity
 #   across it.
-#
-# The previous method compared residues position-by-position with a bounded
-# N-terminal offset search. It cannot represent an internal insertion or
-# deletion at all: one indel desynchronises every subsequent position and
-# collapses a true homolog toward chance identity.
 # ============================================================
 
 _B62_ORDER = "ARNDCQEGHILKMFPSTWYVBZX*"
@@ -81,7 +78,9 @@ def _score(a, b):
     return -1
 
 
-GAP_OPEN = 11      # BLOSUM62's standard companion penalties
+# A gap costs GAP_OPEN for its first residue and GAP_EXTEND for each further
+# residue. Terminal gaps are free (see the module header).
+GAP_OPEN = 11
 GAP_EXTEND = 1
 
 
@@ -219,7 +218,7 @@ def _align_python(seq_a, seq_b, free_end_gaps=True):
 
 try:
     import numpy as _np
-except Exception:  # noqa: BLE001 -- the pure-Python aligner still works
+except Exception:  # noqa: BLE001 # the pure-Python aligner still works
     _np = None
 
 
@@ -375,7 +374,7 @@ def compare(seq_a, seq_b, prescreen=True):
             sim += 1
         else:
             subs += 1
-            if _score(ca, cb) >= 0:
+            if _score(ca, cb) > 0:
                 sim += 1
                 cons += 1
 
@@ -406,14 +405,7 @@ def compare(seq_a, seq_b, prescreen=True):
             in_g = False
 
     result.update({
-        # Identity over the aligned columns is the conventional figure, but
-        # on its own it is misleading: a semi-global aligner can always find
-        # some short, high-scoring segment between two unrelated proteins and
-        # report a respectable identity across it. identity_over_shorter
-        # divides by the length of the shorter sequence instead, so an
-        # alignment that covers very little of either protein cannot look
-        # like a good match no matter how well that fragment scores. This is
-        # the figure to warn on.
+        # identity_over_shorter is the figure to warn on (see the module header).
         "identity": matches / cols if cols else 0.0,
         "identity_over_shorter": matches / min(len(seq_a), len(seq_b)),
         "similarity": sim / cols if cols else 0.0,
@@ -435,14 +427,12 @@ def compare(seq_a, seq_b, prescreen=True):
 
 def aligned_pairs(seq_a, seq_b):
     """Index pairs (i, j) for every column where both sequences have a
-    residue, i.e. the correspondence the alignment establishes.
+    residue: the correspondence the alignment establishes.
 
-    This is what downstream structural work needs. Pairing residue N of one
-    structure with residue N of another -- whether by list position or by
-    residue number -- assumes the two share a numbering or have no indels
-    between them. Neither holds across independently deposited entries. An
-    insertion shifts every subsequent residue, so the correspondence has to
-    come from the alignment itself:
+    Pairing residue N of one structure with residue N of another, by list
+    position or by residue number, assumes a shared numbering and no indels.
+    Neither holds across independently deposited entries: an insertion shifts
+    every later residue, so the correspondence has to come from the alignment.
 
         A: A K L G T - E F L
         B: A K L G T R E F L

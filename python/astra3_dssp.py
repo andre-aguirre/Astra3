@@ -16,8 +16,9 @@
 # Written from the paper. Backbone hydrogen bonds come from the paper's
 # electrostatic energy; helices (H, G, I) from consecutive n-turns; strands
 # (E) from ladders of beta bridges, joined across beta bulges. Where the paper
-# and the reference implementation, mkdssp (DSSP 4; Hekkelman ML et al. 2025,
-# bioRxiv 2025.04.11.648460), differ, this follows mkdssp: pi-helices take
+# and the reference implementation, mkdssp (DSSP 4; Hekkelman ML, Alvarez
+# Salmoral D, Perrakis A, Joosten RP 2025, bioRxiv,
+# doi:10.1101/2025.04.11.648460), differ, this follows mkdssp: pi-helices take
 # precedence over alpha-helices, bridges may join residues two apart, and
 # residues are read in the chain's order. The engine shows H, G and I as
 # helix and E as strand; isolated bridges (B), turns and bends are loop, as

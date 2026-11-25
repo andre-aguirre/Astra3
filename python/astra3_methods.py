@@ -1,3 +1,11 @@
+# ============================================================
+# astra3_methods.py
+# Astra3: Structural Analysis Toolkit for PDB Rendering Automation
+# Created by Andre Aguirre
+# Copyright (c) 2026 Andre Aguirre
+# Licensed under the GNU General Public License, version 3 or later (GPL-3.0-or-later).
+# See LICENSE file for details.
+# ============================================================
 """
 Astra3: Methods text.
 
@@ -12,20 +20,36 @@ uses, so the text cannot drift from the code.
 
 import re
 
+from astra3_align import GAP_EXTEND, GAP_OPEN
 from astra3_core import ASTRA3_VERSION, engine_name, display_date, homomer_rule_method
-from astra3_structure import TERMINUS_WINDOW
+from astra3_geometry import SASA_PROBE_RADIUS, SUPERPOSE_CUTOFF, SUPERPOSE_CYCLES
+from astra3_structure import (
+    AUTO_MATCH_MIN_IDENTITY, BNORM_SHIFT_THRESHOLD, PROTEIN_MIN_CHAIN_LENGTH, SASA_SHIFT_THRESHOLD,
+    TERMINUS_WINDOW, TPV_WINDOW,
+    LIGAND_CONTACT_CUTOFF as LIGAND_CONTACT_CUTOFF_A,
+    POLAR_CONTACT_CUTOFF as POLAR_CONTACT_CUTOFF_A,
+    DISULFIDE_CUTOFF as DISULFIDE_CUTOFF_A,
+    METAL_DONOR_TOLERANCE, METAL_OXYGEN_LIMIT, ion_element,
+)
+
+
+_MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+           "November", "December")
+
+
+def _paper_date(value):
+    """A date as a paper prints it ("10 November 2026"). The reports' own
+    MM-DD-YYYY can be read as either order, which a Methods section must not
+    leave open."""
+    shown = display_date(value)
+    m = re.match(r"^(\d{2})-(\d{2})-(\d{4})$", shown)
+    return f"{int(m.group(2))} {_MONTHS[int(m.group(1)) - 1]} {m.group(3)}" if m else shown
+
 
 def _image_dimensions(image_quality):
     from astra3_render_report import image_dimensions
     return image_dimensions(image_quality)
 
-
-# Cutoffs used by analyze_ligand_environment, report_disulfides and the ion
-# coordination report in astra3_structure.py.
-LIGAND_CONTACT_CUTOFF_A = 4.0
-POLAR_CONTACT_CUTOFF_A = 3.5
-DISULFIDE_CUTOFF_A = 2.5
-ION_COORDINATION_CUTOFF_A = 2.6
 
 REFERENCES = {
     "pdb": "Berman HM et al. (2000) The Protein Data Bank. Nucleic Acids Res 28:235-242.",
@@ -50,6 +74,8 @@ REFERENCES = {
     "shrake": "Shrake A, Rupley JA (1973) Environment and exposure to solvent of protein atoms. Lysozyme and insulin. "
               "J Mol Biol 79:351-371.",
     "bondi": "Bondi A (1964) van der Waals volumes and radii. J Phys Chem 68:441-451.",
+    "harding": "Harding MM (2006) Small revisions to predicted distances around metal sites in proteins. "
+               "Acta Cryst D62:678-682.",
     "wwpdb_validation": "Gore S et al. (2017) Validation of structures in the Protein Data Bank. Structure 25:1916-1927.",
     "Pfam": "Mistry J et al. (2021) Pfam: The protein families database in 2021. Nucleic Acids Res 49:D412-D419.",
     "CATH": "Sillitoe I et al. (2021) CATH: increased structural coverage of functional space. Nucleic Acids Res 49:D266-D273.",
@@ -57,6 +83,26 @@ REFERENCES = {
     "SCOPe": "Chandonia JM et al. (2022) SCOPe: improvements to the structural classification of proteins - extended database to facilitate variant interpretation and machine learning. Nucleic Acids Res 50:D553-D559.",
     "SCOP2": "Andreeva A et al. (2020) The SCOP database in 2020: expanded classification of representative family and superfamily domains of known protein structures. Nucleic Acids Res 48:D376-D382.",
 }
+
+
+_ION_COORDINATION_TEXT = (
+    "Protein O, His N and Cys S atoms were reported as coordinating a metal ion when within the distance limit "
+    "for that metal and donor {ref:harding}: for O, the longest metal-oxygen distance accepted there as a bond "
+    f"({min(METAL_OXYGEN_LIMIT.values()):.1f} to {max(METAL_OXYGEN_LIMIT.values()):.1f} Å by metal); for His N "
+    f"and Cys S, the target distance plus {METAL_DONOR_TOLERANCE:.1f} Å.")
+
+
+def _ions_without_reference(pr):
+    """Residue names of ions that Harding's tables do not cover."""
+    return sorted({i.get("resn") for i in pr.get("ion_info") or []
+                   if i.get("resn") and ion_element(i) not in METAL_OXYGEN_LIMIT})
+
+
+def _unreferenced_ions_text(names):
+    if not names:
+        return ""
+    return (f" {_join(names)} {'is' if len(names) == 1 else 'are'} outside those tables, so no coordinating atoms "
+            f"are reported for {'it' if len(names) == 1 else 'them'}.")
 
 
 def _join(items):
@@ -151,7 +197,7 @@ def _source_sentences(structures):
         fmt_label = "mmCIF" if fmt == "cif" else "PDB"
         verb = "were" if len(names) > 1 else "was"
         out.append(f"{_join(names)} {verb} retrieved from the RCSB Protein Data Bank {{ref:pdb}}{{ref:rcsb}} in {fmt_label} format"
-                   + (f" on {display_date(when)}" if when else ""))
+                   + (f" on {_paper_date(when)}" if when else ""))
     if imported:
         out.append(f"{_join(imported)} {'were' if len(imported) > 1 else 'was'} loaded from "
                    f"{'user-supplied coordinate files' if len(imported) > 1 else 'a user-supplied coordinate file'}")
@@ -214,8 +260,8 @@ def _structure_processing_sentences(d):
                    f"ligand-protein nitrogen/oxygen pairs within {POLAR_CONTACT_CUTOFF_A:.1f} Å as possible polar "
                    f"contacts (geometric criteria only).")
     if ions:
-        out.append(f"Ions ({_join(ions)}) were identified, with protein N/O/S atoms within "
-                   f"{ION_COORDINATION_CUTOFF_A:.1f} Å reported as coordinating atoms.")
+        out.append(f"Ions ({_join(ions)}) were identified. {_ION_COORDINATION_TEXT}"
+                   + _unreferenced_ions_text(_ions_without_reference(pr)))
     nucleic = _nucleic_text(pr)
     if nucleic:
         out.append(f"Nucleic-acid chains ({nucleic}) were kept in the model; terminus selection and residue "
@@ -241,6 +287,7 @@ def _merged_processing_sentences(structures):
     all_complete = True
     ligand_parts = []
     ion_parts = []
+    unreferenced = set()
     nucleic_parts = []
     for d in structures:
         pr = d.get("process_result") or {}
@@ -257,6 +304,7 @@ def _merged_processing_sentences(structures):
             ligand_parts.append(f"{name}: {_join(ligands)}")
         if ions:
             ion_parts.append(f"{name}: {_join(ions)}")
+            unreferenced.update(_ions_without_reference(pr))
         if _nucleic_text(pr):
             nucleic_parts.append(f"{name}: {_nucleic_text(pr)}")
     if water:
@@ -269,8 +317,8 @@ def _merged_processing_sentences(structures):
                    f"residues, and ligand-protein nitrogen/oxygen pairs within {POLAR_CONTACT_CUTOFF_A:.1f} Å as "
                    f"possible polar contacts (geometric criteria only).")
     if ion_parts:
-        out.append(f"Ions were identified ({'; '.join(ion_parts)}), with protein N/O/S atoms within "
-                   f"{ION_COORDINATION_CUTOFF_A:.1f} Å reported as coordinating atoms.")
+        out.append(f"Ions were identified ({'; '.join(ion_parts)}). {_ION_COORDINATION_TEXT}"
+                   + _unreferenced_ions_text(sorted(unreferenced)))
     if nucleic_parts:
         out.append(f"Nucleic-acid chains were kept in the models ({'; '.join(nucleic_parts)}); terminus "
                    f"selection and residue counts cover protein chains only.")
@@ -310,11 +358,11 @@ def _annotation_sentences(structure_data):
                     if db:
                         dbs.add(db)
     if rcsb_ok:
-        shown = list(dict.fromkeys(display_date(d) for d in sorted(dates)))
+        shown = list(dict.fromkeys(_paper_date(d) for d in sorted(dates)))
         when = f", retrieved {_join(shown)}" if shown else ""
         out.append(f"Validation metrics (clashscore, Ramachandran and side-chain rotamer outliers, and real-space fit "
                    f"outliers where applicable) were taken from the wwPDB validation report {{ref:wwpdb_validation}}"
-                   f"{' dated ' + _join([display_date(d) for d in sorted(report_dates)]) if report_dates else ''}, and UniProt mappings"
+                   f"{' dated ' + _join([_paper_date(d) for d in sorted(report_dates)]) if report_dates else ''}, and UniProt mappings"
                    f"{' and domain assignments (' + _join([db + ' {ref:' + db + '}' for db in sorted(dbs)]) + ')' if dbs else ''} from the RCSB PDB Data API{when}.")
         refs.append("wwpdb_validation")
         refs.extend(sorted(dbs))
@@ -374,12 +422,10 @@ def build_methods_text(mode, structure_data, command_str=None, run_parameters=No
         r = _reduction_sentence(d)
         if r:
             p2.append(r)
-    per_structure = [_structure_processing_sentences(d) for d in structures]
     if len(structures) == 1:
-        p2.extend(per_structure[0])
+        p2.extend(_structure_processing_sentences(structures[0]))
     else:
         p2.extend(_merged_processing_sentences(structures))
-    from astra3_structure import PROTEIN_MIN_CHAIN_LENGTH
     p2.extend(_in_chain_sentences(structures))
     ensembles = [f"{_display_name(d)} ({d['models_in_file']} models)" for d in structures
                  if (d.get("models_in_file") or 1) > 1]
@@ -409,14 +455,13 @@ def build_methods_text(mode, structure_data, command_str=None, run_parameters=No
             f"{_join(others)} {'were' if len(others) > 1 else 'was'} superposed onto {ref}{reason} by least-squares "
             f"fitting {{ref:kabsch}} of matching protein atoms in residues paired by sequence alignment of the chains' "
             f"full sequences, unobserved residues included (BLOSUM62 "
-            f"{{ref:blosum}}, affine gap penalties), with up to 5 cycles rejecting atom pairs further apart than "
-            f"2.0 × RMSD. RMSD values are reported over the atoms retained.")
+            f"{{ref:blosum}}; affine gaps costing {GAP_OPEN} for the first residue and {GAP_EXTEND} for each further residue; terminal gaps not penalised), with up to {SUPERPOSE_CYCLES} cycles rejecting atom pairs "
+            f"further apart than {SUPERPOSE_CUTOFF:.1f} × RMSD. RMSD values are reported over the atoms retained.")
     elif mode == "termini" and len(structures) > 1 and superposed_ids != set():
         ref = (reference_id[:-len(" (imported)")] if reference_id and reference_id.endswith(" (imported)") else reference_id) or "the reference structure"
         reason = f" ({_reason_clause(reference_reason)})" if reference_reason else ""
         others = [_display_name(d) for d in structures if d.get("pdb_id") != reference_id
                   and (superposed_ids is None or d.get("pdb_id") in superposed_ids)]
-        from astra3_structure import TPV_WINDOW, AUTO_MATCH_MIN_IDENTITY
         corrected = any("offset-corrected" in (w or "") for w in (warnings_list or []))
         auto_corrected = any("offset-corrected automatically" in (w or "") for w in (warnings_list or []))
         half = TERMINUS_WINDOW // 2
@@ -426,20 +471,24 @@ def build_methods_text(mode, structure_data, command_str=None, run_parameters=No
             f"The termini of {_join(others)} were compared with those of {ref}{reason} after superposition by "
             f"least-squares fitting {{ref:kabsch}} of matching protein atoms in residues paired by sequence alignment "
             f"of the chains' full sequences, unobserved residues included (BLOSUM62 "
-            f"{{ref:blosum}}), with up to 5 cycles rejecting atom pairs further apart than 2.0 × RMSD. For each terminus, Astra3 reports the displacement of the terminal Cα atom; the "
+            f"{{ref:blosum}}; affine gaps costing {GAP_OPEN} for the first residue and {GAP_EXTEND} for each further residue; terminal gaps not penalised), with up to {SUPERPOSE_CYCLES} cycles rejecting atom pairs further "
+            f"apart than "
+            f"{SUPERPOSE_CUTOFF:.1f} × RMSD. For each terminus, Astra3 reports the displacement of the terminal Cα atom; the "
             f"displacement of the centroid of the outermost {half} Cα atoms; the change in orientation of the terminal "
             f"segment, as the angle between vectors from the centroid of the outermost {half} Cα atoms to that of the "
             f"next {half}; the change in the terminal projection vector, from the centroid of the {TPV_WINDOW - 1} Cα "
             f"atoms adjacent to the terminal residue to the terminal Cα; the Cα RMSD over the {TERMINUS_WINDOW}-residue "
             f"window, both in place after superposition and after superposing the window alone; the change in "
-            f"solvent-accessible surface area (Shrake-Rupley {{ref:shrake}}, 1.4 Å probe, Bondi radii {{ref:bondi}}; "
+            f"solvent-accessible surface area (Shrake-Rupley {{ref:shrake}}, {SASA_PROBE_RADIUS:.1f} Å probe, Bondi "
+            f"radii {{ref:bondi}}; "
             f"hydrogens and unobserved atoms excluded); and the change in normalized "
             f"B-factor (the window's mean B-factor divided by that of the whole protein as deposited; B-factors are compared "
             f"normalized because raw values are not reproducible between datasets {{ref:ramos}}). These are geometric "
-            f"measurements on aligned coordinates. Changes in solvent-accessible surface area of 26 Å² or less (a "
-            f"quarter of glycine's maximum accessible surface {{ref:tien}}, enough to move even glycine across the "
-            f"25% relative-accessibility boundary between surface and interior residues {{ref:levy}}) and changes in "
-            f"normalized B-factor of 0.2 or less (about 10% in RMS displacement, since B = 8π²⟨u²⟩ {{ref:sun}}) are "
+            f"measurements on aligned coordinates. Changes in solvent-accessible surface area of "
+            f"{SASA_SHIFT_THRESHOLD:.0f} Å² or less (a quarter of glycine's maximum accessible surface {{ref:tien}}, "
+            f"the least by which a buried residue's area must grow to reach the 25% relative-accessibility boundary "
+            f"between interior and surface residues {{ref:levy}}) and changes in normalized B-factor of "
+            f"{BNORM_SHIFT_THRESHOLD:g} or less (about 10% in RMS displacement, since B = 8π²⟨u²⟩ {{ref:sun}}) are "
             f"reported as little change. Both cut-offs are Astra3's, derived from these values."
             + (f" Where the terminal residues of a structure were offset relative to the reference, the comparison "
                f"window was shifted to matching residues {how}." if corrected else ""))
@@ -455,18 +504,17 @@ def build_methods_text(mode, structure_data, command_str=None, run_parameters=No
         paragraphs.append(f"Images were {how} at {w} × {h} pixels from six orthogonal viewpoints.")
 
     # Number references in order of first citation; list only cited ones.
-    import re as _re
     order = []
     for p in paragraphs:
-        for key in _re.findall(r"\{ref:([A-Za-z0-9_]+)\}", p):
+        for key in re.findall(r"\{ref:([A-Za-z0-9_]+)\}", p):
             if key in REFERENCES and key not in order:
                 order.append(key)
     numbered = []
     for p in paragraphs:
-        numbered.append(_re.sub(r"\{ref:([A-Za-z0-9_]+)\}",
-                                lambda m: f"[{order.index(m.group(1)) + 1}]" if m.group(1) in order else "", p))
+        numbered.append(re.sub(r"\{ref:([A-Za-z0-9_]+)\}",
+                               lambda m: f"[{order.index(m.group(1)) + 1}]" if m.group(1) in order else "", p))
     # Adjacent citations read as one bracket: [1, 2] rather than [1][2].
-    paragraphs = [_re.sub(r"\]\[", ", ", p) for p in numbered]
+    paragraphs = [re.sub(r"\]\[", ", ", p) for p in numbered]
     ordered_refs = [REFERENCES[k] for k in order]
     return paragraphs, ordered_refs
 

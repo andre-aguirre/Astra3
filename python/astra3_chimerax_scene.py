@@ -249,7 +249,7 @@ def _hide_window(session):
     if window is not None:
         try:
             window.hide()
-        except Exception:  # noqa: BLE001 -- cosmetic; drawing still works
+        except Exception:  # noqa: BLE001 # cosmetic; drawing still works
             pass
     if sys.platform == "darwin":
         try:
@@ -312,7 +312,7 @@ def _end(session):
     happens with the window hidden; the process is ended here instead."""
     try:
         session.ui.quit()
-    except Exception:  # noqa: BLE001 -- the process ends either way
+    except Exception:  # noqa: BLE001 # the process ends either way
         pass
     os._exit(0)
 
@@ -381,7 +381,7 @@ def _run_queue(session, queue):
             with _Quiet(session):
                 run_job_file(session, taken)
             reply = {"ok": True}
-        except Exception as e:  # noqa: BLE001 -- reported to the engine
+        except Exception as e:  # noqa: BLE001 # reported to the engine
             reply = {"ok": False, "error": str(e) or type(e).__name__}
         _write_json(waiting[:-5] + ".done", reply)
         os.remove(taken)
@@ -571,7 +571,7 @@ class ChimeraXGraphics:
         # Without a window ChimeraX can draw only on Linux (--offscreen).
         self._inprocess = None if sys.platform.startswith("linux") else False
 
-    # -- secondary structure ---------------------------------------------
+    # Secondary structure
     def assign_secondary_structure(self, mol, path):
         """ChimeraX's assignment: the file's helix and sheet records when
         present, otherwise its DSSP implementation."""
@@ -614,7 +614,7 @@ class ChimeraXGraphics:
                     except Exception:  # noqa: BLE001
                         pass
 
-    # -- jobs --------------------------------------------------------------
+    # Jobs
     def _job(self, kind, output, width, height, scene):
         import astra3_chimerax as engine
         job = {"kind": kind, "output": os.path.abspath(output), "structures": [],
@@ -648,7 +648,7 @@ class ChimeraXGraphics:
                 with _Quiet(self.session):
                     render_job(self.session, job)
                 self._inprocess = True
-            except Exception:  # noqa: BLE001 -- no offscreen rendering here; use the windowed helper
+            except Exception:  # noqa: BLE001 # no offscreen rendering here; use the windowed helper
                 if self._inprocess:
                     raise
                 self._inprocess = False
@@ -680,7 +680,7 @@ class ChimeraXGraphics:
         if not os.path.exists(path):
             raise RuntimeError("ChimeraX did not write the session")
 
-    # -- the windowed helper (macOS, Windows) --------------------------------
+    # The windowed helper (macOS, Windows)
     def _helper_alive(self):
         return self.helper is not None and self.helper.poll() is None
 

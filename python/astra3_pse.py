@@ -404,7 +404,7 @@ def load_session_dict(path):
         session = _SafeUnpickler(io.BytesIO(data), encoding="latin1").load()
     except SessionError:
         raise
-    except Exception as e:  # noqa: BLE001 -- any malformed pickle
+    except Exception as e:  # noqa: BLE001 # any malformed pickle
         raise SessionError(f"not a readable PyMOL session ({type(e).__name__})") from None
     if not isinstance(session, dict) or "names" not in session:
         raise SessionError("not a PyMOL session")

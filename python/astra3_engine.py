@@ -181,7 +181,7 @@ def _open_folder(path):
     if graphics is not None:
         try:
             graphics.request({"kind": "open", "path": host_path(os.path.abspath(str(path)))}, timeout=30)
-        except Exception:  # noqa: BLE001 -- a convenience, as with the other engines
+        except Exception:  # noqa: BLE001 # a convenience, as with the other engines
             pass
 
 
@@ -545,14 +545,14 @@ class Astra3EngineGraphics:
         self.count = 0
         self.titles = {}
 
-    # -- secondary structure ---------------------------------------------
+    # Secondary structure
     def assign_secondary_structure(self, mol, path):
         """DSSP (Kabsch and Sander, 1983) for files without helix and sheet
         records; astra3_chimerax uses the file's records when present."""
         import astra3_dssp
         return astra3_dssp.assign_to_molecule(mol)
 
-    # -- the app -------------------------------------------------------------
+    # The app
     def request(self, job, timeout=600):
         """Hands a job to the app and waits for its answer: a JSON file in
         the jobs folder, answered by a .done file beside it."""

@@ -12,11 +12,11 @@
 # Astra3 drives its molecular engine through PyMOL's `cmd` interface. Under
 # ChimeraX this module provides that interface: it reads coordinate files,
 # holds the atoms, evaluates Astra3's selections and runs its iterate/alter
-# expressions. It follows PyMOL's own rules for everything a number depends
-# on -- how residues are classed (protein, nucleic acid, water, ligand, ion),
-# the order atoms are listed in, alternate locations kept as separate atoms,
-# and the precedence of selection operators -- so an analysis gives the same
-# results under either engine. ChimeraX supplies what only a graphics program
+# expressions. It follows PyMOL's rules wherever a number depends on them (how
+# residues are classed as protein, nucleic acid, water, ligand or ion, the
+# order atoms are listed in, alternate locations kept as separate atoms, the
+# precedence of selection operators), so an analysis gives the same results
+# under either engine. ChimeraX supplies what only a graphics program
 # can: secondary structure, images and the session file (astra3_chimerax_scene).
 #
 # install() puts this module in place of `pymol` before Astra3 imports it.
@@ -684,7 +684,7 @@ class Molecule:
         self.source_path = None
         self._columns = {}
 
-    # -- distinct values -------------------------------------------------
+    # Distinct values
     def column(self, *fields):
         """(codes, values) for a field, or for several fields taken together:
         its distinct values in order of first appearance and, for each atom,
@@ -706,7 +706,7 @@ class Molecule:
             self._columns[fields] = kept
         return kept[1], kept[2]
 
-    # -- construction --------------------------------------------------
+    # Construction
     @classmethod
     def from_records(cls, name, records, ss_ranges=None, later_models_update=True):
         """A molecule from file records. Each model becomes a state. As in
@@ -837,7 +837,7 @@ class Molecule:
             colors[i] = ELEMENT_COLORS.get(str(e).upper(), 24)
         return colors
 
-    # -- residue classes ----------------------------------------------
+    # Residue classes
     def residue_bounds(self):
         """[(start, stop)] of consecutive atoms forming one residue."""
         bounds = []
@@ -998,7 +998,7 @@ class Molecule:
                 ss[is_polymer & in_chain[chain_codes] & in_range[residue_codes]] = code
         self.ss = ss
 
-    # -- iteration helpers ---------------------------------------------
+    # Iteration helpers
     def field(self, f):
         return self.atom_name if f == "name" else getattr(self, f)
 
@@ -2080,7 +2080,7 @@ class _Cmd(types.ModuleType):
 
     CmdException = CmdException
 
-    # -- loading --------------------------------------------------------
+    # Loading
     def load(self, filename, object="", state=0, format="", finish=1, discrete=-1, quiet=1, multiplex=None,
              zoom=-1, partial=0, **kw):
         path = str(filename)
@@ -2179,7 +2179,7 @@ class _Cmd(types.ModuleType):
                     with urllib.request.urlopen(url, timeout=60) as resp:
                         data = resp.read()
                     break
-                except Exception:  # noqa: BLE001 -- try the next location
+                except Exception:  # noqa: BLE001 # try the next location
                     continue
             if data is None:
                 print(f" Error-fetch: unable to load '{entry.lower()}'.", flush=True)
@@ -2198,7 +2198,7 @@ class _Cmd(types.ModuleType):
             mol.classify()
         return obj_name
 
-    # -- names and objects ---------------------------------------------
+    # Names and objects
     def get_names(self, type="public_objects", enabled_only=0, selection="", **kw):
         out = []
         for obj in STORE.names.values():
@@ -2323,7 +2323,7 @@ class _Cmd(types.ModuleType):
     def reinitialize(self, what="everything", object=""):
         STORE.reset()
 
-    # -- per-atom data --------------------------------------------------
+    # Per-atom data
     def iterate(self, selection, expression, quiet=1, space=None):
         return _run_expression(selection, expression, space, state=None)
 
@@ -2384,7 +2384,7 @@ class _Cmd(types.ModuleType):
                 if st < len(mol.coords):
                     mol.coords[st][idx] = single(mol.coords[st][idx] @ rot.T + trans)
 
-    # -- colors ----------------------------------------------------------
+    # Colors
     def color(self, color, selection="(all)", quiet=1, flags=0):
         idx = _parse_color(color)
         for mol, sel in _selected(selection):
@@ -2420,7 +2420,7 @@ class _Cmd(types.ModuleType):
         idx = _parse_color(color)
         STORE.bg = tuple(_COLOR_BY_INDEX.get(idx, (0, 0, 0)))
 
-    # -- settings --------------------------------------------------------
+    # Settings
     def set(self, name, value=1, selection="", state=0, updates=1, log=0, quiet=1):
         STORE.settings[str(name)] = str(value)
 
@@ -2439,7 +2439,7 @@ class _Cmd(types.ModuleType):
             front, back = max(mid - half, 0.01), mid + half
         STORE.view = _make_view(rot, cam, origin, front, back, fov)
 
-    # -- camera ----------------------------------------------------------
+    # Camera
     def get_view(self, output=1, quiet=1):
         if STORE.view is None:
             STORE.view = _default_view()
@@ -2509,7 +2509,7 @@ class _Cmd(types.ModuleType):
         STORE.view = _make_view(rot, (0.0, 0.0, -distance), center, max(distance - 1.2 * radius, 0.01),
                                 distance + 1.2 * radius, fov_flag)
 
-    # -- images and files --------------------------------------------------
+    # Images and files
     def ray(self, width=0, height=0, antialias=-1, angle=0.0, shift=0.0, renderer=-1, quiet=1, async_=0):
         STORE.ray_size = (int(width), int(height))
 

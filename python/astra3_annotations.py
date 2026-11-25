@@ -1,6 +1,14 @@
+# ============================================================
+# astra3_annotations.py
+# Astra3: Structural Analysis Toolkit for PDB Rendering Automation
+# Created by Andre Aguirre
+# Copyright (c) 2026 Andre Aguirre
+# Licensed under the GNU General Public License, version 3 or later (GPL-3.0-or-later).
+# See LICENSE file for details.
+# ============================================================
 """
-Astra3: structure annotations -- sequence differences, reference sequences,
-wwPDB validation, and domain assignments.
+Astra3: structure annotations (sequence differences, reference sequences,
+wwPDB validation, and domain assignments).
 
 Two sources, kept separate and always named in every report:
 
@@ -38,7 +46,7 @@ from xml.etree import ElementTree
 
 try:
     from astra3_core import ASTRA3_VERSION
-except Exception:  # noqa: BLE001 -- allows the parsers to be unit-tested standalone
+except Exception:  # noqa: BLE001 # allows the parsers to be unit-tested standalone
     ASTRA3_VERSION = "unknown"
 
 
@@ -650,7 +658,7 @@ class _RcsbSession:
                 body = resp.read()
                 status = resp.status
             doc = parse(body) if parse else json.loads(body.decode("utf-8"))
-        except Exception as e:  # noqa: BLE001 -- recorded and raised by _record, in the caller's order
+        except Exception as e:  # noqa: BLE001 # recorded and raised by _record, in the caller's order
             return e
         return doc, status, round(time.time() - started, 2)
 
@@ -1144,7 +1152,7 @@ def save_annotation_records(session_dir, records):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(sources, indent=2, default=str))
         return path
-    except Exception:  # noqa: BLE001 -- the provenance file is supplementary; never fail a run over it
+    except Exception:  # noqa: BLE001 # the provenance file is supplementary; never fail a run over it
         return None
 
 
@@ -1163,7 +1171,8 @@ def annotation_warnings(structure_id, file_annotations, rcsb, n_term, c_term, li
                         analyzed_chains=None, removed_chains=None):
     """Warnings for places where an annotation changes how a measured value
     should be read. Only concrete overlaps between an annotated residue and
-    a residue Astra3 used are reported -- never general advice."""
+    a residue Astra3 used are reported, never general advice.
+    """
     warnings = []
     identity_note = import_identity_warning((rcsb or {}).get("import_identity"))
     if identity_note:
@@ -1232,7 +1241,7 @@ def annotation_warnings(structure_id, file_annotations, rcsb, n_term, c_term, li
 
     for (chain, subject), by_place in grouped.items():
         parts = [f"{place_label[p]}: {', '.join(by_place[p])}" for p in order if p in by_place]
-        warnings.append(f"{structure_id} chain {chain}: {subject} -- " + "; ".join(parts) + ".")
+        warnings.append(f"{structure_id} chain {chain}: {subject}. " + "; ".join(parts) + ".")
     # Whether removing chains removed real partners, or keeping chains kept
     # crystal neighbours, changes how exposure and contacts read.
     _notes, assembly_warns = assembly_context((file_annotations or {}).get("assemblies"), analyzed_chains, removed_chains)
@@ -1350,7 +1359,7 @@ def text_validation_lines(rcsb):
                 parts.append(f"{label}: " + ", ".join(f"{i.get('residue') or ''}{i.get('residue_number')}" for i in items[:15])
                              + (f" (+{len(items) - 15} more)" if len(items) > 15 else ""))
         if parts:
-            lines.append(f"  Chain {chain} outlier residues -- " + "; ".join(parts))
+            lines.append(f"  Chain {chain} outlier residues: " + "; ".join(parts))
     for note in unlisted_outlier_notes(rcsb):
         lines.append("  " + note)
     lines.append("  " + rcsb_status_line(rcsb))
@@ -1436,7 +1445,7 @@ def text_domain_lines(rcsb):
         for d in ann.get("domains") or []:
             any_domain = True
             ranges = _display_ranges(", ".join(d.get("ranges") or [])) or "positions not mapped"
-            lines.append(f"  Chain {chain}: {d.get('database')} {d.get('id') or ''} {d.get('name') or ''} -- residues {ranges}".replace("  --", " --"))
+            lines.append(f"  Chain {chain}: {d.get('database')} {d.get('id') or ''} {d.get('name') or ''}, residues {ranges}".replace(" ,", ","))
     if any_domain:
         lines.insert(0, "Domain assignments integrated by RCSB PDB (residue numbers as in the coordinate file):")
     else:
@@ -1512,7 +1521,7 @@ def confirm_import_entry(ast_id, file_label, entry_id, source, ask=input, say=pr
         return _IMPORT_ENTRY_DECISIONS[key]
     try:
         from astra3_core import format_yn_prompt, WHITE, YELLOW, RESET, BOLD
-    except Exception:  # noqa: BLE001 -- plain text when run standalone
+    except Exception:  # noqa: BLE001 # plain text when run standalone
         format_yn_prompt = lambda: "(y/n)"  # noqa: E731
         WHITE = YELLOW = RESET = BOLD = ""
     evidence = "names itself as" if source == "header" else "is named after"
@@ -1543,7 +1552,7 @@ def confirm_import_entry(ast_id, file_label, entry_id, source, ask=input, say=pr
             return None
         say(f"{YELLOW}RCSB PDB cannot be reached right now.{RESET}", flush=True)
         say(f"The imported structure still works offline: it is analyzed from the file as usual. What needs a "
-            f"connection is {entry_id}'s public data -- validation metrics, reference sequence and domains -- and "
+            f"connection is {entry_id}'s public data (validation metrics, reference sequence and domains) and "
             f"checking that {entry_id} exists.", flush=True)
         say(f"{WHITE}Answering no continues now without that data.{RESET}", flush=True)
         retry = _ask_yn(f"Try again to reach RCSB for {entry_id}? {format_yn_prompt()}: ", ask, say, YELLOW, RESET,
@@ -1583,7 +1592,7 @@ def check_entry(entry_id, timeout=RCSB_TIMEOUT_SECONDS):
             return "ok" if resp.status == 200 else "offline"
     except urllib.error.HTTPError as e:
         return "not_found" if e.code == 404 else "offline"
-    except Exception:  # noqa: BLE001 -- DNS failure, timeout, refused: all mean unreachable
+    except Exception:  # noqa: BLE001 # DNS failure, timeout, refused: all mean unreachable
         return "offline"
 
 
@@ -1607,7 +1616,7 @@ def header_info_for_import(resolved, ask=input, say=print, check=None):
         return info  # e.g. a .pse session: no header to read
     try:
         raw = read_structure_text(path)
-    except Exception:  # noqa: BLE001 -- unreadable header: analyze from coordinates only
+    except Exception:  # noqa: BLE001 # unreadable header: analyze from coordinates only
         return info
     try:
         from astra3_core import parse_header, parse_header_cif, parse_remark_465, parse_missing_residues_cif
@@ -1622,7 +1631,7 @@ def header_info_for_import(resolved, ask=input, say=print, check=None):
         if has_records:
             info["missing_residues_map"] = parse_missing_residues_cif(raw) if fmt == "cif" else parse_remark_465(raw)
             info["missing_residues_source"] = _IMPORT_MISSING_SOURCE[fmt]
-    except Exception:  # noqa: BLE001 -- header data is supplementary for an import
+    except Exception:  # noqa: BLE001 # header data is supplementary for an import
         pass
     info["file_annotations"] = parse_file_annotations(raw, fmt)
     entry, source = entry_id_from_header(raw, fmt), "header"

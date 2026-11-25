@@ -31,7 +31,7 @@ from astra3_core import AA_3TO1, expand_missing_residues
 
 try:
     from pymol import cmd
-except Exception:  # noqa: BLE001 -- another engine supplies cmd
+except Exception:  # noqa: BLE001 # another engine supplies cmd
     cmd = None
 
 _FIELDS = ("model", "segi", "chain", "resi", "resn", "name", "alt", "elem", "q", "b", "x", "y", "z", "protein")
@@ -280,20 +280,83 @@ def correspondence(rm, rt, strict=True):
     return []
 
 
+# Same-identifier chains at or above this identity are paired without looking
+# at other chains. Below it another chain may be the true counterpart: two
+# entries of one complex can label its subunits differently, and paralogous
+# subunits (haemoglobin alpha and beta, 43% identical) pass the homology test
+# against each other.
+SAME_CHAIN_IDENTITY = 0.9
+# Target chains fully aligned against each unpaired mobile chain.
+_ALIGNED_CANDIDATES = 5
+
+
+def _identical_pairs(rm, rt, found):
+    return sum(1 for i, j in found if rm[i][1] == rt[j][1])
+
+
+def _same_protein_elsewhere(mobile, target, cm, candidates):
+    """The candidate target chain with another identifier that is the same
+    protein as mobile chain cm (SAME_CHAIN_IDENTITY), with the most identical
+    residues; None when there is none."""
+    sm = _sequence(mobile[cm])
+    ranked = []
+    for ct in candidates:
+        if ct == cm:
+            continue
+        st = _sequence(target[ct])
+        shared = astra3_align.kmer_containment(sm, st)
+        # Cheap screen before the full alignment, as in astra3_align.compare.
+        if min(len(sm), len(st)) >= 25 and shared < 0.02:
+            continue
+        ranked.append((-shared, ct))
+    # Full alignments go to the chains sharing the most 3-mers, which bounds
+    # the work in assemblies of many chains.
+    ranked.sort(key=lambda r: r[0])
+    best, best_c = 0, None
+    for _shared, ct in ranked[:_ALIGNED_CANDIDATES]:
+        found = correspondence(mobile[cm], target[ct])
+        same = _identical_pairs(mobile[cm], target[ct], found)
+        if found and same >= SAME_CHAIN_IDENTITY * len(found) and same > best:
+            best, best_c = same, ct
+    return best_c
+
+
 def pair_chains(mobile, target):
     """Which chains to superpose on which, as [(mobile_chain, target_chain)].
 
     Chains with the same identifier are paired when their sequences
-    correspond (see correspondence). Each remaining mobile chain is then
-    paired with the remaining target chain it shares the most identical
-    residues with, among those it corresponds to. When no chain corresponds
-    to any other, the structures are still compared: each mobile chain is
-    paired with the target chain whose alignment has the most identical
-    residues (then the most pairs), so a superposition is always attempted.
+    correspond (see correspondence), except that a chain is paired with a
+    chain of another identifier when that one is the same protein
+    (SAME_CHAIN_IDENTITY) and its own counterpart is not. Each remaining
+    mobile chain is then paired with the remaining target chain it shares
+    the most identical residues with, among those it corresponds to. When no
+    chain corresponds to any other, the structures are still compared: each
+    mobile chain is paired with the target chain whose alignment has the
+    most identical residues (then the most pairs), so a superposition is
+    always attempted.
     """
-    pairs = [(c, c) for c in mobile if c in target and correspondence(mobile[c], target[c])]
-    rest_m = [c for c in mobile if c not in {m for m, _t in pairs}]
-    rest_t = [c for c in target if c not in {t for _m, t in pairs}]
+    order = {c: k for k, c in enumerate(mobile)}
+    same_id = []
+    for c in mobile:
+        if c not in target:
+            continue
+        found = correspondence(mobile[c], target[c])
+        if found and _identical_pairs(mobile[c], target[c], found) >= SAME_CHAIN_IDENTITY * len(found):
+            same_id.append((c, c))
+    rest_m = [c for c in mobile if c not in {m for m, _t in same_id}]
+    rest_t = [c for c in target if c not in {t for _m, t in same_id}]
+    others = []
+    for cm in list(rest_m):
+        ct = _same_protein_elsewhere(mobile, target, cm, rest_t)
+        if ct is not None:
+            others.append((cm, ct))
+            rest_m.remove(cm)
+            rest_t.remove(ct)
+    for cm in list(rest_m):
+        if cm in rest_t and correspondence(mobile[cm], target[cm]):
+            same_id.append((cm, cm))
+            rest_m.remove(cm)
+            rest_t.remove(cm)
     for cm in rest_m:
         best, best_c = 0, None
         sm = _sequence(mobile[cm])
@@ -302,13 +365,13 @@ def pair_chains(mobile, target):
             # Cheap screen before the full alignment, as in astra3_align.compare.
             if min(len(sm), len(st)) >= 25 and astra3_align.kmer_containment(sm, st) < 0.02:
                 continue
-            found = correspondence(mobile[cm], target[ct])
-            same = sum(1 for i, j in found if mobile[cm][i][1] == target[ct][j][1])
+            same = _identical_pairs(mobile[cm], target[ct], correspondence(mobile[cm], target[ct]))
             if same > best:
                 best, best_c = same, ct
         if best_c is not None:
-            pairs.append((cm, best_c))
+            others.append((cm, best_c))
             rest_t.remove(best_c)
+    pairs = sorted(same_id, key=lambda p: order[p[0]]) + sorted(others, key=lambda p: order[p[0]])
     if pairs:
         return pairs
     for cm in rest_m:

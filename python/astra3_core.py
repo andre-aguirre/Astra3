@@ -39,17 +39,11 @@ import time
 import re
 import random
 import shutil
-import itertools
 import csv
 import json
-from collections import Counter
-from dataclasses import dataclass
-import difflib
 from pathlib import Path
-import html as html_escape
 import tempfile
-import base64  # added for embedding logo in HTML
-from astra3_security import safe_join, safe_output_dirname, PathTraversalError, classic_pdb_id
+from astra3_security import safe_join, safe_output_dirname, classic_pdb_id
 
 
 # cmd.iterate/alter expressions are evaluated in the namespace passed as
@@ -75,20 +69,10 @@ for _name, _position in (("iterate", 3), ("alter", 3), ("iterate_state", 4), ("a
     if _function is not None and not getattr(_function, "_astra3_builtins", False):
         setattr(cmd, _name, _with_builtins(_function, _position))
 
-# Terminal colors
-#
-# On Windows, a real console window does not always interpret ANSI escape
-# codes as colors out of the box; it depends on whether
-# ENABLE_VIRTUAL_TERMINAL_PROCESSING has been turned on for that console,
-# which varies across Windows versions/configurations (recent Windows 10/11
-# generally enable it by default, but this is not universally guaranteed).
-# Without it, every RED/GREEN/etc. code below would print as literal garbage
-# characters instead of color in a plain console window. This only
-# matters for that raw console path: when PyMOL is spawned by the desktop app
-# instead (stdout piped, not a real console), GetStdHandle/SetConsoleMode
-# below harmlessly no-ops on a non-console handle, and pymol-bridge.js's own
-# stripAnsi() already removes these codes before the GUI ever displays a line,
-# so nothing here affects that path either way.
+# Terminal colors. A Windows console only shows ANSI colours once
+# ENABLE_VIRTUAL_TERMINAL_PROCESSING is on, which is not guaranteed. When the
+# desktop app runs Astra3, stdout is a pipe: SetConsoleMode below does
+# nothing, and the bridge strips the codes.
 if sys.platform == "win32":
     try:
         import ctypes
@@ -129,6 +113,7 @@ cancel_requested = False
 def clear_cancellation():
     global cancel_requested
     cancel_requested = False
+    operation_run_dirs.clear()
 
 
 def check_for_cancellation():
@@ -148,9 +133,8 @@ def handle_sigint(signum, frame):
 
 signal.signal(signal.SIGINT, handle_sigint)
 
-# Astra3's own version -- single source of truth, imported by the report
-# generators so every report type states the same version.
-ASTRA3_VERSION = "2.0.1"
+# Astra3's version, stated by every report.
+ASTRA3_VERSION = "2.0.3"
 
 
 def display_date(value=None, with_time=False):
@@ -196,13 +180,9 @@ def session_extension():
 
 
 def get_pymol_version_string():
-    """PyMOL's own version number, for the report footer's reproducibility
-    line. cmd.get_version() is real, stable, documented PyMOL API --
-    confirmed against PyMOL's own command reference -- returning a tuple
-    whose first element is the human-readable version string (e.g.
-    "3.1.8"); future versions may have more version components than
-    today's (major.minor.patch), so this reads the string PyMOL itself
-    already formatted rather than assuming a fixed number of parts.
+    """PyMOL's version, for the report footer. cmd.get_version() returns a
+    tuple whose first element is the version string (e.g. "3.1.8"); the string
+    is used as PyMOL formatted it, whatever its number of parts.
     """
     try:
         version_tuple = cmd.get_version()
@@ -214,32 +194,14 @@ def get_pymol_version_string():
 
 
 def get_pymol_license_string():
-    """Best-effort PyMOL license/edition detection for the report
-    footer's reproducibility line.
+    """PyMOL edition for the report footer's reproducibility line.
 
-    HONEST LIMITATION: unlike get_version(), PyMOL has no single stable,
-    documented API call across versions that just reports "Educational"
-    vs "Incentive" vs "Open-Source" -- checked directly against PyMOL's
-    own command reference and API-only function list before writing
-    this, rather than guessing at a plausible-sounding attribute name.
-    What IS real, sourced directly from PyMOL's own modules/pymol/
-    invocation.py (its own command-line-flag documentation there
-    explicitly notes "-n INTERNAL - do not use (incentive_product=1)"),
-    is pymol.invocation.options.incentive_product -- the flag PyMOL's
-    own launcher sets and its own C extension reads to decide whether
-    to enable Incentive-only features at all, confirmed further by
-    PyMOL's own wiki documentation on scripting PyMOL from Python
-    (User:Speleo3), which uses pymol.invocation.options directly as the
-    live config object passed into PyMOL's own core at startup. This
-    distinguishes Incentive builds from Open-Source builds. It does NOT
-    distinguish Educational-use-only Incentive from a paid Incentive
-    subscription -- both present as the same incentive_product flag,
-    since that distinction lives in the license FILE PyMOL loaded,
-    which has no exposed read API. Rather than guess at that finer
-    distinction, this reports what can actually be verified and says so
-    plainly for anything it can't. Wrapped defensively: if the attribute
-    ever moves or isn't present in some build, this degrades to "not
-    detected" rather than crashing report generation.
+    PyMOL has no API that reports the edition. pymol.invocation.options
+    .incentive_product, which PyMOL's launcher sets and its core reads to
+    enable Incentive features, tells Incentive builds from open-source ones.
+    It cannot tell an educational licence from a paid one; that is in the
+    licence file, which has no read API, so it is not claimed. Reports "not
+    automatically detected" if the attribute is missing.
     """
     if engine_name() == "ChimeraX":
         return "UCSF ChimeraX (free for non-commercial use)"
@@ -249,7 +211,7 @@ def get_pymol_license_string():
         from pymol import invocation
         if getattr(invocation, "options", None) is not None:
             if getattr(invocation.options, "incentive_product", False):
-                return "Incentive (exact tier -- Educational or licensed -- not distinguishable via API)"
+                return "Incentive (Educational or licensed; the tier cannot be read from PyMOL)"
             return "Open-Source"
     except Exception:
         pass
@@ -273,17 +235,16 @@ except Exception:
     pass
 
 # ------------------------------------------------------------
-# ROBUST BASE DIRECTORY DETECTION (safe for PyMOL run)
+# Base directory detection
 # ------------------------------------------------------------
 def _is_within_any(path: Path, prefixes):
-    """Return True if path is inside any prefix (conservative)."""
+    """True if path is inside any of the prefixes."""
     try:
         p_resolved = path.resolve()
     except Exception:
         return False
     for prefix in prefixes:
-        # The file system root is no interpreter's own folder (WebAssembly
-        # Python in the Astra3 Engine reports sys.prefix as "/").
+        # Skip the root: Pyodide reports sys.prefix as "/".
         if prefix is None or prefix.parent == prefix:
             continue
         try:
@@ -304,10 +265,8 @@ def _is_within_any(path: Path, prefixes):
 
 
 def find_launcher_dir(start: Path):
-    """Walk up a few levels searching for astra3.command (Mac/Linux) or
-    -- the launcher identifies the
-    Astra3 install folder equally well, so both are checked rather than
-    assuming one platform's launcher filename."""
+    """The nearest folder, up to six levels up, holding astra3.command or
+    astra3.bat (the launchers mark an Astra3 install folder)."""
     p = start.resolve()
     for _ in range(6):
         if (p / "astra3.command").exists() or (p / "astra3.bat").exists():
@@ -318,8 +277,21 @@ def find_launcher_dir(start: Path):
     return None
 
 
+def app_base_dir():
+    """ASTRA3_BASE_DIR as set by the app, or None when run standalone. Used as
+    given: the app has validated it and reads results from there."""
+    env = os.environ.get("ASTRA3_BASE_DIR", "").strip()
+    if not env:
+        return None
+    return Path(os.path.expanduser(env)).resolve()
+
+
 def detect_base_dir():
     """Determine a safe base directory for Astra outputs."""
+    chosen = app_base_dir()
+    if chosen is not None:
+        return chosen
+
     prefixes = set()
     try:
         prefixes.add(Path(sys.prefix).resolve())
@@ -331,17 +303,7 @@ def detect_base_dir():
     except Exception:
         pass
 
-    # 1) environment override
-    env = os.environ.get("ASTRA3_BASE_DIR")
-    if env:
-        try:
-            p = Path(env).resolve()
-            if not _is_within_any(p, prefixes):
-                return p
-        except Exception:
-            pass
-
-    # 2) script file location (when run directly)
+    # 1) script file location (when run directly)
     sf = globals().get("__file__")
     if sf:
         try:
@@ -351,7 +313,7 @@ def detect_base_dir():
         except Exception:
             pass
 
-    # 3) sys.argv hints
+    # 2) sys.argv hints
     for arg in sys.argv:
         try:
             if "astra3" in str(arg).lower():
@@ -363,7 +325,7 @@ def detect_base_dir():
         except Exception:
             pass
 
-    # 4) search upward from cwd
+    # 3) search upward from cwd
     try:
         cwd = Path.cwd().resolve()
         launcher_dir = find_launcher_dir(cwd)
@@ -372,7 +334,7 @@ def detect_base_dir():
     except Exception:
         pass
 
-    # 5) search from home
+    # 4) search from home
     try:
         home = Path.home().resolve()
         launcher_dir = find_launcher_dir(home)
@@ -381,7 +343,7 @@ def detect_base_dir():
     except Exception:
         pass
 
-    # 6) use cwd if writable and not inside PyMOL install
+    # 5) use cwd if writable and not inside PyMOL install
     try:
         cwd = Path.cwd().resolve()
         if not _is_within_any(cwd, prefixes):
@@ -395,37 +357,40 @@ def detect_base_dir():
     except Exception:
         pass
 
-    # 7) fallback to home
+    # 6) fallback to home
     try:
         return Path.home().resolve()
     except Exception:
         return Path(tempfile.gettempdir()).resolve()
 
 
-# Determine and prepare base/output folders
-BASE_DIR_PATH = detect_base_dir()
+# Results go to <base>/Protein_outputs. Under the app, failing to create it is
+# fatal; standalone runs fall back to ~/Astra3, then the temp folder.
+def _prepare_output_folders():
+    base = detect_base_dir()
+    try:
+        (base / "Protein_outputs").mkdir(parents=True, exist_ok=True)
+        return base
+    except OSError as error:
+        if app_base_dir() is not None:
+            reason = "permission was refused" if isinstance(error, PermissionError) else (error.strerror or str(error))
+            print(f"Astra3 can't save results in {base / 'Protein_outputs'} ({reason}). "
+                  "Choose another output folder in Settings.", flush=True)
+            raise SystemExit(2)
+    for fallback in (Path.home() / "Astra3", Path(tempfile.gettempdir()) / "Astra3"):
+        try:
+            (fallback / "Protein_outputs").mkdir(parents=True, exist_ok=True)
+            return fallback.resolve()
+        except OSError:
+            continue
+    raise SystemExit("Astra3 could not find a folder it can save results in.")
+
+
+BASE_DIR_PATH = _prepare_output_folders()
 BASE_DIR = str(BASE_DIR_PATH)
 BASE_DIR_STR = str(BASE_DIR_PATH)
 OUTPUT_DIR_PATH = BASE_DIR_PATH / "Protein_outputs"
-try:
-    OUTPUT_DIR_PATH.mkdir(parents=True, exist_ok=True)
-except PermissionError:
-    try:
-        fallback = Path.home().resolve() / "Astra3_output"
-        fallback.mkdir(parents=True, exist_ok=True)
-        OUTPUT_DIR_PATH = fallback
-    except Exception:
-        fallback2 = Path(tempfile.gettempdir()) / "Astra3_output"
-        fallback2.mkdir(parents=True, exist_ok=True)
-        OUTPUT_DIR_PATH = fallback2
-except Exception:
-    try:
-        OUTPUT_DIR_PATH.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-
-PROTEIN_OUTPUTS_DIR = os.path.join(BASE_DIR, "Protein_outputs")
-os.makedirs(PROTEIN_OUTPUTS_DIR, exist_ok=True)
+PROTEIN_OUTPUTS_DIR = str(OUTPUT_DIR_PATH)
 # Where PyMOL's fetch keeps what it downloads. A folder of Astra3's own: fetch loads a file of the
 # right name already in its fetch folder instead of downloading, so using the folder a person keeps
 # their own files in could load one of those files as the RCSB entry.
@@ -454,13 +419,17 @@ active_operation_objects = set()
 
 
 def cancel_active_operation():
-    """Remove partial objects created by the active command after Ctrl+C."""
+    """Remove partial objects and run folders created by the active command
+    after Ctrl+C. A cancelled run's folder is always its own new one."""
     for obj in list(active_operation_objects):
         try:
             cmd.delete(obj)
         except Exception:
             pass
     active_operation_objects.clear()
+    for folder in operation_run_dirs:
+        shutil.rmtree(folder, ignore_errors=True)
+    operation_run_dirs.clear()
 
 
 def generate_ast_id():
@@ -514,43 +483,25 @@ MMCIF_FLAG = "-mmcif"
 
 def parse_structure_ids_with_format_flags(tokens, other_flag_prefixes=None):
     """Parse a token list into structure IDs, each tagged with its
-    requested fetch format ('pdb' or 'cif'), honoring an optional
-    per-ID '-mmCIF' flag.
+    requested fetch format ('pdb' or 'cif').
 
-    The -mmCIF flag applies ONLY to the single structure ID immediately
-    preceding it in the token list -- it never propagates forward or
-    backward beyond that one ID. This matches how -reference<ID> and
-    other per-token flags already behave elsewhere in Astra3: a flag is
-    read in the position it appears, not applied globally to the whole
-    command.
+    -mmCIF applies only to the structure ID immediately before it:
 
-    Examples (tokens after the command word itself):
         ["9BOX"]                       -> [("9BOX", "pdb")]
         ["9BOX", "-mmCIF"]             -> [("9BOX", "cif")]
         ["6DK3", "9BOX", "-mmCIF"]     -> [("6DK3", "pdb"), ("9BOX", "cif")]
         ["6DK3", "-mmCIF", "9BOX"]     -> [("6DK3", "cif"), ("9BOX", "pdb")]
 
-    A -mmCIF flag with no preceding structure ID (e.g. it's the first
-    token, or the previous token was itself a different flag) is
-    ignored rather than raising -- it has nothing to attach to, so it
-    is simply dropped. This is a deliberate "warn, don't block" choice
-    consistent with the rest of Astra3, though callers may want to
-    print their own notice in that case using the returned
-    `unattached_flag_count`.
+    A -mmCIF with no ID before it (the first token, or after another flag)
+    is dropped and counted, so the caller can say so.
 
-    other_flag_prefixes: an optional iterable of lowercase flag
-    prefixes (e.g. ("-reference",)) that this function should also
-    recognize as flags (so they're skipped rather than misread as a
-    structure ID) without assigning them any format-flag meaning.
-    Every other_flag_prefixes match, and any bare '-something' token,
-    is treated as "not a structure ID" and skipped; it is the caller's
-    job to separately parse flags it cares about (this function's only
-    job is the ID/format pairing).
+    other_flag_prefixes: lowercase flag prefixes (e.g. ("-reference",)) to
+    skip. These, and any other '-something' token, are not structure IDs;
+    the caller parses the flags it cares about.
 
-    Returns (id_format_pairs, unattached_flag_count) where
-    id_format_pairs is a list of (structure_id_upper, "pdb"|"cif")
-    tuples in the order the IDs were given, and unattached_flag_count
-    is how many -mmCIF flags could not be attached to a preceding ID.
+    Returns (id_format_pairs, unattached_flag_count): (structure_id_upper,
+    "pdb"|"cif") tuples in the order given, and the number of -mmCIF flags
+    that had no ID to attach to.
     """
     other_flag_prefixes = tuple(p.lower() for p in (other_flag_prefixes or ()))
     pairs = []
@@ -568,12 +519,8 @@ def parse_structure_ids_with_format_flags(tokens, other_flag_prefixes=None):
             idx += 1
             continue
         if lowered.startswith("-") or any(lowered.startswith(p) for p in other_flag_prefixes):
-            # Not a structure ID (either a recognized other-flag, or an
-            # unrecognized '-' token) -- skip it. -reference<ID>'s own
-            # optional trailing-token value (e.g. "-reference 1ABC" with a
-            # space) is intentionally NOT consumed here; that pairing is
-            # parse_overlay_arguments' job, run separately on the same token
-            # list.
+            # Not a structure ID: another flag, or an unknown '-' token. The value after
+            # -reference is left for parse_overlay_arguments.
             idx += 1
             continue
         pairs.append((token.upper(), "pdb"))
@@ -588,19 +535,12 @@ def parse_structure_ids_with_format_flags(tokens, other_flag_prefixes=None):
 # (green/red) stand out clearly against them.
 PROTEIN_COLOR_LIST = ["grey80", "grey60", "grey40", "brown", "wheat", "dirtyviolet", "sand", "grey90"]
 
-# Per-structure palettes for multi-structure runs.
-#
-# PROTEIN_COLOR_LIST cycles by CHAIN within one structure, which is right for
-# a single structure and wrong for a comparison: every structure's chain A
-# came out grey80, so an overlay of three was three identical greys and the
-# reference was indistinguishable from the comparisons.
-#
-# The reference keeps the greys it has always had. Each comparison takes a
-# distinct hue, in an order chosen to stay legible against grey and against
-# each other. The list cycles, so a run is never limited by its length.
-# The first colour of each list is the one OVERLAY_PROTEIN_COLORS gives the
-# same structure, so a single-chain structure is drawn in one colour whether
-# it appears in an OVERLAY or a TERMINI run.
+# Per-structure palettes for multi-structure runs. PROTEIN_COLOR_LIST cycles
+# by chain, so in a comparison every structure's chain A would be the same
+# grey. The reference keeps the greys; each comparison takes a distinct hue,
+# ordered to stay legible against grey and each other, cycling as needed.
+# The first colour of each list matches OVERLAY_PROTEIN_COLORS, so a
+# single-chain structure is the same colour in OVERLAY and TERMINI runs.
 REFERENCE_COLOR_LIST = ["grey50", "grey70", "grey85", "grey35"]
 COMPARISON_COLOR_LISTS = [
     ["skyblue", "lightblue", "slate"],
@@ -628,12 +568,9 @@ def structure_palette(index):
 
 
 
-# Ligand colors: vibrant, high-contrast hues that read clearly against the
-# neutral protein greys/browns and don't collide with the green/red used for
-# N-/C-terminus coloring elsewhere. Black is a legitimate PyMOL color but
-# reads as "no color" / background at a glance, so it's placed last as a
-# fallback only once every other color in the list has been used, rather than
-# being one of the first colors a ligand is likely to get.
+# Ligand colors: high-contrast hues that stand out from the protein greys
+# and avoid the green and red used for termini. Black reads as background,
+# so it comes last.
 LIGAND_COLOR_LIST = ["yellow", "hotpink", "marine", "orange", "purple", "cyan", "magenta", "deepsalmon", "black"]
 
 # Ion colors: softer/pastel variants so ions read as distinct from both the
@@ -655,11 +592,9 @@ OVERLAY_LIGAND_COLORS = ["yellow", "hotpink", "marine", "orange", "purple", "cya
 TERMINUS_COLORS = {"enabled": True, "n": "green", "c": "red"}
 
 # Terminus arrow colours (RGB, 0-1) in TERMINI close-ups, (N, C) per pair.
-# The reference keeps orange (N) and pink (C) in every close-up -- it is the
-# same structure in every pair, so a stable colour is what makes it findable.
-# Each comparison takes its own pair by its position in the report's
-# best-match order; a run with one comparison uses cyan and bright yellow.
-# The list wraps, so the number of comparisons is never capped by it.
+# The reference is orange and pink in every close-up, so it is easy to find.
+# Each comparison takes a pair by its place in the report's best-match
+# order; a single comparison uses cyan and bright yellow. The list wraps.
 REFERENCE_ARROW_COLORS = [(1.0, 0.5, 0.0), (1.0, 0.4, 0.7)]
 COMPARISON_ARROW_COLORS = [
     ((0.0, 1.0, 1.0), (1.0, 1.0, 0.0)),    # cyan / bright yellow
@@ -817,12 +752,8 @@ def get_color(name, color_map, color_list):
 
 
 def format_yn_prompt():
-    """Return the colored '(y/n)' fragment used by every Y/n confirmation
-    prompt in Astra3 (e.g. 'Apply this correction? (y/n): '), so every such
-    prompt in the codebase looks identical rather than each call site
-    hand-rolling its own color codes -- lowercase y and n, y in green, n in
-    red, matching the DONE-command 'open output folder?' prompt exactly
-    (plain lowercase, no default-answer capitalization).
+    """The coloured '(y/n)' used by every yes/no prompt, so they all look
+    the same: lowercase, y in green, n in red.
     """
     return f"{WHITE}({RESET}{GREEN}y{RESET}{WHITE}/{RESET}{RED}n{RESET}{WHITE}){RESET}"
 
@@ -846,6 +777,33 @@ STANDARD_HEAVY_ATOMS = {
 # ------------------------------------------------------------
 # OUTPUT FOLDER HELPERS
 # ------------------------------------------------------------
+# Run folders created by the operation in progress, removed if it is cancelled.
+operation_run_dirs = []
+
+RUN_COPY_SUFFIX = re.compile(r" \(\d+\)$")
+
+
+def new_run_dir(name):
+    """A new folder for a run: <name>, or "<name> (n)" with the lowest free n
+    when earlier runs used it, so a re-run never overwrites another. Both
+    guards against path traversal apply: the name comes from
+    safe_output_dirname, and safe_join checks the resolved path."""
+    path = safe_join(PROTEIN_OUTPUTS_DIR, name)
+    copy = 1
+    while path.exists():
+        path = safe_join(PROTEIN_OUTPUTS_DIR, f"{name} ({copy})")
+        copy += 1
+    path.mkdir(parents=True)
+    operation_run_dirs.append(str(path))
+    return str(path)
+
+
+def run_display_name(output_dir):
+    """A run folder's name without the copy number of a re-run, as used in
+    reports and session names: "1HEW_Output (2)" -> "1HEW_Output"."""
+    return RUN_COPY_SUFFIX.sub("", os.path.basename(str(output_dir).rstrip(os.sep)))
+
+
 def get_output_folders(obj, is_test=False):
     """Return (output_dir, session_dir, images_dir) for single-structure runs."""
     if is_test:
@@ -853,14 +811,7 @@ def get_output_folders(obj, is_test=False):
         if os.path.exists(output_dir):
             shutil.rmtree(output_dir)
     else:
-        # safe_output_dirname strips anything that isn't a letter, digit,
-        # underscore, or hyphen (so a crafted obj like "../../evil" can't walk
-        # the resulting path outside PROTEIN_OUTPUTS_DIR), and safe_join
-        # independently verifies the final resolved path is still inside
-        # PROTEIN_OUTPUTS_DIR before it's ever created or written to -- two
-        # independent layers rather than relying on either check alone. See
-        # astra3_security.py.
-        output_dir = str(safe_join(PROTEIN_OUTPUTS_DIR, safe_output_dirname(obj)))
+        output_dir = new_run_dir(safe_output_dirname(obj))
     session_dir = os.path.join(output_dir, "Session")
     images_dir = os.path.join(output_dir, "Images")
     os.makedirs(session_dir, exist_ok=True)
@@ -873,7 +824,7 @@ def get_overlay_output_folders(pdb_ids):
         name_part = "_".join(pdb_ids)
     else:
         name_part = "_".join(pdb_ids[:4]) + "_and_" + str(len(pdb_ids) - 4) + "_more"
-    output_dir = str(safe_join(PROTEIN_OUTPUTS_DIR, safe_output_dirname("Overlay_" + name_part)))
+    output_dir = new_run_dir(safe_output_dirname("Overlay_" + name_part))
     session_dir = os.path.join(output_dir, "Session")
     images_dir = os.path.join(output_dir, "Images")
     os.makedirs(session_dir, exist_ok=True)
@@ -881,70 +832,8 @@ def get_overlay_output_folders(pdb_ids):
     return output_dir, session_dir, images_dir
 
 
-# Filename prefixes Astra3 itself generates into an Images folder. Used to
-# clear a run's own stale output without touching anything a person put there.
-ASTRA3_GENERATED_IMAGE_PREFIXES = ("view_", "closeup_", "TPV_")
-
-
-def clear_stale_run_images(images_dir):
-    """Remove Astra3-generated images left in images_dir by a previous run.
-
-    Output folders are named deterministically from the structure IDs, so
-    every run of the same pair writes into the same Images folder. Nothing
-    cleared it between runs, so files from an earlier run stayed alongside the
-    new ones and were presented as part of the current result.
-
-    That is not a cosmetic duplicate. Chain matching, offset corrections and
-    which residues count as resolved can all differ between two runs of the
-    same pair, so a stale file can show a different chain pairing or a
-    terminus window the current run would not produce -- indistinguishable,
-    in a folder listing, from output that is current. A close-up whose
-    filename encodes chain "A/B" survives a later run that matched "A" to
-    "A", and both then appear as though the run produced both.
-
-    Only files matching Astra3's own generated prefixes are removed, so
-    anything a person saved into the folder is left alone. Returns the list
-    of removed filenames for disclosure; never raises.
-    """
-    removed = []
-    try:
-        entries = os.listdir(images_dir)
-    except OSError:
-        return removed
-    for name in entries:
-        if not name.lower().endswith(".png"):
-            continue
-        if not name.startswith(ASTRA3_GENERATED_IMAGE_PREFIXES):
-            continue
-        full = os.path.join(images_dir, name)
-        try:
-            if os.path.isfile(full):
-                os.remove(full)
-                removed.append(name)
-        except OSError:
-            # A file held open by a viewer is not worth failing a run over;
-            # it stays, and the caller's disclosure reports what did go.
-            continue
-    return removed
-
-
-def report_cleared_images(removed, images_dir, warnings_list=None):
-    """Print and record what clear_stale_run_images removed."""
-    if not removed:
-        return
-    print(f"{YELLOW}Removed {len(removed)} image(s) left in {images_dir} by a previous run of this same "
-          f"comparison. Output folders are named after the structures, so a re-run reuses the folder; "
-          f"clearing it keeps the images in this folder matching this run.{RESET}", flush=True)
-    if warnings_list is not None:
-        warnings_list.append(
-            f"{len(removed)} image(s) from a previous run of this comparison were removed from the output "
-            f"folder before rendering, so the images shown belong to this run only."
-        )
-
-
-# Structure files Astra3 reads from disk. Coordinate files may be gzip
-# compressed (as RCSB serves them); a PyMOL session may not.
-COORDINATE_EXTENSIONS = (".pdb", ".ent", ".cif", ".mmcif")
+# Session files Astra3 reads from disk. Unlike a coordinate file, which may be
+# gzip compressed (as RCSB serves them), a PyMOL session may not.
 SESSION_EXTENSIONS = (".pse",)
 
 
@@ -1233,11 +1122,10 @@ def summarize_chain_reduction(applied, pdb_id, command_label, rule):
     """One note per cluster of redundant chains: the chains removed or kept,
     and the rule that decided (rule: see prompt_intra_structure_homomer_reduction).
 
-    Chains removed from one cluster make one note, not one per chain: a
-    tetramer reduced to a single chain produced three near-identical warnings
-    that differed only by a letter, which pushed the lines that need
-    attention down the list. Reduced clusters come first, in order of the
-    chains kept, then the clusters whose chains were all kept.
+    Chains removed from one cluster make one note, not one per chain, so a
+    tetramer reduced to one chain does not fill the list with three notes that
+    differ by a letter. Reduced clusters come first, in order of the chains
+    kept, then the clusters whose chains were all kept.
     """
     outcome = homomer_rule_outcome(rule, applied)
     lines = []
@@ -1266,7 +1154,7 @@ def get_termini_output_folders(pdb_ids):
         name_part = "_".join(pdb_ids)
     else:
         name_part = "_".join(pdb_ids[:4]) + "_and_" + str(len(pdb_ids) - 4) + "_more"
-    output_dir = str(safe_join(PROTEIN_OUTPUTS_DIR, safe_output_dirname("Termini_" + name_part)))
+    output_dir = new_run_dir(safe_output_dirname("Termini_" + name_part))
     session_dir = os.path.join(output_dir, "Session")
     images_dir = os.path.join(output_dir, "Images")
     os.makedirs(session_dir, exist_ok=True)
@@ -1326,24 +1214,17 @@ def parse_header(raw_text):
 
 
 def load_functional_readouts(base_dir=None):
-    """Look for readouts.csv in base_dir (defaults to Astra3's working
-    folder, BASE_DIR) and, if present, parse it into
-    {structure_id_upper: [{"readout_name": str, "value": str,
-    "terminus": str or None, "units": str or None}, ...]}.
+    """Parse readouts.csv in base_dir (default: Astra3's working folder,
+    BASE_DIR), if present, into {structure_id_upper: [{"readout_name": str,
+    "value": str, "terminus": str or None, "units": str or None}, ...]}.
 
-    Expected columns (header row required, case-insensitive column
-    names): structure_id, readout_name, value, and optionally terminus
-    (N/C, for a readout specific to one terminus) and units (a display
-    string like 'RFU' or 'nM', never assumed or invented if omitted).
-    Extra/unrecognized columns are ignored rather than rejected, so a
-    user's existing lab spreadsheet with additional columns doesn't need
-    to be trimmed down first.
+    Columns (header row required, names case-insensitive): structure_id,
+    readout_name, value, and optionally terminus (N or C) and units (shown as
+    written, e.g. 'RFU' or 'nM'; never assumed). Other columns are ignored, so
+    a lab spreadsheet with more columns works as it is.
 
-    Returns an empty dict (not an error) if the file doesn't exist -- this
-    is an optional, auto-detected input, not a required one. Malformed
-    rows are skipped individually with a printed warning rather than
-    aborting the whole file, since one bad row shouldn't discard
-    everything else a user has already entered correctly.
+    Returns {} when the file does not exist: it is optional. A malformed row
+    is skipped with a printed warning; the rest of the file is still read.
     """
     if base_dir is None:
         base_dir = BASE_DIR
@@ -1406,12 +1287,8 @@ def parse_remark_465(raw_text):
     for ln in lines:
         if ln.startswith("REMARK 465"):
             content = ln[10:].strip()
-            # Chain IDs are captured as [A-Za-z0-9]+ (one or more characters),
-            # not a single character -- legacy PDB is nominally one-char chain
-            # IDs, but some large legacy entries do use multi-char chain IDs,
-            # and a single-char capture here would silently truncate those
-            # (e.g. "AA" read as just "A"), quietly merging two different
-            # chains' missing-residue data together under one wrong key.
+            # Chain IDs can be longer than one character in some large legacy entries;
+            # a one-character capture would merge chains.
             m = re.search(r"CHAIN[:\s]+([A-Za-z0-9]+)[:\s-]*(.*)", content, re.IGNORECASE)
             if m and m.group(2).strip():
                 ch = m.group(1).strip()
@@ -1421,21 +1298,9 @@ def parse_remark_465(raw_text):
                     if re.match(r"^\d+(-\d+)?$", p):
                         missing.setdefault(ch, []).append(p)
             else:
-                # Standard PDB REMARK 465 data-line format is "RES C
-                # SSSEQI[ICode]" -- residue name, then chain ID, then sequence
-                # number, optionally followed by a single-letter insertion
-                # code (e.g. "SER A 134" or "GLY H 100A"), per the wwPDB
-                # format spec and every real REMARK 465 block (verified
-                # against actual PDB entries, e.g. 1QG8). The residue name
-                # always comes FIRST, not a leading digit -- a prior version
-                # of this regex required the line to start with \d+, which
-                # never matches this format at all (residue names are
-                # letters), so every REMARK 465 block in this format was
-                # silently parsed as zero missing residues.
-                # Entries whose models differ carry the model number first
-                # ("M RES C SSSEQI" in the block's own column header); it is
-                # optional and ignored here, since a residue missing from any
-                # model is reported once.
+                # REMARK 465 data lines are "RES C SSSEQI[ICode]" ("SER A 134",
+                # "GLY H 100A"). Entries whose models differ put the model number first; it
+                # is ignored, and a residue missing from any model is reported once.
                 m2 = re.match(r"^(?:\d+\s+)?([A-Za-z0-9]{1,3})\s+([A-Za-z0-9])\s+(-?\d+)([A-Za-z]?)\s*$", content)
                 if m2:
                     ch = m2.group(2).strip()
@@ -1550,30 +1415,18 @@ def count_missing_residues(ranges):
 
 
 # ------------------------------------------------------------
-# mmCIF metadata parsing (parallels parse_header/parse_remark_465 above, which
-# only understand legacy PDB text cards). A structure fetched with the -mmCIF
-# flag downloads a .cif file instead of a .pdb file -- these two functions are
-# what let header_info and the missing-residues map still get populated from
-# that file instead of silently staying empty, which is what would otherwise
-# happen since the legacy parsers only ever looked for '.pdb'-named downloads.
-#
-# Field names verified against the wwPDB PDBx/mmCIF dictionary
-# (mmcif.wwpdb.org) rather than assumed: _exptl.method -- experimental method
-# _reflns.d_resolution_high -- resolution (Å), when present
-# _refine.ls_d_res_high -- fallback resolution field, some entries populate
-# this instead _refine.ls_R_factor_R_work -- R-work _refine.ls_R_factor_R_free
-# -- R-free _pdbx_unobs_or_zero_occ_residues -- missing-residue loop, the
-# mmCIF analog of REMARK 465 (wwPDB's own PDB-101 documentation describes it
-# as such)
+# mmCIF metadata, the counterpart of parse_header and parse_remark_465 for
+# -mmCIF downloads. Fields, from the PDBx/mmCIF dictionary: _exptl.method,
+# _refine.ls_d_res_high and _reflns.d_resolution_high (resolution),
+# _refine.ls_R_factor_R_work and _R_free, and
+# _pdbx_unobs_or_zero_occ_residues (the REMARK 465 equivalent).
 # ------------------------------------------------------------
 def _cif_scalar_value(raw_text, tag):
-    """Extract a single scalar (non-loop) mmCIF value, e.g. for a line
-    like `_exptl.method 'X-RAY DIFFRACTION'` or `_exptl.method
-    X-RAY_DIFFRACTION` (unquoted, single token). Returns the value with
-    surrounding quotes stripped, or None if the tag isn't present as a
-    scalar assignment (e.g. it only appears as a loop_ column header,
-    which this function deliberately does not attempt to parse -- a
-    loop value needs row/column alignment, not a one-line regex).
+    """A single scalar (non-loop) mmCIF value, e.g. from
+    `_exptl.method 'X-RAY DIFFRACTION'` or `_exptl.method X-RAY_DIFFRACTION`,
+    with surrounding quotes stripped. None when the tag is not a scalar
+    assignment (a loop_ column needs row and column alignment, which this
+    does not attempt).
     """
     # Match "_tag 'quoted value'" / "_tag \"quoted value\"" / "_tag bareword"
     # on one line. re.MULTILINE + ^ anchors to the start of each line so this
@@ -1586,8 +1439,7 @@ def _cif_scalar_value(raw_text, tag):
     value = m.group(1) if m.group(1) is not None else (m.group(2) if m.group(2) is not None else m.group(3))
     value = value.strip() if value else value
     if value in (None, "", "?", "."):
-        # mmCIF's own conventions for "not present" (?) and "explicitly
-        # inapplicable" (.) -- treat both as absent, not as a literal value.
+        # "?" (not present) and "." (inapplicable) are both absent.
         return None
     return value
 
@@ -1653,12 +1505,12 @@ def parse_missing_residues_cif(raw_text):
     category = "_pdbx_unobs_or_zero_occ_residues."
     lines = raw_text.splitlines()
 
-    # Find the loop_ block whose column tags start with our category.
+    # Find the loop_ block whose column tags start with this category.
     loop_start = None
     for i, ln in enumerate(lines):
         if ln.strip() == "loop_":
-            # Peek ahead: does the next non-blank line declare a column in our
-            # category?
+            # Whether the next non-blank line declares a column in this
+            # category.
             j = i + 1
             while j < len(lines) and lines[j].strip().startswith(category):
                 j += 1
@@ -1709,31 +1561,70 @@ def parse_missing_residues_cif(raw_text):
     return _normalize_missing_residue_ranges(missing)
 
 
-def resolution_classification(resolution_str):
-    """
-    Classify resolution string (from PDB header) into human-friendly categories.
-    Returns a string describing the resolution class or 'Not applicable' if it can't be parsed.
-    """
+# Resolution classes for diffraction data, as (upper bound in A, name), from
+# Dubach VRA, Guskov A (2020) The resolution in X-ray crystallography and
+# single-particle cryogenic electron microscopy. Crystals 10:580, section 2.2.
+# doi:10.3390/cryst10070580. Anything worse than the last bound is very low.
+RESOLUTION_CLASSES = ((1.0, "Subatomic"), (1.5, "Atomic"), (2.0, "High"), (3.0, "Medium"), (5.0, "Low"))
+
+
+def resolution_method_kind(method):
+    """"diffraction", "em", "nmr" or None for an experimental-method string
+    as PDB and mmCIF headers give it. An entry solved by several methods is
+    a diffraction entry when one of them is."""
+    text = str(method or "").upper()
+    if "DIFFRACTION" in text or "CRYSTALLOGRAPHY" in text:
+        return "diffraction"
+    if "ELECTRON MICROSCOPY" in text:
+        return "em"
+    if "NMR" in text:
+        return "nmr"
+    return None
+
+
+def resolution_classification(resolution_str, method=None):
+    """Resolution class of a diffraction structure, or the reason none is
+    given. The classes describe the d-spacing limit of diffraction data, so
+    they are not applied to a cryo-EM map's resolution estimate or to
+    entries whose method is unknown."""
     try:
         r = float(resolution_str)
     except (ValueError, TypeError):
         return "Not applicable"
-    if r < 1.5:
-        return "Exceptional"
-    elif r < 1.6:
-        return "Excellent (borderline with Exceptional)"
-    elif r < 2.0:
-        return "Excellent"
-    elif r < 2.1:
-        return "Good (borderline with Excellent)"
-    elif r < 2.5:
-        return "Good"
-    elif r < 2.6:
-        return "Moderate (borderline with Good)"
-    elif r < 3.0:
-        return "Moderate"
-    else:
-        return "Lower classification for atomic details"
+    kind = resolution_method_kind(method)
+    if kind == "em":
+        return "Not assigned (cryo-EM map)"
+    if kind != "diffraction":
+        return "Not assigned (the classes apply to diffraction data)"
+    for bound, name in RESOLUTION_CLASSES[:-1]:
+        if r < bound:
+            return name
+    return "Low" if r <= RESOLUTION_CLASSES[-1][0] else "Very low"
+
+
+def resolution_guide_lines(method):
+    """Lines printed under the resolution class: the class table for a
+    diffraction structure, why none is assigned for a cryo-EM map, nothing
+    otherwise."""
+    kind = resolution_method_kind(method)
+    if kind == "em":
+        return [
+            "A cryo-EM resolution is an estimate from the Fourier shell correlation between",
+            "half-maps, usually at the 0.143 threshold of Rosenthal & Henderson (2003, J Mol Biol",
+            "333:721-745), and varies across the map, so the classes used for diffraction data",
+            "are not applied.",
+        ]
+    if kind != "diffraction":
+        return []
+    return [
+        "Resolution classes for diffraction data (Dubach & Guskov 2020, Crystals 10:580):",
+        "  below 1.0 Å : Subatomic",
+        "  1.0-1.5 Å   : Atomic (1.2 Å or better by Sheldrick's criterion)",
+        "  1.5-2.0 Å   : High",
+        "  2.0-3.0 Å   : Medium",
+        "  3.0-5.0 Å   : Low",
+        "  above 5.0 Å : Very low",
+    ]
 
 
 def format_residue_ranges(residue_list, structure_id=None):

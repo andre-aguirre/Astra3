@@ -16,16 +16,14 @@
 #   - all report_* helper functions that inspect a loaded
 #     structure (biological assembly, sequence info, secondary
 #     structure, ligands, ions, disulfides, flexibility, etc.)
-#   - the Protein_Information.txt report builder
+#   - the <ID>_Information.txt report builder
 #
 # No image rendering or HTML report generation happens here.
 # See astra3_render_report.py for that. This module depends on
 # astra3_core for shared color maps and formatting helpers.
 # ------------------------------------------------------------
 
-import time
 import re
-import difflib
 from pymol import cmd
 
 import astra3_align
@@ -33,10 +31,9 @@ import astra3_measure
 
 from astra3_core import (
     format_method, engine_name,
-    PROTEIN_COLOR_LIST, LIGAND_COLOR_LIST, ION_COLOR_LIST, structure_palette,
-    protein_color_map, ligand_color_map, ion_color_map,
+    PROTEIN_COLOR_LIST, LIGAND_COLOR_LIST, ION_COLOR_LIST, protein_color_map, ligand_color_map, ion_color_map,
     get_color, engine_color, display_date, coordinate_file_line, TERMINUS_COLORS, REFERENCE_ARROW_COLORS, COMPARISON_ARROW_COLORS,
-    resolution_classification, format_residue_ranges,
+    resolution_classification, resolution_guide_lines, format_residue_ranges,
     AA_3TO1, STANDARD_HEAVY_ATOMS, YELLOW, GREEN, RED, WHITE, RESET, BOLD, format_yn_prompt,
     count_missing_residues, _normalize_missing_residue_ranges, resolution_display,
     HOMOMER_RULES, DEFAULT_REDUCE_PRIORITY, chains_text, homomer_rule_outcome, homomer_rule_reason,
@@ -53,7 +50,7 @@ def reset_session_state():
     establishes at startup, and re-applying them per run is slower and easy
     to get subtly wrong.
 
-    Never raises -- a failure here should not stop an analysis that might
+    Never raises: a failure here should not stop an analysis that might
     otherwise succeed. Returns the names removed, for disclosure.
     """
     removed = []
@@ -66,7 +63,7 @@ def reset_session_state():
             try:
                 cmd.delete(name)
                 removed.append(name)
-            except Exception:  # noqa: BLE001 -- one stubborn name must not stop the sweep
+            except Exception:  # noqa: BLE001 # one stubborn name must not stop the sweep
                 continue
     try:
         # Selections whose atoms have just gone leave their names behind.
@@ -151,6 +148,8 @@ def build_overlay_report(loaded_objs, structure_data, reference_obj, reference_r
         if res.get("success"):
             lines.append("  RMSD: %.3f Å" % res["rmsd"])
             lines.append("  Aligned atoms: " + str(res["atoms"]))
+            if res.get("paired_atoms") is not None:
+                lines.append("  Atom pairs before outlier rejection: " + str(res["paired_atoms"]))
             lines.append("  Aligned residues: " + str(res["residues"]))
         else:
             lines.append("  Alignment failed: " + str(res.get("error", "Unknown error")))
@@ -287,56 +286,40 @@ def resi_sort_key(resv, resi):
 
 # Minimum occupancy for a residue to count as observed.
 #
-# A deposited entry can contain atoms that were never observed in the density:
-# they carry real coordinates but zero occupancy, flagged by the depositor
-# (mmCIF pdbx_unobs_or_zero_occ_residues, PDB REMARK 470/465). PyMOL loads them
-# as ordinary atoms, so anything that asks "what is this chain's first residue"
-# by reading atoms gets the placeholder, not the first residue anyone actually
-# saw.
+# Some deposited atoms were never seen in the density: they have coordinates
+# but zero occupancy (mmCIF pdbx_unobs_or_zero_occ_residues, PDB REMARK
+# 470/465). PyMOL loads them as ordinary atoms, so reading a chain's first
+# residue from atoms gets the placeholder. A structure whose first 42
+# residues are placeholders then has a terminus 42 residues from the one a
+# comparison resolves, and every terminal measurement compares unrelated
+# regions. Placeholders often have backbone atoms only, so the cartoon draws
+# nothing for them either.
 #
-# This is not a rare edge case and it is not cosmetic. A structure whose first
-# 42 residues are zero-occupancy placeholders has a "terminus" 42 residues away
-# from the one a comparison structure resolves; the two termini then have no
-# relation to each other, the offset needed to reconcile them is far outside
-# any sane search window, and every terminal measurement is computed between
-# non-corresponding regions while looking perfectly well-formed. Those
-# placeholder residues also frequently carry backbone atoms only, so PyMOL's
-# cartoon draws nothing for them -- the terminus is colored, and invisible.
-#
-# Zero-occupancy atoms are therefore excluded from every "resolved residue"
-# question: terminus selection, sequence extraction, and coordinate ordering.
-# They are left in the loaded object (deleting a depositor's data is not this
-# program's decision) and their exclusion is always disclosed, never silent.
-MIN_OBSERVED_OCCUPANCY = 0.01
+# Zero-occupancy atoms are excluded from terminus selection, sequence
+# extraction and coordinate ordering. They stay in the object, and their
+# exclusion is always reported.
+# Zero itself is the placeholder; any occupancy above it is an observed atom, the
+# same rule the superposition and surface-area code apply atom by atom.
+MIN_OBSERVED_OCCUPANCY = 0.0
 
-# How far the terminus offset search looks for the frame in which two termini
-# correspond, in residues.
+# How far the terminus offset search looks, in residues, for the frame in
+# which two termini correspond.
 #
-# The default is deliberately small. Its job is ordinary terminal disorder --
-# one crystal resolving a few more tail residues than another -- and a narrow
-# window is what keeps it from wandering off and finding a plausible-looking
-# match somewhere unrelated.
-#
-# The advanced pass exists for the case the default cannot represent at all:
-# two entries of the same protein built from different constructs, where one
-# carries an expression tag, a cloning scar, or a whole extra domain ahead of
-# the point the other begins. Those differ by tens of residues, not a few, and
-# a search that stops at 25 simply reports "these termini do not correspond"
-# for a pair whose termini correspond perfectly 40 residues in. The advanced
-# range therefore spans a construct-scale difference rather than a disorder-
-# scale one.
-#
-# Cost is not the constraint: the search is a windowed exact-match count per
-# offset, linear in the range, and bounded above by the chain length regardless
-# of what is asked for. The real constraint is a spurious distant match, which
-# is handled by the ties-go-to-the-smaller-offset rule in the search itself and
-# by disclosing any large adopted offset rather than applying it quietly.
+# The default is small: it covers ordinary terminal disorder, and a narrow
+# window cannot wander off to an unrelated plausible match. The advanced
+# range covers entries built from different constructs (an expression tag, a
+# cloning scar, an extra domain), which differ by tens of residues. The
+# search is linear in the range and bounded by chain length, so cost is not
+# the limit; a spurious distant match is, which ties going to the smaller
+# offset and disclosure of large offsets guard against.
 TERMINUS_SEARCH_EXTRA_DEFAULT = 10
 TERMINUS_SEARCH_EXTRA_ADVANCED = 250
+# Fewest residues two termini must share at an offset for it to be considered.
+# A shorter overlap matches by chance too easily to place a terminus.
+TERMINUS_MIN_OVERLAP = 8
 
-# An adopted offset at or above this many residues is no longer an ordinary
-# terminal-disorder correction; it means the two structures start at genuinely
-# different points in the construct. Always disclosed.
+# An adopted offset this large means the structures start at different
+# points in the construct, not terminal disorder. Always disclosed.
 LARGE_TERMINUS_OFFSET = 15
 
 # Lowest terminus identity at which -alwaysmatch applies an offset correction
@@ -387,17 +370,14 @@ def group_ca_residues_by_chain(stored_list):
     """Group (chain, resv, resi) Cα records into {chain: [(resv, resi), ...]},
     dropping only true duplicates.
 
-    Deduplication keys on (chain, resi) -- the full residue identifier,
-    insertion code included -- not (chain, resv). PyMOL documents resv as the
-    residue number EXCLUDING the insertion code, so 52, 52A and 52B all share
-    resv=52 and a resv-keyed set silently discards two real residues that have
-    coordinates and are measured everywhere else. That made the terminus
-    window selected and colored here contain different residues from the one
-    get_ordered_ca_coords measures, which is the disagreement a user sees as
-    a terminus with fewer residues colored than the window size.
+    Duplicates are judged on (chain, resi), the full residue identifier with
+    its insertion code. resv leaves the insertion code out, so 52, 52A and
+    52B share resv 52, and a resv-keyed set would drop two real residues and
+    make the terminus window coloured here differ from the one
+    get_ordered_ca_coords measures.
 
-    Alternate locations still produce genuine repeats of one resi; the first
-    is kept so the result is deterministic.
+    Alternate locations repeat one resi; the first is kept, so the result is
+    the same every time.
     """
     seen = set()
     chains_res = {}
@@ -416,11 +396,9 @@ def group_ca_residues_by_chain(stored_list):
     return chains_res
 
 
-# Number of residues from each end of a chain treated as its N-/C-terminus for
-# selection, coloring, and reporting. Matches the tip+orientation window
-# (tip_n=5 + orientation_n=5) used by compare_termini's vector math, so the
-# colored region and the region actually measured by TERMINI are the same
-# residues.
+# Residues from each end of a chain treated as its terminus for selection,
+# coloring and reporting: compare_termini's tip_n (5) plus orientation_n
+# (5), so the coloured region is the measured one.
 TERMINUS_WINDOW = 10
 
 # Residues behind the Terminal Projection Vector: the terminal residue and the
@@ -429,20 +407,14 @@ TERMINUS_WINDOW = 10
 # orientation vector, which follows the whole ten-residue terminal segment.
 TPV_WINDOW = 4
 
-# Chain-length classification for deciding whether a chain is treated as a
-# genuine subject protein chain (eligible for N-/C-terminus selection) or
-# excluded as a likely bound peptide ligand. Chain length alone cannot
-# distinguish "this is a peptide ligand" from "this is the real subject chain
-# with most of its length unresolved" -- PyMOL's polymer.protein selector is
-# purely geometric (peptide bonds + standard residue names) and has no concept
-# of biological role. This is therefore always a heuristic, never a certainty:
-# < LIGAND_MAX_CHAIN_LENGTH residues: treated as a ligand -- excluded from
-# N-/C-terminus selection, disclosed via a printed warning.
-# LIGAND_MAX_CHAIN_LENGTH..PROTEIN_MIN_CHAIN_LENGTH-1 residues: genuinely
-# ambiguous -- neither clearly a short peptide nor clearly a full protein
-# chain. The user is shown the actual sequence and asked directly rather than
-# Astra3 guessing either way. >= PROTEIN_MIN_CHAIN_LENGTH residues: treated as
-# a real protein chain, included in N-/C-terminus selection automatically.
+# Whether a protein chain is a subject chain (eligible for termini) or a
+# bound peptide. Length alone cannot tell a peptide from a mostly
+# unresolved chain, so this is a heuristic:
+#   < LIGAND_MAX_CHAIN_LENGTH: a ligand, excluded from termini, with a
+#     warning;
+#   LIGAND_MAX_CHAIN_LENGTH to PROTEIN_MIN_CHAIN_LENGTH - 1: ambiguous; the
+#     person is shown the sequence and asked;
+#   >= PROTEIN_MIN_CHAIN_LENGTH: a protein chain.
 LIGAND_MAX_CHAIN_LENGTH = 25
 PROTEIN_MIN_CHAIN_LENGTH = 40
 # Backward-compatible alias: several places historically referenced this name
@@ -493,7 +465,7 @@ def label_blank_chains(obj):
                 cmd.alter(f"({obj}) and chain '' and polymer", f"chain='{letter}'")
                 cmd.sort(obj)
                 return letter
-    except Exception:  # noqa: BLE001 -- leave the structure as it was
+    except Exception:  # noqa: BLE001 # leave the structure as it was
         return None
     return None
 
@@ -511,7 +483,7 @@ def fill_missing_occupancy(obj):
         if cmd.count_atoms(f"({obj})") and cmd.count_atoms(f"({obj}) and q > 0") == 0:
             cmd.alter(f"({obj})", "q = 1.0")
             return True
-    except Exception:  # noqa: BLE001 -- leave the structure as it was
+    except Exception:  # noqa: BLE001 # leave the structure as it was
         return False
     return False
 
@@ -578,36 +550,30 @@ def b_factor_summary(b_values, method=None):
 
 
 def prompt_ambiguous_chain_length(pdb_id, obj, chain, residue_count, sequence, identical_chains=None):
-    """A chain's resolved length falls in the ambiguous 25-40 residue
-    zone (LIGAND_MAX_CHAIN_LENGTH..PROTEIN_MIN_CHAIN_LENGTH) -- neither
-    short enough to confidently call a bound peptide nor long enough to
-    confidently call a full protein chain. Shows the user the actual
-    resolved sequence and asks directly whether this chain should be
-    treated as a peptide (excluded from N-/C-terminus selection) or as a
-    protein chain (included), rather than Astra3 guessing either way.
+    """Ask about a chain whose resolved length is between
+    LIGAND_MAX_CHAIN_LENGTH and PROTEIN_MIN_CHAIN_LENGTH: too long to call a
+    bound peptide outright and too short to call a protein chain. Shows the
+    resolved sequence and asks whether to treat the chain as a peptide (left
+    out of terminus selection) or as a protein chain.
 
-    Returns True if the chain should be treated as a peptide (excluded),
-    False if it should be treated as a protein chain (included). Declining
-    (anything other than an explicit yes) defaults to treating it as a
-    peptide/ligand -- the safer default, since silently including a bound
-    peptide's tail in termini analysis risks skewing results, while
-    excluding a genuine short protein chain only means it's left out of
-    this one analysis (still visible, still colored by chain, just not
-    treated as a terminus).
+    Returns True for a peptide, False for a protein chain. Anything but an
+    explicit yes means peptide: leaving a short protein chain out only omits
+    it from this analysis, while a bound peptide's ends counted as termini
+    would skew the results.
     """
     print("-" * 50, flush=True)
     print(f"{BOLD}Ambiguous Chain Length{RESET}", flush=True)
     print("-" * 50, flush=True)
     others = [c for c in (identical_chains or []) if c != chain]
     print(f"{WHITE}{pdb_id} chain {chain}: {residue_count} resolved residues "
-          f"(between {LIGAND_MAX_CHAIN_LENGTH} and {PROTEIN_MIN_CHAIN_LENGTH}) -- "
+          f"(between {LIGAND_MAX_CHAIN_LENGTH} and {PROTEIN_MIN_CHAIN_LENGTH}): "
           f"could be a bound peptide or a short protein chain.{RESET}", flush=True)
     if others:
         shown = ", ".join(others[:12]) + (f" and {len(others) - 12} more" if len(others) > 12 else "")
         print(f"{WHITE}{len(others)} other chain(s) have exactly the same residues and get the same answer: "
               f"{shown}.{RESET}", flush=True)
     if sequence and set(sequence) == {"X"}:
-        print(f"{WHITE}Sequence: not modelled -- all {len(sequence)} residues are of unknown type (UNK) in the "
+        print(f"{WHITE}Sequence: not modelled; all {len(sequence)} residues are of unknown type (UNK) in the "
               f"deposited file.{RESET}", flush=True)
     else:
         print(f"{WHITE}Sequence: {sequence}{RESET}", flush=True)
@@ -716,38 +682,17 @@ def protein_selection(obj):
 def process_structure(obj, selection_suffix="", capture_water_for_viewer=False,
                       protein_colors=None, deposited_unobserved=None):
     """Process a loaded object: remove water, color chains, name selections.
-    capture_water_for_viewer: when True, a water-included copy of obj is
-    saved off before water is stripped (see the block below), for the
-    GUI's structure viewer's "Show waters" toggle. Defaults to False --
-    single-structure analysis is the only caller that passes True, since
-    it's the only case with a real per-structure viewer .pdb export
-    (save_session() is only ever called once per structure there).
 
-    IMPORTANT: this function can run MORE THAN ONCE for the same obj
-    (e.g. once on initial load, again after intra-structure homomer
-    reduction re-processes the now-reduced object -- see
-    apply_intra_structure_homomer_reduction). A defect from
-    an earlier version of this water-capture logic: creating the
-    "_wviewer" copy unconditionally on EVERY call left a stray,
-    uncolored, unreduced, full-chain duplicate of the ORIGINAL
-    structure sitting in the scene for the entire rest of the run --
-    it was created before this call's own coloring runs, so it was
-    never colored at all (PyMOL's default carbon-color cycling then
-    made it look pink), and a homomer-reduction re-run never touches
-    an already-existing copy from the FIRST call at all, so it also
-    never got reduced. That stray object was then fully visible
-    (enabled, unhidden) in every rendered image and the saved .pse
-    right alongside the real, correctly-processed object, until
-    save_session() finally deleted it at the very end -- exactly
-    matching a real, reported symptom (chain reduction visibly working
-    in the console log, but the saved session/images still showing an
-    extra, uncolored, unreduced, "raw pink" copy of the whole original
-    structure). Fixed by deleting any pre-existing copy from an EARLIER
-    call unconditionally at the start of every call (whether or not
-    THIS call goes on to create a new one), so at most one water copy
-    can ever exist at a time -- and it's always deleted and freshly
-    recreated from THIS call's own view of obj (so a re-run after
-    reduction correctly gets a reduced copy, not a stale full one).
+    capture_water_for_viewer: when True, a copy of obj with its waters is
+    saved before water is stripped, for the app viewer's Show waters toggle.
+    Only single-structure analysis passes True; it is the only case with a
+    per-structure viewer .pdb.
+
+    This can run more than once for the same obj (again after homomer
+    reduction, see apply_intra_structure_homomer_reduction). Any water copy
+    from an earlier call is deleted first, so at most one exists and it
+    matches the object as it is now; a stale copy would be uncoloured,
+    unreduced and visible in every image and the saved session.
     """
     print("Processing: " + obj, flush=True)
 
@@ -766,30 +711,17 @@ def process_structure(obj, selection_suffix="", capture_water_for_viewer=False,
                 "water_count.append((segi, chain, resi))", space={'water_count': water_count})
     water_detected = len(set(water_count))
 
-    # Before removing water from the real analysis object below, save a copy
-    # of it (waters included) into its own object, ONLY for Astra3's own GUI
-    # structure viewer -- see save_session()'s own docstring on why the viewer
-    # needs a plain .pdb export at all, and the Viewer page's "Show waters"
-    # toggle.pdb file it loads was always generated AFTER this removal, so
-    # there was never any water left in it to reveal regardless of the toggle.
-    # Water is still unconditionally removed from the actual analysis object
-    # immediately below -- this doesn't change what's used for coloring,
-    # metrics, the report, or the rendered images at all, only what the
-    # viewer-specific .pdb additionally has available. The copy is
-    # intentionally named with a "_wviewer" suffix (not underscore-prefixed --
-    # see the TPV-vector naming precedent in astra3_render_report.py for why a
-    # leading "_" would hide it from PyMOL's own object panel, though this one
-    # is deleted before the session is ever saved, so that distinction is
-    # mostly moot here) and is deleted again right after save_session() reads
-    # from it, so it never lingers as visible clutter in the working PyMOL
-    # session either.
+    # A copy with waters, for the app's viewer only (see save_session, and the
+    # Viewer's Show waters toggle). Water is still removed from the analysis
+    # object below. Named with a "_wviewer" suffix rather than a leading "_",
+    # and deleted once save_session has read it.
     water_viewer_copy_name = None
     if capture_water_for_viewer and water_detected:
         try:
             water_viewer_copy_name = water_viewer_copy_name_candidate
             cmd.create(water_viewer_copy_name, obj)
         except Exception:
-            water_viewer_copy_name = None  # best-effort -- the viewer's water toggle simply has nothing to show if this fails, nothing else depends on it
+            water_viewer_copy_name = None  # only the viewer's water toggle depends on it
 
     cmd.remove(obj + " and (solvent or resn HOH+WAT+DOD+H2O)")
     water_removed = water_detected
@@ -799,11 +731,8 @@ def process_structure(obj, selection_suffix="", capture_water_for_viewer=False,
     except Exception:
         chain_list = []
 
-    # A map of this structure's own when it has its own palette. The shared
-    # protein_color_map is keyed by chain letter alone, so "A" resolved to
-    # whatever colour the FIRST structure's chain A was given and every
-    # structure in a comparison came out identically grey -- the palette was
-    # passed correctly and then never consulted.
+    # This structure's own palette when it has one: protein_color_map is keyed
+    # by chain letter alone, so every structure's chain A would share a colour.
     chain_color_map = {} if protein_colors else protein_color_map
 
     chain_info = []
@@ -818,16 +747,9 @@ def process_structure(obj, selection_suffix="", capture_water_for_viewer=False,
         print("Chain " + ch + " named " + sel_name + " and colored " + col, flush=True)
         chain_info.append({"chain": ch, "sel_name": sel_name, "color": col})
 
-    # N/C termini from CA atoms.
-    #
-    # Deduplication keys on (chain, resi) -- the full residue identifier,
-    # insertion code included -- not (chain, resv). PyMOL documents resv as
-    # the residue number EXCLUDING the insertion code, so 52, 52A and 52B
-    # share resv=52 and a resv-keyed set discards two real residues. Those
-    # residues still have coordinates and are still measured by
-    # get_ordered_ca_coords (which keys on resi), so a resv-keyed dedup here
-    # produced a colored/selected terminus window that did not contain the
-    # same residues as the measured one.
+    # N/C termini from CA atoms, deduplicated on (chain, resi). resv excludes
+    # the insertion code, so 52, 52A and 52B would collapse into one, and the
+    # selected window would differ from the one get_ordered_ca_coords measures.
     stored_list = []
     cmd.iterate(obj + " and polymer.protein and name CA",
                 "stored_list.append((chain, int(resv), resi, q))",
@@ -852,11 +774,9 @@ def process_structure(obj, selection_suffix="", capture_water_for_viewer=False,
               f"sequence comparison and all terminal measurements, so those reflect the first and last "
               f"residues actually resolved. The residues remain in the loaded structure.{RESET}", flush=True)
 
-    # Classify each chain by resolved length (see LIGAND_MAX_CHAIN_LENGTH /
-    # PROTEIN_MIN_CHAIN_LENGTH docstring above): short chains are excluded as
-    # likely peptide ligands, long chains are included as protein chains, and
-    # the ambiguous middle zone is resolved by asking the user directly rather
-    # than guessing either way. Always disclosed, never applied silently.
+    # Classify each chain by resolved length (LIGAND_MAX_CHAIN_LENGTH,
+    # PROTEIN_MIN_CHAIN_LENGTH): short chains are peptide ligands, long ones
+    # protein, and the person is asked about the middle. Always reported.
     short_chains_excluded = []
     termini_eligible_chains = {}
     ambiguous_chains = [c for c, reslist in chains_res.items()
@@ -951,42 +871,23 @@ def process_structure(obj, selection_suffix="", capture_water_for_viewer=False,
         if same_ligand_total > 1:
             sel_name_base = "lig_" + resn + "_" + str(ligand_name_counts[resn])
         else:
-            # Always prefix with "lig_", even for the common single-instance
-            # case. A bare 3-letter code (e.g. "SCN") is also a valid PyMOL
-            # selector keyword (resn SCN); naming the selection object itself
-            # "SCN" makes later compound selections like "byres ((SCN) around
-            # 4.0) ..." ambiguous to PyMOL's parser and can raise Selector-
-            # Error, or silently select the wrong atoms, depending on context.
-            # Prefixing guarantees the selection name can never collide with
-            # selector syntax while resn itself is unchanged everywhere it's
-            # displayed.
+            # Always prefixed with "lig_": a bare code such as "SCN" is also selector
+            # syntax (resn SCN), and as a selection name makes compound selections
+            # ambiguous to the parser.
             sel_name_base = "lig_" + resn
         sel_name = sel_name_base + selection_suffix
         existing_selections = cmd.get_names("selections")
         if sel_name in existing_selections:
             sel_name = sel_name_base + "_" + ch + "_" + ri + selection_suffix
         col = get_color(resn, ligand_color_map, LIGAND_COLOR_LIST)
-        # Each dynamic identifier is double-quoted (PyMOL's own syntax for a
-        # literal identifier token, e.g. `resn "X"`) rather than spliced in
-        # bare. "A1AQW") falls into the same
-        # letter-digit-token-is-ambiguous-between-name-and-identifier
-        # territory PyMOL's own selection-macro grammar documents for residue
-        # fields, and produced exactly the "byres (...) around 4.0 ...
-        # Selector-Error" failures, which is why this does not occur with
-        # legacy-PDB-sourced structures). Quoting sidesteps the ambiguity
-        # outright rather than depending on exactly how the tokenizer
-        # resolves it. chain and resi are quoted too, defensively, since
-        # mmCIF also permits multi-character chain IDs (e.g. "AA") that carry
-        # the same class of risk, even though no case of that failing has
-        # been observed.
+        # Identifiers are double-quoted (resn "X"). A 5-character mmCIF CCD code
+        # ("A1AQW") is otherwise ambiguous to the selection grammar and raised
+        # Selector-Errors in "byres (...) around 4.0" selections. chain and resi are
+        # quoted too, since mmCIF chain IDs can be several characters.
         sel_string = f'{obj} and chain "{ch}" and resi "{resi_token(ri)}" and resn "{resn}"'
-        # Naming a ligand is presentation only: the atoms are in the object
-        # either way. A selection that fails to resolve must not discard a
-        # structure that has already loaded and been processed -- in a multi-
-        # structure run that structure may be the alignment reference, and
-        # losing it ends the whole run. The loaded-object list is included
-        # because it is the only evidence of why a name did not resolve, and
-        # it cannot be recovered afterwards.
+        # Naming a ligand is presentation only. A selection that fails to resolve
+        # must not discard a loaded structure, which may be the alignment reference.
+        # The loaded objects are printed because they are the only evidence of why.
         try:
             cmd.select(sel_name, sel_string)
             cmd.color(engine_color(col), sel_name)
@@ -1013,34 +914,26 @@ def process_structure(obj, selection_suffix="", capture_water_for_viewer=False,
     # ions (inorganic)
     ion_list = []
     cmd.iterate(obj + " and inorganic",
-                "ion_list.append((chain, resi, resn))",
+                "ion_list.append((chain, resi, resn, elem))",
                 space={'ion_list': ion_list})
     seen_ions = set()
     unique_ions = []
-    for item in ion_list:
-        if item not in seen_ions:
-            seen_ions.add(item)
-            unique_ions.append(item)
+    for ch, ri, resn, elem in ion_list:
+        if (ch, ri, resn) not in seen_ions:
+            seen_ions.add((ch, ri, resn))
+            unique_ions.append((ch, ri, resn, elem))
 
     ion_counts = {}
     ion_info = []
-    for ch, ri, resn in unique_ions:
+    for ch, ri, resn, elem in unique_ions:
         col = get_color(resn, ion_color_map, ION_COLOR_LIST)
         ion_counts[resn] = ion_counts.get(resn, 0) + 1
-        # Prefixed with "ion_", matching the ligand block's "lig_" prefix
-        # above and for the same reason: a bare resn (e.g. "NA", "CA" -- "CA"
-        # is also a valid `name` selector value for alpha carbons) used
-        # directly as a selection NAME risks colliding with selector syntax in
-        # later compound selections. "NA_ion1" -- the count suffix happened to
-        # avoid the exact collision, but only by accident, not by the same
-        # deliberate guarantee the ligand block documents for itself).
+        # Prefixed with "ion_" for the same reason as "lig_": "NA" or "CA" (also
+        # the alpha-carbon name) would collide with selector syntax.
         sel_name_base = "ion_" + resn + "_" + str(ion_counts[resn])
         sel_name = sel_name_base + selection_suffix
-        # See the matching comment in the ligand block above: quoting every
-        # dynamic identifier (chain/resi/resn) in the SELECTOR STRING is what
-        # actually matters for the mmCIF 5-character CCD code / multi-
-        # character chain ID cases -- the sel_name prefix fix above only
-        # protects the selection's own name, not this.
+        # Identifiers quoted as in the ligand block; the prefix only protects the
+        # selection's name, not the selector string.
         sel_string = f'{obj} and chain "{ch}" and resi "{resi_token(ri)}" and resn "{resn}"'
         existing_selections = cmd.get_names("selections")
         if sel_name in existing_selections:
@@ -1048,7 +941,8 @@ def process_structure(obj, selection_suffix="", capture_water_for_viewer=False,
         cmd.select(sel_name, sel_string)
         cmd.color(engine_color(col), sel_name)
         print("Ion named " + sel_name + " and colored " + col, flush=True)
-        ion_info.append({"resn": resn, "sel_name": sel_name, "chain": ch, "resi": ri, "color": col})
+        ion_info.append({"resn": resn, "sel_name": sel_name, "chain": ch, "resi": ri, "color": col,
+                         "elem": str(elem or "").upper()})
 
     print("Finished processing: " + obj, flush=True)
     return {
@@ -1062,15 +956,11 @@ def process_structure(obj, selection_suffix="", capture_water_for_viewer=False,
         "in_chain_residues": [{"chain": ch, "resi": ri, "resn": resn,
                                "counted_as": "protein" if (ch, ri) in as_protein else "ligand"}
                               for ch, ri, resn in in_chain],
-        # Resolved residue count per protein chain -- residues with
-        # coordinates, which is what every downstream measurement can
-        # actually reach. Normally shorter than the deposited sequence, and
-        # the figure a report needs in order to state what a window or an
-        # alignment was measured against.
+        # Resolved residues per protein chain: those with coordinates, which is what
+        # every measurement can reach and what a report states windows against.
         "chain_sequence_lengths": {c: len(reslist) for c, reslist in chains_res.items()},
-        # Residues with coordinates that were never observed (zero occupancy).
-        # Distinct from header-declared missing residues, which have no
-        # coordinates at all -- both matter to a reader, for different reasons.
+        # Residues with coordinates but zero occupancy, as distinct from
+        # header-declared missing residues, which have no coordinates.
         "unobserved_residues": {c: list(v) for c, v in unobserved.items()},
         # The same residues in the depositor's numbering, where the file's own
         # record of them could be matched (see deposited_numbering_for_unobserved).
@@ -1089,40 +979,20 @@ def process_structure(obj, selection_suffix="", capture_water_for_viewer=False,
 # ------------------------------------------------------------
 # INTRA-STRUCTURE HOMOMER / OLIGOMER DETECTION
 # ------------------------------------------------------------
-# Detects near-identical protein chains WITHIN a single loaded structure
-# (chain A vs chain B of the same object) -- distinct from OVERLAY's existing
-# detect_homomer_reduction_candidates(), which compares chains ACROSS two
-# different loaded structures to decide whether one can be reduced to match
-# the other for alignment purposes. This module answers a different, simpler
-# question: "does this one structure, by itself, contain multiple chains that
-# are essentially the same protein?" -- relevant to every command (single-
-# structure runs, BATCH, TERMINI), not just OVERLAY.
-#
-# Detection only. This module never deletes, reduces, or modifies anything by
-# itself -- it returns structured candidate data; the interactive Y/n/SKIP
-# prompt and any resulting temporary single-chain object are the caller's
-# responsibility (see prompt_intra_structure_homomer_reduction below),
-# matching the same separation of concerns already used by OVERLAY's reduction
-# workflow.
+# Near-identical protein chains within one structure (chain A vs chain B of
+# the same object), for every command. detect_homomer_reduction_candidates
+# compares chains across structures for OVERLAY. Detection only: the prompt
+# and any reduction are the caller's (prompt_intra_structure_homomer_reduction).
 INTRA_HOMOMER_IDENTITY_THRESH = 0.98
 INTRA_HOMOMER_COVERAGE_THRESH = 0.95
 
 
 def get_chain_sequences(obj, chain_list):
     """Return {chain_id: {resv: one_letter_code}} for every chain in
-    chain_list. Keyed by residue number (resv) rather than returning a
-    plain concatenated string, because plain-string comparison breaks down
-    whenever two chains of the same protein have different resolved-residue
-    ranges -- e.g. chain A is missing a disordered loop at residues 45-48
-    that chain B has resolved. This is completely normal in real
-    crystallographic structures (different chains/copies in the asymmetric
-    unit routinely resolve slightly different loops), but it means a plain
-    string diff sees "everything after the gap is shifted by 4 characters"
-    and can badly mis-score two chains that are actually ~100% identical
-    over their shared residues. Keying by resv lets compute_sequence_metrics
-    compare only the residue numbers both chains actually have, the same
-    way compute_local_terminal_rmsd already pairs coordinates by resv rather
-    than by list position.
+    chain_list. Keyed by residue number rather than a plain string because
+    copies of one protein in an asymmetric unit often resolve different
+    loops, and a string comparison shifts everything after a gap.
+    compute_sequence_metrics compares only the numbers both chains have.
     """
     chain_seqs = {}
     # One pass over the object's CA atoms, bucketed by chain. Selecting each
@@ -1139,12 +1009,8 @@ def get_chain_sequences(obj, chain_list):
             by_chain[ch].append((rv, resi, rn, q))
     for ch in chain_list:
         residues = by_chain.get(ch, [])
-        # resi (the full identifier, insertion code included) is captured
-        # alongside resv. resv alone is documented by PyMOL as excluding the
-        # insertion code, so residues 52, 52A and 52B all share resv=52 and
-        # collapse into a single dictionary entry -- silently dropping real
-        # residues from the sequence. Ordering still uses (resv, code) so the
-        # sequence stays in N-to-C order.
+        # resi (insertion code included) alongside resv, which excludes it: 52, 52A
+        # and 52B would otherwise collapse into one entry. Ordered by (resv, code).
         seen = {}
         for rv, resi, rn, q in residues:
             if not is_observed_occupancy(q):
@@ -1159,19 +1025,16 @@ def get_chain_sequences(obj, chain_list):
 
 
 def compute_sequence_metrics(seq_a, seq_b):
-    """Identity/coverage/length-similarity/composite score between two
-    chains, given as {resv: one_letter_code} dicts (see get_chain_sequences).
-    Identity is computed only over residue numbers present in BOTH chains --
-    a missing loop in one chain simply shrinks the compared overlap, rather
-    than desynchronizing every residue after the gap the way a raw string
-    diff does. This is the shared primitive behind both OVERLAY's
-    cross-structure reduction check and this module's intra-structure
-    homomer detection, so both agree on what counts as 'the same chain'.
+    """Identity, coverage, length similarity and a combined score between two
+    chains, each a {residue key: one-letter code} dict (get_chain_sequences).
+    Identity is taken over the residues both chains have, so a loop missing
+    from one chain shrinks the overlap instead of shifting every later
+    residue as a string comparison would. Used for OVERLAY's cross-structure
+    reduction check and for homomer detection within a structure, so both
+    agree on what counts as the same chain.
 
-    Accepts either the new dict form or a legacy plain string (treated as
-    positionally-keyed, i.e. {0: s[0], 1: s[1], ...]) for backward
-    compatibility with any caller not yet updated -- but dict form should
-    always be used for real biological sequences with potential gaps.
+    A plain string is accepted and keyed by position; sequences with gaps
+    should be passed as dicts.
     """
     if seq_a is None or seq_b is None:
         len_a = len(seq_a) if seq_a is not None else 0
@@ -1193,11 +1056,8 @@ def compute_sequence_metrics(seq_a, seq_b):
 
     matches = sum(1 for rv in shared_resv if seq_a[rv] == seq_b[rv])
     identity = matches / len(shared_resv)
-    # Coverage: how much of the LARGER chain's resolved residues are accounted
-    # for by this overlap -- mirrors the original function's intent (coverage
-    # relative to the longer/more-complete sequence) while still being
-    # computed over the correctly-paired overlap rather than a positionally-
-    # misaligned one.
+    # Coverage relative to the larger chain's resolved residues, over the
+    # paired overlap.
     coverage = len(shared_resv) / max_len
     length_diff = abs(len_a - len_b)
     length_sim = 1.0 - (length_diff / max_len)
@@ -1208,42 +1068,20 @@ def compute_sequence_metrics(seq_a, seq_b):
 
 
 def compute_sequence_metrics_by_order(seq_a_by_resv, seq_b_by_resv):
-    """Identity between two chains from DIFFERENT structures, compared by
-    residue ORDER along the chain rather than by matching residue NUMBER.
+    """Identity between chains of different structures, compared by residue
+    order rather than residue number.
 
-    compute_sequence_metrics (above) matches residues by resv, which is
-    correct for comparing two chains within the SAME structure or two
-    copies built from the same numbering scheme -- but wrong across two
-    independently-deposited PDB entries, which routinely use unrelated
-    numbering (different constructs, His-tags, crystallization artifacts
-    shifting where residue 1 starts, etc.). Two structures' chain A and
-    chain B can be the same protein with completely different resv ranges;
-    matching by resv would find zero overlap and wrongly report 0%
-    identity. This function instead extracts each chain's sequence in
-    N-to-C order (ignoring resv gaps) and searches over a bounded set of
-    N-terminal frame shifts for the offset that gives the best ungapped
-    positional match, rather than assuming both sequences already start
-    at the same point.
-
-    A fixed, zero-tolerance offset (comparing position i of one sequence
-    directly against position i of the other, with no shift search) was
-    tried first and rejected: it is extremely common for two
-    independently-solved crystal structures of the very same protein to
-    have a different number of resolved N-terminal residues (a
-    disordered tail resolved in one crystal form but not another is
-    routine, not an edge case). Even a 1-2 residue offset from that alone
-    desynchronizes every position after it, collapsing a genuinely
-    ~100%-identical pair down toward chance-level identity -- verified
-    directly: a synthetic 162-residue real protein sequence (MpDHFR) with
-    just its first 2 residues trimmed from one copy scored 5% identity
-    under the old zero-shift comparison despite being the same protein
-    over its full shared length. The MAX_FRAME_SHIFT window below is
-    intentionally small and local (not a general alignment algorithm) --
-    it only needs to absorb ordinary N-terminal disorder differences, not
-    align proteins that are actually different lengths internally, which
-    remains a genuine low-identity/low-coverage case as intended by
-    match_chains_across_structures' and compute_overall_sequence_identity's
-    downstream thresholds.
+    compute_sequence_metrics matches by resv, which suits chains in one
+    structure but not independently deposited entries, which often number the
+    same protein differently (constructs, tags, a shifted residue 1). This
+    compares each chain's sequence in N-to-C order and searches a bounded set
+    of N-terminal shifts for the best ungapped match, since crystals of the
+    same protein often resolve different numbers of N-terminal residues; with
+    no shift, MpDHFR (162 residues) with two residues trimmed from one copy
+    scores 5%. MAX_FRAME_SHIFT is small: it absorbs terminal disorder, not
+    internal length differences, which stay low identity or coverage for
+    match_chains_across_structures and compute_overall_sequence_identity to
+    judge.
     """
     seq_a = [seq_a_by_resv[rv] for rv in sorted(seq_a_by_resv)]
     seq_b = [seq_b_by_resv[rv] for rv in sorted(seq_b_by_resv)]
@@ -1252,25 +1090,24 @@ def compute_sequence_metrics_by_order(seq_a_by_resv, seq_b_by_resv):
 
     MAX_FRAME_SHIFT = 15  # residues; generous for ordinary N-terminal disorder, small relative to typical domain sizes
     best = None
-    # shift > 0 means seq_b's start is trimmed relative to seq_a (seq_b's
-    # position 0 aligns to seq_a's position `shift`); shift < 0 is the
-    # reverse. shift = 0 reproduces the original, no-offset comparison
-    # exactly, so this is a strict superset of the prior behavior, never a
-    # worse result for sequences that were already aligned at position 0.
+    # shift > 0: seq_b's position 0 aligns to seq_a's position `shift`; shift < 0
+    # is the reverse; 0 is the unshifted comparison.
     for shift in range(-MAX_FRAME_SHIFT, MAX_FRAME_SHIFT + 1):
         if shift >= 0:
             a_off, b_off = 0, shift
         else:
             a_off, b_off = -shift, 0
         compare_len = min(len(seq_a) - a_off, len(seq_b) - b_off)
-        if compare_len <= 0:
+        if compare_len < min(len(seq_a), len(seq_b), TERMINUS_MIN_OVERLAP):
             continue
-        matches = sum(1 for i in range(compare_len) if seq_a[a_off + i] == seq_b[b_off + i])
-        identity = matches / compare_len
-        if best is None or identity > best[0]:
-            best = (identity, compare_len)
+        matches = sum(x == y for x, y in zip(seq_a[a_off:a_off + compare_len], seq_b[b_off:b_off + compare_len]))
+        # The shift with the most identical residues wins, ties to the smaller
+        # shift, so a short overlap that matches completely does not outrank
+        # the chains compared in register.
+        if best is None or matches > best[2] or (matches == best[2] and abs(shift) < abs(best[3])):
+            best = (matches / compare_len, compare_len, matches, shift)
 
-    identity, compare_len = best
+    identity, compare_len = best[0], best[1]
     coverage = compare_len / max(len(seq_a), len(seq_b))
     length_diff = abs(len(seq_a) - len(seq_b))
     return {"identity": identity, "coverage": coverage, "length_diff": length_diff}
@@ -1316,84 +1153,83 @@ def reference_tie_scores(objs, chain_lists):
 
 def match_chains_across_structures(ref_obj, ref_chain_list, cmp_obj, cmp_chain_list,
                                    min_identity=0.9, min_coverage=0.7):
-    """Pair up reference and comparison chains that are plausibly the same
-    protein, EVEN WHEN their chain letters differ (e.g. reference chain A
-    vs comparison chain B) -- e.g. after intra-structure homomer reduction
-    picks different representative letters in each structure, or simply
-    because two independently-deposited entries label chains differently.
+    """Pair reference and comparison chains that are the same protein, as
+    [(ref_chain, cmp_chain, method)], method "letter" (same chain ID) or
+    "sequence" (different IDs; callers say so, since it is inferred).
 
-    Falls back gracefully: exact letter matches (same chain ID in both)
-    are trusted directly without a sequence check, since that was already
-    correct behavior and needs no change. Only chains that DON'T share a
-    letter with anything in the other structure go through sequence
-    matching, using compute_sequence_metrics_by_order (position-based, not
-    resv-based -- see that function's docstring for why).
-
-    Returns a list of (ref_chain, cmp_chain, method) tuples, where method
-    is "letter" or "sequence" -- callers should disclose which chains were
-    matched by sequence rather than by matching IDs, since that's an
-    inference, not a certainty read directly from the file.
+    Chains with the same ID are paired when their sequences agree at
+    min_identity and min_coverage (compute_sequence_metrics_by_order). The
+    rest are paired by sequence at the same thresholds, best match first:
+    two entries of one complex can label its subunits differently, so a
+    shared letter alone does not make two chains the same protein. Chains
+    still unpaired that share an ID are then paired by letter, as for
+    homologs the person chose to compare after the identity warning.
     """
     ref_set = set(ref_chain_list)
     cmp_set = set(cmp_chain_list)
-    matched = []
+    shared = sorted(ref_set & cmp_set)
+    ref_seqs = get_chain_sequences(ref_obj, sorted(ref_set))
+    cmp_seqs = get_chain_sequences(cmp_obj, sorted(cmp_set))
 
-    letter_matches = ref_set & cmp_set
-    for ch in sorted(letter_matches):
-        matched.append((ch, ch, "letter"))
+    # Copies of one chain share a sequence, so each distinct pair of sequences
+    # is compared once.
+    ref_text = {ch: "".join(seq.values()) for ch, seq in ref_seqs.items()}
+    cmp_text = {ch: "".join(seq.values()) for ch, seq in cmp_seqs.items()}
+    compared = {}
 
-    remaining_ref = sorted(ref_set - letter_matches)
-    remaining_cmp = sorted(cmp_set - letter_matches)
-    if not remaining_ref or not remaining_cmp:
-        return matched
+    def metrics(r_ch, c_ch):
+        key = (ref_text[r_ch], cmp_text[c_ch])
+        if key not in compared:
+            if key[0] and key[0] == key[1]:
+                compared[key] = {"identity": 1.0, "coverage": 1.0, "length_diff": 0}
+            else:
+                compared[key] = compute_sequence_metrics_by_order(ref_seqs[r_ch], cmp_seqs[c_ch])
+        return compared[key]
 
-    ref_seqs = get_chain_sequences(ref_obj, remaining_ref)
-    cmp_seqs = get_chain_sequences(cmp_obj, remaining_cmp)
+    def same_protein(m):
+        return m["identity"] >= min_identity and m["coverage"] >= min_coverage
 
-    # Greedy best-match pairing: for each remaining reference chain, find its
-    # best-scoring remaining comparison chain; once a comparison chain is
-    # claimed it's removed from the pool so it can't be double-matched.
-    available_cmp = list(remaining_cmp)
-    for r_ch in remaining_ref:
-        best_cmp_ch = None
-        best_metrics = None
-        for c_ch in available_cmp:
-            m = compute_sequence_metrics_by_order(ref_seqs[r_ch], cmp_seqs[c_ch])
-            if best_metrics is None or m["identity"] > best_metrics["identity"]:
-                best_metrics = m
-                best_cmp_ch = c_ch
-        if best_cmp_ch is not None and best_metrics["identity"] >= min_identity and best_metrics["coverage"] >= min_coverage:
-            matched.append((r_ch, best_cmp_ch, "sequence"))
-            available_cmp.remove(best_cmp_ch)
+    matched = [(ch, ch, "letter") for ch in shared if same_protein(metrics(ch, ch))]
+    remaining_ref = sorted(ref_set - {r for r, _c, _m in matched})
+    remaining_cmp = sorted(cmp_set - {c for _r, c, _m in matched})
 
-    # Nothing passed the thresholds: compare the most similar pair anyway.
-    # The person was warned about the identity and chose to go ahead.
+    # Best match first, the same letter winning a tie; a chain is used once.
+    scored = [(metrics(r, c), r, c) for r in remaining_ref for c in remaining_cmp]
+    candidates = sorted(((-m["identity"], -m["coverage"], r != c, r, c) for m, r, c in scored if same_protein(m)))
+    for _identity, _coverage, other_letter, r_ch, c_ch in candidates:
+        if r_ch in remaining_ref and c_ch in remaining_cmp:
+            matched.append((r_ch, c_ch, "sequence" if other_letter else "letter"))
+            remaining_ref.remove(r_ch)
+            remaining_cmp.remove(c_ch)
+
+    for ch in shared:
+        if ch in remaining_ref and ch in remaining_cmp:
+            matched.append((ch, ch, "letter"))
+            remaining_ref.remove(ch)
+            remaining_cmp.remove(ch)
+
+    # Nothing matched: compare the most similar pair anyway. The person was
+    # warned about the identity and chose to go ahead.
     if not matched:
-        scored = [(compute_sequence_metrics_by_order(ref_seqs[r], cmp_seqs[c]), r, c)
-                  for r in remaining_ref for c in remaining_cmp]
         scored = [x for x in scored if x[0]["identity"] > 0 or x[0]["coverage"] > 0]
         if scored:
-            m, r_ch, c_ch = max(scored, key=lambda x: (x[0]["identity"], x[0]["coverage"]))
+            _m, r_ch, c_ch = max(scored, key=lambda x: (x[0]["identity"], x[0]["coverage"]))
             matched.append((r_ch, c_ch, "sequence"))
 
-    return matched
+    return sorted(matched)
 
 
 def classify_overall_sequence_identity(identity):
-    """Classify whole-structure sequence identity between a reference and
-    comparison protein into a severity band, following the standard
-    intent of these thresholds: high identity needs no comment, moderate
-    identity gets an informational note, and low identity gets
-    progressively stronger warnings since it increasingly calls into
-    question whether the structures being compared are actually the same
-    protein (or a closely related homolog) at all -- which would make
-    every downstream alignment/displacement/SASA/B-factor metric hard to
-    interpret meaningfully.
+    """Band whole-structure sequence identity between a reference and a
+    comparison protein. High identity needs no comment, moderate identity
+    gets a note, and low identity gets stronger warnings, since it puts in
+    doubt that the structures are the same protein or close homologs, on
+    which every alignment, displacement, surface and B-factor comparison
+    rests.
 
-    Returns (severity, message) where severity is one of "none", "info",
-    "mild", "strong", "high" and message is None for "none" or the
-    user-facing text for every other band. Callers decide how to surface
-    message (print color, whether to prompt for confirmation, etc.).
+    Returns (severity, message): severity is "none", "info", "mild",
+    "strong" or "high"; message is None for "none", otherwise the text to
+    show. The caller decides how to show it.
     """
     pct = identity * 100.0
     if pct >= 90:
@@ -1411,11 +1247,8 @@ def classify_overall_sequence_identity(identity):
                     "before interpreting the results.")
 
 
-# Decisions already made in the current command, keyed by the pair being
-# compared. TERMINI performs the identity check twice for the same pair --
-# once in align_to() before aligning, and again in its own comparison loop --
-# so without this the same warning is printed twice and the same question
-# asked twice for one comparison.
+# Decisions already made in this command, by pair. TERMINI checks identity
+# twice for a pair (in align_to and in its own loop); this asks once.
 _SEQ_IDENTITY_DECISIONS = {}
 
 
@@ -1426,17 +1259,13 @@ def reset_sequence_identity_decisions():
 
 
 def prompt_overall_sequence_identity(ref_pdb_id, cmp_pdb_id, identity, allow_proceed=True):
-    """Print the appropriate severity-banded warning for whole-structure
-    sequence identity between ref_pdb_id and cmp_pdb_id (see
-    classify_overall_sequence_identity), and for the "mild"/"strong"/
-    "high" bands, ask the user to confirm before proceeding -- always
-    allowing them to continue anyway (Astra3 warns, it doesn't block;
-    the person running the comparison may have a legitimate reason, e.g.
-    deliberately comparing distant homologs).
+    """Print the warning for the identity between ref_pdb_id and cmp_pdb_id
+    (classify_overall_sequence_identity) and, for the "mild", "strong" and
+    "high" bands, ask whether to continue. Astra3 warns and does not block:
+    comparing distant homologs can be intended.
 
-    Returns True if the run should proceed (always True unless the user
-    explicitly declines at the prompt), and the (severity, message) pair
-    for the caller to record in warnings/reports.
+    Returns (proceed, (severity, message)); proceed is False only when the
+    person declines.
     """
     severity, message = classify_overall_sequence_identity(identity)
     if severity == "none":
@@ -1478,21 +1307,13 @@ def prompt_overall_sequence_identity(ref_pdb_id, cmp_pdb_id, identity, allow_pro
 
 
 def compute_aligned_sequence_identity(ref_obj, cmp_obj):
-    """Sequence identity measured over a structural alignment.
+    """Sequence identity over the residue pairs the superposition uses
+    (astra3_measure): chains paired by sequence and aligned with gaps, so
+    homologs that differ by a few indels are not reported as unrelated.
+    Nothing is moved.
 
-    compute_overall_sequence_identity below compares residues by position
-    with only a small N-terminal frame-shift search. That is adequate for
-    two structures of the same protein, but it cannot absorb internal
-    insertions or deletions -- so for genuine homologs that differ by a few
-    indels it reports a figure close to chance, even when the two fold
-    identically and superimpose to well under 1 A.
-
-    This measures identity over the residue pairs the sequence alignment used
-    for superposition matches (astra3_measure), which is gap-aware by
-    construction. Nothing is moved.
-
-    Returns None if an alignment cannot be produced, in which case the
-    caller falls back to the positional estimate.
+    Returns None when no alignment can be produced; the caller then falls
+    back to a sequence comparison of the longest chains.
     """
     try:
         mobile = astra3_measure.protein_residues(astra3_measure.atom_table(cmp_obj))
@@ -1506,17 +1327,15 @@ def compute_aligned_sequence_identity(ref_obj, cmp_obj):
     return n_same / n_res
 
 def compute_overall_sequence_identity(ref_obj, ref_chain_list, cmp_obj, cmp_chain_list):
-    """Best-effort whole-structure sequence identity between a reference
-    and comparison structure, used only for the severity-banded warning
-    above -- NOT used for chain matching or alignment (that's
-    match_chains_across_structures' job) and does not affect any other
-    computed metric.
+    """Whole-structure sequence identity between a reference and a
+    comparison structure, for the identity warning only. It decides no chain
+    matching or alignment and feeds no other metric.
 
-    Takes the single longest protein chain from each structure (a
-    reasonable proxy for "the main subject" when a structure has multiple
-    chains) and compares them position-by-position via
-    compute_sequence_metrics_by_order. Returns None if either structure
-    has no protein chains at all.
+    Identity over the superposition's residue pairs is used when available
+    (compute_aligned_sequence_identity). Otherwise the longest protein chain
+    of each structure is aligned (astra3_align.compare), with a positional
+    comparison as the last resort. Returns None when either structure has no
+    protein chain.
     """
     if not ref_chain_list or not cmp_chain_list:
         return None
@@ -1552,14 +1371,10 @@ def compute_overall_sequence_identity(ref_obj, ref_chain_list, cmp_obj, cmp_chai
 # ------------------------------------------------------------
 # ANALYSIS STATE VALIDATION
 # ------------------------------------------------------------
-# Every output of a TERMINI run -- the numbers in the report, the coloring in
-# the .pse, the close-up renders and their arrows -- is produced from the same
-# few pieces of session state at different moments. When one of those pieces
-# is wrong, nothing fails: the report still renders, the session still saves,
-# and the images still come out, just describing something other than what
-# happened. The checks below turn that class of problem into visible output at
-# the moments it can occur, so a run that produced inconsistent state says so
-# instead of looking identical to a correct one.
+# Every TERMINI output (report numbers, .pse colouring, close-ups and their
+# arrows) comes from the same session state read at different moments. When
+# that state is wrong nothing fails; the outputs just describe something
+# else. These checks report inconsistent state at the points it can arise.
 
 def validate_terminus_selections(obj, process_result, label=""):
     """Check one structure's N-/C-terminus selections actually exist, hold
@@ -1630,10 +1445,10 @@ def validate_metrics_match_selection(obj, process_result, chain, terminus, metri
     """Check that the residues a terminus's metrics were computed over are the
     same residues the session has selected and colored.
 
-    These are produced at different moments -- the selection when the
-    structure was processed, the metrics when the comparison ran, and either
-    can be revised afterwards by an offset correction. When they disagree, the
-    report describes one window and the image shows another.
+    The selection is made when the structure is processed and the metrics
+    when the comparison runs, and an offset correction can revise either
+    afterwards. When they disagree, the report describes one window and the
+    image shows another.
     """
     problems = []
     if not metrics:
@@ -1743,13 +1558,10 @@ def find_differential_ligands(ref_process_result, cmp_process_result):
     Returns (only_in_reference, only_in_comparison) as lists of ligand records
     taken from each structure's own ligand_info.
 
-    Comparison is by residue name, which is what identifies the chemistry: two
-    copies of citrate are two instances of one ligand, and both are reported
-    individually because they sit in different places and their distances to a
-    terminus are different measurements. A ligand present in BOTH structures is
-    excluded -- the question this answers is what one structure has that the
-    other does not, so a shared cofactor is not a difference and reporting it
-    would bury the ones that are.
+    Residue name identifies the chemistry: two copies of citrate are two
+    instances of one ligand, each reported because each sits somewhere
+    different. A ligand present in both structures is left out: the question
+    is what one structure has that the other does not.
     """
     def by_resn(pr):
         out = {}
@@ -1769,20 +1581,17 @@ def compute_ligand_terminus_distances(ref_obj, cmp_obj, ref_process_result, cmp_
     """Distance from each differential ligand's centroid to each terminal
     window centroid, measured after alignment.
 
-    Both structures are already in the same coordinate frame at this point
-    (compare_termini aligns the comparison onto the reference before
-    measuring), and the terminal centroids in per_chain_results are the
-    offset-corrected windows -- so a ligand in one structure can be measured
-    against a terminus in the other and the number means something.
+    Both structures are in one coordinate frame by now (the comparison has
+    been superposed on the reference), and the terminal centroids in
+    per_chain_results are the offset-corrected windows, so a ligand in one
+    structure can be measured against a terminus in the other.
 
     Only ligands present in one structure and absent from the other are
-    measured. Every distance is reported against both structures' termini,
-    because "how far is this ligand from where the other structure's terminus
-    sits" is the comparison worth making when the ligand only exists on one
-    side.
+    measured, each against both structures' termini: how far the ligand is
+    from where the other structure's terminus sits is the comparison of
+    interest.
 
-    Returns a list of dicts, one per (ligand, chain, terminus) combination.
-    Never raises.
+    Returns a list of dicts, one per (ligand, chain, terminus). Never raises.
     """
     only_ref, only_cmp = find_differential_ligands(ref_process_result, cmp_process_result)
     rows = []
@@ -1878,34 +1687,28 @@ def compute_whole_structure_sequence_metrics(ref_obj, ref_chain_list, cmp_obj, c
 
 
 def detect_intra_structure_homomer(obj, chain_list):
-    """Compare every pair of protein chains WITHIN one structure and group
-    chains that are near-identical (>=98% identity/coverage, matching
-    INTRA_HOMOMER_*_THRESH) into clusters. Returns a list of cluster dicts:
+    """Compare every pair of protein chains within one structure and group
+    chains that are near-identical (INTRA_HOMOMER_IDENTITY_THRESH and
+    INTRA_HOMOMER_COVERAGE_THRESH) into clusters:
 
       [{"chains": ["A", "B", "C"], "recommended_chain": "A",
         "identity": 0.99, "coverage": 0.99, "length_diff": 0, "score": 0.97}, ...]
 
-    Only clusters with 2+ chains are returned (a lone, non-redundant chain
-    produces no entry). recommended_chain is the chain with the longest
-    resolved sequence in the cluster (a deterministic, reproducible tie-
-    breaker -- not a biological judgment about which copy is "canonical").
-    Returns [] if fewer than 2 protein chains are present, or none are
-    similar enough to cluster.
+    Only clusters of two or more chains are returned. recommended_chain is
+    the chain with the longest resolved sequence: a reproducible tie-breaker,
+    not a judgment about which copy is canonical. Returns [] with fewer than
+    two protein chains, or when none are similar enough.
     """
     if len(chain_list) < 2:
         return []
 
     seqs = get_chain_sequences(obj, chain_list)
     chains = list(chain_list)
-    n = len(chains)
 
-    # Chains with exactly the same residues (same numbers, same types) are
-    # identical by definition, so each distinct sequence is compared once
-    # rather than every chain against every chain. Large assemblies repeat
-    # the same few proteins many times; this turns ~500,000 comparisons for a
-    # thousand chains into a few thousand. Coverage can never exceed the
-    # shorter/longer length ratio, so pairs that cannot reach the coverage
-    # threshold are skipped without comparing.
+    # Chains with exactly the same residues are identical, so each distinct
+    # sequence is compared once: a thousand chains of a few proteins become a few
+    # thousand comparisons instead of ~500,000. Coverage cannot exceed the
+    # shorter/longer length ratio, so pairs below the threshold are skipped.
     seq_key = {c: tuple(seqs.get(c, {}).items()) for c in chains}
     rep_of_key = {}
     for c in chains:
@@ -1936,15 +1739,10 @@ def detect_intra_structure_homomer(obj, chain_list):
         m = pair_metrics.get((ci, cj))
         if m is None:
             return False
-        # Identity and coverage (both computed over the resv-matched overlap,
-        # see compute_sequence_metrics) are sufficient on their own to
-        # determine "same chain, different resolved range" -- raw length_diff
-        # is not checked here. Two genuinely identical chains can easily
-        # differ in raw length by more than a handful of residues purely
-        # because each has its own independent disordered loop unresolved
-        # elsewhere in the chain; that's normal and doesn't make them
-        # different proteins, so gating on it produced false negatives on real
-        # multi-chain structures.
+        # Identity and coverage over the resv-matched overlap
+        # (compute_sequence_metrics) decide this; raw length difference is not
+        # checked, since identical chains often differ in length through
+        # independently unresolved loops.
         return (m["identity"] >= INTRA_HOMOMER_IDENTITY_THRESH and
                 m["coverage"] >= INTRA_HOMOMER_COVERAGE_THRESH)
 
@@ -2018,43 +1816,24 @@ def detect_intra_structure_homomer(obj, chain_list):
 
 def apply_intra_structure_homomer_reduction(obj, clusters, decisions, selection_suffix="", capture_water_for_viewer=False,
                                             deposited_unobserved=None):
-    """Apply user-approved intra-structure homomer reduction decisions by
-    DELETING the excluded chains' atoms directly from the loaded object
-    (not creating a separate temp object) -- so the object that eventually
-    gets saved into the .pse is a literal, minimal representation of what
-    was actually analyzed, with nothing extra left over for the user to
-    notice and wonder whether the report is accurate.
+    """Apply approved homomer reductions by deleting the excluded chains from
+    the loaded object itself, so the saved .pse holds exactly what was
+    analysed.
 
-    clusters is the list returned by detect_intra_structure_homomer for
-    this object; decisions is the {cluster_recommended_chain:
-    chosen_chain_or_False} dict returned by
-    prompt_intra_structure_homomer_reduction for those same clusters --
-    chosen_chain may differ from cluster_recommended_chain if the user
-    typed a different chain letter at the prompt rather than accepting
-    the recommendation, and is a list of chains when the biological
-    assembly rule keeps several copies. For every cluster with a truthy
-    value, every chain in that cluster except the chosen one(s) is removed
-    from obj via cmd.remove, then process_structure is re-run so coloring,
-    chain_list, and N-/C-terminus selections all reflect the now-reduced
-    object rather than stale pre-reduction state.
+    clusters comes from detect_intra_structure_homomer; decisions is
+    {cluster_recommended_chain: chosen_chain_or_False} from
+    prompt_intra_structure_homomer_reduction. chosen_chain may be a chain the
+    person typed instead of the recommendation, or a list when the assembly
+    rule keeps several copies. For each truthy decision, every other chain in
+    the cluster is removed with cmd.remove and process_structure is re-run.
 
-    Caller-agnostic: takes obj/clusters/decisions/selection_suffix
-    directly rather than an overlay_engine-shaped container, so a caller
-    that doesn't have one (single-structure analysis has its own plain
-    process_result local variable, not an OverlayExecution's
-    structure_data dict) can use this too. Returns (applied,
-    new_process_result): applied is a list of (removed_chain,
-    kept_chain) tuples, kept_chain being the first chain kept from the
-    removed chain's cluster (empty if nothing was approved/removed);
-    new_process_result is the freshly-recomputed process_structure()
-    result if anything was actually removed, or None otherwise -- the
-    caller is responsible for storing both wherever its own state lives
-    (an overlay_engine's structure_data dict, or a plain local variable).
+    Returns (applied, new_process_result): applied is a list of
+    (removed_chain, kept_chain), kept_chain being the first chain kept from
+    that cluster; new_process_result is the re-run's result, or None when
+    nothing was removed. The caller stores both.
 
-    capture_water_for_viewer is forwarded to the re-run process_structure()
-    call as-is -- see process_structure's own docstring; only
-    single-structure analysis should ever pass True here, for the same
-    reason it's the only caller of process_structure itself that does.
+    capture_water_for_viewer is passed to process_structure; only
+    single-structure analysis passes True.
     """
     applied = []
     if not decisions:
@@ -2084,13 +1863,9 @@ def apply_intra_structure_homomer_reduction(obj, clusters, decisions, selection_
 
     new_process_result = None
     if applied:
-        # Re-run process_structure so coloring, chain_list, and termini
-        # selections all reflect the now-reduced object -- otherwise
-        # chain_list would still list the removed chains and downstream code
-        # (shared_chains, termini selection) would silently operate on stale
-        # pre-reduction state.
-        # deposited_unobserved keeps the re-run naming zero-occupancy
-        # residues as the depositor did, like the first pass.
+        # Re-run process_structure so colouring, chain_list and termini reflect the
+        # reduced object. deposited_unobserved keeps zero-occupancy residues named as
+        # the depositor did.
         new_process_result = process_structure(obj, selection_suffix=selection_suffix or ("_" + obj),
                                                capture_water_for_viewer=capture_water_for_viewer,
                                                deposited_unobserved=deposited_unobserved)
@@ -2098,49 +1873,24 @@ def apply_intra_structure_homomer_reduction(obj, clusters, decisions, selection_
 
 
 def rank_homomer_chain_by_priority(cluster, ligand_info=None, missing_residues_map=None, priority_order=None):
-    """Deterministically choose ONE chain from a homomer cluster's chains,
-    for -alwaysreduce (see astra3.py's own flag parsing) -- used to skip
-    the interactive prompt entirely while still making a principled,
-    reproducible choice instead of always blindly taking
-    cluster["recommended_chain"] (which is only a longest-sequence
-    tie-break, not a judgment about which copy is more complete or more
-    representative).
+    """Choose one chain from a homomer cluster for -alwaysreduce, reproducibly,
+    instead of cluster["recommended_chain"] (only a longest-sequence
+    tie-break).
 
-    priority_order is a list of criterion tokens, evaluated IN ORDER,
-    each one narrowing the candidate set to only the chain(s) tied for
-    best on that criterion before moving to the next -- exactly the
-    cascading-tiebreak behavior specified for this feature (e.g. "rank
-    by missing residues first, then least bound ligands, then first
-    chain: between 3 structures, none with missing residues and 2 of
-    them have 0 ligands -- between those 2, say chain B and C, it picks
-    B" -- which is what happens here, since the FINAL fallback
-    below is always alphabetically-first, deterministic, and never
-    random). Valid tokens:
-      "missing"      -- fewest missing (unresolved) residues
-      "leastligands" -- fewest bound ligands
-      "mostligands"  -- most bound ligands
-      "chainA"       -- chain A, if present in this cluster
-    Defaults to ["missing", "leastligands", "chainA"] if not given (a
-    reasonable default ordering, not a claim that it's the only sensible
-    one -- the whole point of priority_order is that this is
-    configurable).
+    priority_order is a list of criteria applied in order, each narrowing the
+    candidates to those tied for best before the next applies:
+      "missing"      fewest missing (unresolved) residues
+      "leastligands" fewest bound ligands
+      "mostligands"  most bound ligands
+      "chainA"       chain A, if present
+    Default: ["missing", "leastligands", "chainA"].
 
-    ligand_info is the list of ligand dicts (each with a "chain" key --
-    see process_structure's own ligand_info) for the WHOLE structure;
-    missing_residues_map is {chain: [ranges]} (see parse_remark_465 /
-    parse_missing_residues_cif in astra3_core.py) for the WHOLE
-    structure. Both are optional -- if not given (or a chain simply has
-    no entry in either), that chain is treated as having zero
-    missing residues / zero ligands for the relevant criterion, which is
-    the correct behavior for "chainA" (unaffected either way) but
-    callers passing neither should generally just use ["chainA"] as
-    their priority_order, since "missing"/"leastligands"/"mostligands"
-    become no-ops (every chain ties at zero) without real data.
+    ligand_info (ligand dicts with a "chain" key, from process_structure) and
+    missing_residues_map ({chain: [ranges]}, from parse_remark_465 or
+    parse_missing_residues_cif) cover the whole structure. A chain absent from
+    either counts as zero, so without them only "chainA" can narrow anything.
 
-    Returns the chosen chain letter. Always returns something concrete
-    (the alphabetically-first chain in the cluster) even if
-    priority_order is empty or every criterion in it ties across all
-    chains -- this function never fails to make a choice.
+    Returns a chain letter; remaining ties go to the alphabetically first.
     """
     if priority_order is None:
         priority_order = list(DEFAULT_REDUCE_PRIORITY)
@@ -2171,14 +1921,10 @@ def rank_homomer_chain_by_priority(cluster, ligand_info=None, missing_residues_m
         elif criterion == "chainA":
             if "A" in candidates:
                 candidates = ["A"]
-        # An unrecognized token is silently skipped rather than raising -- a
-        # priority_order built from a future/different set of GUI options
-        # should degrade to "this criterion didn't narrow anything" rather
-        # than crash a whole BATCH run over one bad token.
+        # An unknown criterion narrows nothing rather than failing a batch.
 
-    # Final fallback: alphabetically first among whatever's left tied --
-    # deterministic and reproducible (the SAME cluster on a re-run always
-    # yields the SAME chain), never random.
+    # Remaining ties go to the alphabetically first chain, so a re-run picks the
+    # same one.
     return sorted(candidates)[0]
 
 
@@ -2213,57 +1959,34 @@ def prompt_intra_structure_homomer_reduction(pdb_id, clusters, batch_skip_state=
                                              auto_decision=None, priority_order=None,
                                              ligand_info=None, missing_residues_map=None, assemblies=None,
                                              assembly_fallback=None):
-    """Interactively ask the user, for each detected homomer cluster,
-    whether to create a temporary single-chain object (used for downstream
-    analysis such as TERMINI) containing only the recommended chain. Never
-    modifies or deletes the original structure -- matches the same
-    non-destructive guarantee as OVERLAY's existing reduction prompt.
+    """Ask, for each homomer cluster, which chain to keep.
 
-    batch_skip_state, if provided, must be a single-item mutable container
-    (e.g. a list: [False]) shared across every structure in a BATCH run.
-    Once the user answers SKIP, batch_skip_state[0] is set True and every
-    subsequent call for the rest of that BATCH run returns immediately
-    without prompting again -- this exists specifically so BATCH doesn't
-    block on input() once per structure when the user has already said
-    they don't want to review these for the current run.
+    batch_skip_state, if given, is a one-item list shared across a BATCH run;
+    once the person answers SKIP it is set True and later calls return without
+    asking.
 
-    auto_decision, if given, is "reduce", "keep" or "assembly" (see
-    -alwaysreduce/-keephomomers/-keepassembly in astra3.py's own flag
-    parsing) -- skips the interactive prompt (and batch_skip_state):
-    "reduce" picks a chain via rank_homomer_chain_by_priority (using
-    priority_order, ligand_info, missing_residues_map -- all forwarded
-    as-is), "keep" always declines reduction, and "assembly" keeps the
-    chains of the depositor's preferred biological assembly (see
-    assembly_kept_chains). Where the assembly records cannot decide,
-    assembly_fallback ("ask", the default, "reduce" or "keep") decides
-    that cluster instead, and only then is the prompt shown. Either way,
-    the same summary block is still printed so the run's own output
-    remains a complete, reproducible record of what was decided and why.
+    auto_decision ("reduce", "keep" or "assembly", from -alwaysreduce,
+    -keephomomers and -keepassembly) skips the prompt: "reduce" picks a chain
+    by rank_homomer_chain_by_priority (priority_order, ligand_info and
+    missing_residues_map are passed through), "keep" declines, and "assembly"
+    keeps the preferred biological assembly's chains (assembly_kept_chains).
+    Where the assembly records cannot decide, assembly_fallback ("ask", the
+    default, "reduce" or "keep") decides, and only then is the prompt shown.
+    The summary is printed either way, so the output records what was decided.
 
-    In addition to the plain y/n on the recommended chain, the user can
-    type a chain letter directly (any letter in that cluster) to use that
-    chain instead -- the recommended chain is a deterministic tie-break
-    (longest resolved sequence), not necessarily the one the user actually
-    wants; not every chain in a homomer cluster is guaranteed identical in
-    practice (e.g. one copy may have better-resolved density, a bound
-    ligand the others lack, or be the one referenced elsewhere in the
-    user's own work), so they should be able to choose directly rather
-    than only ever accepting or fully rejecting Astra3's pick.
+    Besides y/n, the person can type any chain letter in the cluster: the
+    recommendation is only the longest resolved sequence, and another copy may
+    be better resolved or carry a ligand.
 
-    Returns (decisions, rule). decisions is a dict
-    {cluster_recommended_chain: chosen_chain_or_False} -- keyed by the
-    cluster's ORIGINAL recommended_chain (so callers can still find the
-    right cluster), value is either the chain the user chose to keep
-    (which may differ from recommended_chain), the list of chains the
-    biological assembly rule keeps, or False for "no reduction, keep all
-    chains in this cluster". Clusters the user skips (via SKIP) are simply
-    absent from the returned dict. rule records how each cluster was
+    Returns (decisions, rule). decisions is {cluster_recommended_chain:
+    chosen_chain_or_False}, keyed by the original recommendation; the value is
+    the chain kept, the list the assembly rule keeps, or False to keep every
+    chain. Skipped clusters are absent. rule records how each cluster was
     decided, for the reports (see summarize_chain_reduction):
-    {"rule", "fallback" (assembly rule only), "priority" (when a reduce
-    rule may apply), "clusters": [{"chains", "decided_by", "answer" (asked
-    clusters: approved, declined, skipped or unanswered), "assembly"
-    ({"id", "label"} of the preferred assembly, assembly rule only),
-    "fallback_reason"}]}.
+    {"rule", "fallback" (assembly rule only), "priority" (when a reduce rule may
+    apply), "clusters": [{"chains", "decided_by", "answer" (asked clusters:
+    approved, declined, skipped or unanswered), "assembly" ({"id", "label"} of
+    the preferred assembly, assembly rule only), "fallback_reason"}]}.
     """
     decisions = {}
     rule = {"rule": auto_decision or "ask"}
@@ -2433,37 +2156,11 @@ def prompt_intra_structure_homomer_reduction(pdb_id, clusters, batch_skip_state=
     return decisions, rule
 
 
-def create_intra_structure_reduced_object(obj, recommended_chain, selection_suffix=""):
-    """Create a temporary single-chain object (obj_REDUCED_<chain>) for use
-    as the analysis/alignment target after a user accepts an intra-structure
-    homomer reduction. Mirrors OVERLAY's existing temp-object pattern
-    (obj_REDUCED_<chain>, built via cmd.create then re-processed for
-    coloring/termini) so downstream code (e.g. TERMINI's alignment_obj
-    lookup) can treat it identically regardless of which detector produced
-    it. Returns the new object name, or None on failure.
-    """
-    temp_name = f"{obj}_REDUCED_{recommended_chain}"
-    if temp_name in cmd.get_names("objects"):
-        try:
-            cmd.delete(temp_name)
-        except Exception:
-            pass
-    try:
-        cmd.create(temp_name, f"{obj} and chain {recommended_chain}")
-        inherit_in_chain_decision(obj, temp_name)
-        process_structure(temp_name, selection_suffix=selection_suffix or ("_" + temp_name))
-        print(f"{GREEN}Temporary single-chain object created: {temp_name}{RESET}", flush=True)
-        return temp_name
-    except Exception as e:
-        print(f"{RED}Failed to create temporary reduced object: {str(e)}{RESET}", flush=True)
-        return None
-
-
 # ------------------------------------------------------------
-# REPORT SECTIONS Each function below inspects a loaded structure and returns
-# the lines for one section of Protein_Information.txt. Sections that can't be
-# determined from PyMOL/the PDB header say so explicitly rather than
-# estimating a value.
+# REPORT SECTIONS
+# Each function below inspects a loaded structure and returns the lines for
+# one section of <ID>_Information.txt. Sections that cannot be determined
+# from PyMOL or the PDB header say so rather than estimate.
 # ------------------------------------------------------------
 def report_biological_assembly(obj, chain_list, chain_reduction=None, assemblies=None, homomer_rule=None):
     chain_seqs = {}
@@ -2678,9 +2375,105 @@ def report_ligands(ligand_info):
     return lines
 
 
+# Distance criteria, in A. Reports, the Methods text and the info tips quote
+# these, so each is stated once.
+LIGAND_CONTACT_CUTOFF = 4.0     # any ligand atom to any protein atom
+POLAR_CONTACT_CUTOFF = 3.5      # ligand N/O to protein N/O
+DISULFIDE_CUTOFF = 2.5          # cysteine SG to SG
 # Shortest distance between non-bonded N/O atoms that is physically possible
 # (hydrogen-bonded N/O pairs are about 2.5-3.2 A apart).
 POLAR_CONTACT_MIN_DISTANCE = 2.2
+
+
+# Metal-donor distances, in A, from Harding MM (2006) Small revisions to
+# predicted distances around metal sites in proteins. Acta Cryst D62:678-682.
+# doi:10.1107/S0907444906014594
+#
+# Table 4, target distances: O of a monodentate Asp or Glu carboxylate, O of a
+# main-chain carbonyl, N of His, S of Cys.
+METAL_TARGET_DISTANCES = {
+    "NA": {"carboxylate": 2.41, "carbonyl": 2.38},
+    "MG": {"carboxylate": 2.07, "carbonyl": 2.26},
+    "K": {"carboxylate": 2.82, "carbonyl": 2.74},
+    "CA": {"carboxylate": 2.36, "carbonyl": 2.36},
+    "MN": {"carboxylate": 2.15, "carbonyl": 2.19, "histidine": 2.21, "cysteine": 2.35},
+    "FE": {"carboxylate": 2.04, "carbonyl": 2.04, "histidine": 2.16, "cysteine": 2.30},
+    "CO": {"carboxylate": 2.05, "carbonyl": 2.08, "histidine": 2.14, "cysteine": 2.25},
+    "CU": {"carboxylate": 1.99, "carbonyl": 2.04, "histidine": 2.02, "cysteine": 2.15},
+    "ZN": {"carboxylate": 1.99, "carbonyl": 2.07, "histidine": 2.03, "cysteine": 2.31},
+}
+# Table 3: the longest metal-oxygen distance accepted as a bond.
+METAL_OXYGEN_LIMIT = {"CA": 2.8, "MG": 2.5, "MN": 2.5, "FE": 2.5, "CO": 2.5, "CU": 2.5, "ZN": 2.5, "NA": 2.8, "K": 3.2}
+# Harding set aside observations more than 0.4 A from a mean distance as
+# outliers; His N and Cys S count as coordinating up to that far beyond
+# their target.
+METAL_DONOR_TOLERANCE = 0.4
+
+
+def ion_element(ion):
+    """Upper-case element symbol of an ion_info entry. Entries saved before
+    the element was recorded fall back to the residue name (FE2 is FE)."""
+    return str(ion.get("elem") or "").upper() or re.sub(r"[^A-Z]", "", str(ion.get("resn") or "").upper())
+
+
+def metal_donor_kind(resn, atom_name, elem):
+    """How a protein atom can coordinate a metal: "carboxylate", "carbonyl",
+    "oxygen" (any other O), "histidine" or "cysteine"; None for atoms Harding
+    (2006) gives no distance for."""
+    resn, atom_name, elem = str(resn).upper(), str(atom_name).upper(), str(elem).upper()
+    if elem == "O":
+        if (resn, atom_name) in (("ASP", "OD1"), ("ASP", "OD2"), ("GLU", "OE1"), ("GLU", "OE2")):
+            return "carboxylate"
+        return "carbonyl" if atom_name == "O" else "oxygen"
+    if elem == "N" and resn == "HIS" and atom_name in ("ND1", "NE2"):
+        return "histidine"
+    if elem == "S" and resn == "CYS" and atom_name == "SG":
+        return "cysteine"
+    return None
+
+
+def metal_donor_limit(metal, kind):
+    """Longest distance, in A, at which a donor of this kind counts as
+    coordinating the metal; None when Harding (2006) has no value for the
+    pair."""
+    metal = str(metal).upper()
+    if kind in ("carboxylate", "carbonyl", "oxygen"):
+        return METAL_OXYGEN_LIMIT.get(metal)
+    target = METAL_TARGET_DISTANCES.get(metal, {}).get(kind)
+    return None if target is None else round(target + METAL_DONOR_TOLERANCE, 2)
+
+
+def metal_coordination(obj, ion):
+    """Protein atoms coordinating one ion, nearest first, as dicts with chain,
+    resi, resn, atom, kind, distance and target (None where Table 4 has no
+    value). None when the ion's element is not in Harding's tables."""
+    metal = ion_element(ion)
+    if metal not in METAL_OXYGEN_LIMIT:
+        return None
+    reach = max(limit for limit in (metal_donor_limit(metal, kind) for kind in ("oxygen", "histidine", "cysteine"))
+                if limit is not None)
+    found = {}
+    for ion_state, prot_state in conformation_pairs(ion["sel_name"], obj + " and polymer.protein"):
+        for (model_a, idx_a), (model_b, idx_b) in cmd.find_pairs(ion_state, f"({prot_state}) and (elem O+N+S)", cutoff=reach):
+            atoms = []
+            cmd.iterate(f"{model_b} and index {idx_b}", "atoms.append((chain, resi, resn, name, elem, alt))",
+                        space={"atoms": atoms})
+            if not atoms:
+                continue
+            chain, resi, resn, name, elem, alt = atoms[0]
+            kind = metal_donor_kind(resn, name, elem)
+            limit = metal_donor_limit(metal, kind)
+            if limit is None:
+                continue
+            distance = cmd.get_distance(f"{model_a} and index {idx_a}", f"{model_b} and index {idx_b}")
+            if distance > limit:
+                continue
+            found[(chain, resi, resn, name, alt)] = {
+                "chain": chain, "resi": resi, "resn": resn, "atom": f"{name} (alt {alt})" if alt else name,
+                "kind": kind, "distance": round(distance, 2),
+                "target": METAL_TARGET_DISTANCES[metal].get(kind),
+            }
+    return sorted(found.values(), key=lambda c: (c["distance"], c["chain"], c["resi"], c["atom"]))
 
 
 def _alt_codes(selection):
@@ -2712,32 +2505,28 @@ def conformation_pairs(selection_a, selection_b, reach=6.0):
 
 
 def analyze_ligand_environment(obj, ligand_info):
-    """Compute structural (not biological) ligand-environment data for every
-    ligand in ligand_info, using only PyMOL's own geometric calculations:
+    """Geometric ligand-environment data for every ligand in ligand_info:
 
-      - nearby_residues: protein residues with an atom within 4.0 Å of the
-        ligand (cmd.iterate over a distance-based selection)
-      - polar_contacts: ligand N/O atoms within 3.5 Å of protein N/O atoms
-        (cmd.find_pairs), each resolved to the specific residue/chain/atom
-        on both sides
+      - nearby_residues: protein residues with an atom within
+        LIGAND_CONTACT_CUTOFF of the ligand
+      - polar_contacts: ligand N/O atoms within POLAR_CONTACT_CUTOFF of
+        protein N/O atoms (cmd.find_pairs), each with its residue, chain and
+        atom on both sides
 
-    This returns geometric observations only. A close N/O contact is a
-    *possible* hydrogen bond by distance -- it does not confirm donor/
-    acceptor geometry, bond angle, or that a hydrogen bond actually forms.
-    Detailed interaction typing (salt bridges, pi-stacking, confirmed H-bond
-    geometry) is out of scope and would require a dedicated tool (e.g. PLIP,
-    Arpeggio); Astra3 does not attempt to replicate that analysis.
+    These are distances only. A close N/O pair is a possible hydrogen bond;
+    donor and acceptor roles and angles are not assessed. Interaction typing
+    (salt bridges, pi-stacking, hydrogen-bond geometry) needs a dedicated
+    tool such as PLIP or Arpeggio.
 
-    Returns a dict, keyed by the ligand's sel_name, of:
+    Returns a dict keyed by the ligand's sel_name:
       {
         "nearby_residues": [{"chain":.., "resi":.., "resn":..}, ...],
         "polar_contacts": [{"ligand_atom":.., "protein_chain":.., "protein_resi":..,
                              "protein_resn":.., "protein_atom":.., "distance_angstrom":..}, ...],
         "polar_contact_count": int or None (None if find_pairs failed),
       }
-    On any per-ligand PyMOL error, that ligand's entry is filled with None/[]
-    values rather than omitted, so callers can distinguish "computed, found
-    nothing" from "could not be computed" for this ligand.
+    A ligand whose calculation fails keeps its entry, with None values, so
+    "found nothing" and "could not be computed" stay distinguishable.
     """
     results = {}
     # Only this structure's own protein: with several structures loaded (as
@@ -2751,15 +2540,13 @@ def analyze_ligand_environment(obj, ligand_info):
 
         try:
             # PyMOL parses "byres X and polymer.protein and name CA" as
-            # byres(X and polymer.protein and name CA), which finds only
-            # residues whose alpha carbon lies within the cutoff and misses
-            # every side-chain contact. The inner parentheses make byres
-            # expand the residue of any contacting atom, which is what a
-            # contact residue is.
+            # byres(X and polymer.protein and name CA), finding only residues whose CA is
+            # within the cutoff. The inner parentheses make byres expand any contacting
+            # atom's residue.
             near_residues = []
             near_sel = "_astra3_near_contacts"
             for lig_state, prot_state in conformation_pairs(sel_name, own_protein):
-                cmd.select(near_sel, "byres ((" + lig_state + ") around 4.0 and (" + prot_state + "))")
+                cmd.select(near_sel, f"byres (({lig_state}) around {LIGAND_CONTACT_CUTOFF} and ({prot_state}))")
                 cmd.iterate(near_sel + " and name CA", "near_residues.append((chain, resi, resn))",
                             space={'near_residues': near_residues})
                 # Residues built into the chain and counted as protein have no CA.
@@ -2781,7 +2568,7 @@ def analyze_ligand_environment(obj, ligand_info):
             pairs = []
             for lig_state, prot_state in conformation_pairs(sel_name, own_protein):
                 for pair in cmd.find_pairs("(" + lig_state + ") and (elem N+O)",
-                                           "(" + prot_state + ") and (elem N+O)", cutoff=3.5):
+                                           "(" + prot_state + ") and (elem N+O)", cutoff=POLAR_CONTACT_CUTOFF):
                     if pair not in pairs:
                         pairs.append(pair)
             resolved_pairs = []
@@ -2819,10 +2606,10 @@ def analyze_ligand_environment(obj, ligand_info):
                         "distance_angstrom": round(dist, 2) if isinstance(dist, (int, float)) else None,
                     }
                     # No two non-bonded N/O atoms sit closer than about 2.2 A.
-                    # Closer pairs are overlapping positions -- typically
+                    # Closer pairs are overlapping positions, typically
                     # alternative conformations the depositor gave the same
-                    # letter (1AKE: AP5 and Arg167 "alt B", 0.52 A) -- so they
-                    # are reported apart from contacts, not as contacts.
+                    # letter (1AKE: AP5 and Arg167 "alt B", 0.52 A), so they
+                    # are reported apart from contacts.
                     if isinstance(dist, (int, float)) and dist < POLAR_CONTACT_MIN_DISTANCE:
                         overlapping.append(record)
                     else:
@@ -2847,12 +2634,11 @@ def analyze_ligand_environment(obj, ligand_info):
 # ------------------------------------------------------------
 # TERMINI: comparative N-/C-terminus structural analysis
 # ------------------------------------------------------------
-# All measurements here are taken directly from atomic coordinates after the
-# comparison structure has been superposed onto the reference (astra3_measure
-# moves its coordinates in place, so coordinates read afterwards are already
-# in the reference's frame). This module only reports geometric observations (distances, angles,
-# RMSD) computed from those coordinates; it does not predict biological
-# effect, tag behavior, or binding consequence of any kind.
+# Measured from atomic coordinates after the comparison structure is
+# superposed onto the reference (astra3_measure moves its coordinates in
+# place, so later reads are in the reference frame). Only geometric
+# observations (distances, angles, RMSD) are reported; nothing about
+# biological effect, tag behaviour or binding is predicted.
 import math
 
 
@@ -2901,26 +2687,14 @@ def _angle_between(v1, v2):
 
 
 def get_ordered_ca_coords(obj, chain):
-    """Return [(resi_str, resv_int, (x,y,z)), ...] for one chain's protein Cα
-    atoms, in true N-to-C sequence order.
+    """[(resi, resv, (x, y, z)), ...] for one chain's observed protein Cα
+    atoms, in N-to-C order.
 
-    Sorts by (resv, insertion_code) as a compound key, not resv alone.
-    PyMOL's own resv is explicitly documented as "the residue number as
-    an integer, EXCLUDING insertion code" -- so residues 52, 52A, 52B
-    all share resv=52, and sorting by resv alone leaves their relative
-    order entirely dependent on whatever order cmd.iterate_state happened
-    to enumerate them in. For a normally-deposited RCSB file that's
-    sequence order anyway (atoms are enumerated in file/deposition
-    order, which is sequential for well-formed entries), so this rarely
-    surfaces -- but it is not a guarantee, and a structure that has been
-    edited, merged, or re-saved (or simply an unusual but valid file
-    from a non-RCSB source) can have insertion-coded residues appear
-    out of sequence order in the atom stream, which would silently
-    corrupt N-/C-terminus identification (the first/last entries of
-    this list are what downstream code treats as the termini). Parsing
-    the insertion code out of resi and sorting on (resv, code) makes
-    the true sequence order explicit and independent of enumeration
-    order, rather than relying on incidental sort stability.
+    Sorted by (resv, insertion code). resv leaves the insertion code out, so
+    52, 52A and 52B share resv 52, and their order would otherwise depend on
+    the order the atoms were listed in, which an edited or re-saved file
+    does not guarantee. The first and last entries are what the rest of the
+    analysis treats as the termini.
     """
     raw = []
     cmd.iterate_state(1, f"({obj}) and chain {chain} and polymer.protein and name CA",
@@ -2928,17 +2702,14 @@ def get_ordered_ca_coords(obj, chain):
     seen = set()
     deduped = []
     for resi, resv, x, y, z, q in raw:
-        # Zero-occupancy atoms carry coordinates but were never observed. They
-        # must not define this chain's first or last residue -- see
-        # MIN_OBSERVED_OCCUPANCY.
+        # Zero-occupancy atoms were never observed and must not define the chain's
+        # first or last residue (MIN_OBSERVED_OCCUPANCY).
         if not is_observed_occupancy(q):
             continue
         if resi in seen:
             continue
         seen.add(resi)
-        # Split the insertion code (a trailing letter, if any) out of resi for
-        # sorting purposes only -- resi itself is kept intact in the returned
-        # tuple, unchanged from before.
+        # The insertion code is split out for sorting only; resi is returned as is.
         insertion_code = resi_sort_key(resv, resi)[1]
         deduped.append((resi, resv, (x, y, z), insertion_code))
     deduped.sort(key=lambda t: (t[1], t[3]))
@@ -2950,19 +2721,13 @@ def compute_terminus_vectors(ordered_coords, terminus, tip_n=TERMINUS_WINDOW // 
     terminus comparison: the tip residue, tip-region centroid, an
     orientation vector, and a Terminal Projection Vector (TPV).
 
-    terminus is "N" or "C". Returns None if the chain has fewer residues
-    than needed for the requested window sizes (metrics involving that
-    chain are then reported as unavailable rather than computed on a
-    truncated/misleading window).
+    terminus is "N" or "C". Returns None when the chain is shorter than the
+    windows need; those metrics are then reported as unavailable.
 
-    offset shifts the window inward from the raw terminus by that many
-    residues before measuring -- e.g. offset=1 on an N-terminus skips the
-    very first resolved residue and starts the tip/orientation window at
-    the second. Used to recompute metrics against a sequence-corrected
-    window (see match_terminus_windows) once a user has approved excluding
-    a leading/trailing residue that doesn't correspond to the other
-    structure's terminus. offset=0 (default) reproduces the original,
-    uncorrected behavior exactly.
+    offset moves the window inward by that many residues (offset=1 on an
+    N-terminus starts at the second resolved residue), for recomputing
+    against a sequence-corrected window (match_terminus_windows) once the
+    person approves it. 0 is the uncorrected window.
     """
     needed = tip_n + orientation_n + offset
     if len(ordered_coords) < needed:
@@ -2985,10 +2750,9 @@ def compute_terminus_vectors(ordered_coords, terminus, tip_n=TERMINUS_WINDOW // 
     near_centroid = _centroid([c for _, _, c in orient_near])
     far_centroid = _centroid([c for _, _, c in orient_far])
 
-    # Orientation vector: direction the chain runs FROM this terminus INTO the
-    # protein body. Spec definition: N-term = centroid(1-5) -> centroid(6-10);
-    # C-term = centroid(last10-6) -> centroid(last5). Both read in the chain's
-    # N-to-C direction.
+    # Orientation vector, read in the chain's N-to-C direction at both ends:
+    # N-terminus, centroid(1-5) to centroid(6-10); C-terminus,
+    # centroid(last 10 to 6) to centroid(last 5).
     if terminus == "N":
         orientation_vec = _vec_sub(far_centroid, near_centroid)   # (6-10) - (1-5)
     else:
@@ -3012,12 +2776,9 @@ def compute_terminus_vectors(ordered_coords, terminus, tip_n=TERMINUS_WINDOW // 
         "orientation_vector": orientation_vec,
         "tpv": tpv,
         "tpv_residues": tpv_n,
-        # Full TERMINUS_WINDOW-sized resi list (not just the tip_n subset used
-        # for the vector math above), respecting the same offset -- this is
-        # the same window process_structure colors/labels as the terminus, so
-        # SASA/B-factor analysis can be computed over exactly what the report
-        # and coloring already call "the terminus" rather than a separately-
-        # defined window.
+        # The full TERMINUS_WINDOW resi list at the same offset: the window
+        # process_structure colours, so SASA and B-factor analysis cover what the
+        # report calls the terminus.
         "window_resi": [resi for resi, _, _ in (windowed[:TERMINUS_WINDOW] if terminus == "N" else windowed[-TERMINUS_WINDOW:])],
     }
 
@@ -3103,17 +2864,15 @@ def _protein_selection(obj):
 
 
 def compute_terminus_bnorm(obj, chain, window_resi):
-    """Normalized B-factor of the given terminus window: occupancy-weighted
-    mean B-factor of the window's atoms divided by that of the whole protein
-    as deposited (every observed polymer.protein atom of obj, including any
-    a terminus correction later removed) -- Bnorm > 1 means this terminus is
-    more flexible than the protein average, Bnorm < 1 means more rigid.
+    """Normalized B-factor of a terminus window: the occupancy-weighted mean
+    B-factor of the window's atoms divided by that of the whole protein as
+    deposited (every observed polymer.protein atom of obj, including any a
+    terminus correction later removed). Above 1 the terminus is more mobile
+    than the protein's average, below 1 less.
 
-    Returns None if either the window or the whole-protein selection has
-    no atoms, or if B-factors aren't meaningfully populated (e.g. a
-    computationally-generated model with all B-factors at a placeholder
-    value of 0 everywhere -- Bnorm would be undefined/0-over-0 in that
-    case, so this is reported as unavailable rather than as a real 0).
+    Returns None when the window or the protein has no atoms, or when the
+    B-factors are not populated (a model with every B-factor 0 would give
+    0/0).
     """
     if not window_resi:
         return None
@@ -3133,9 +2892,10 @@ def compute_terminus_bnorm(obj, chain, window_resi):
 # A terminus window's change in solvent-accessible surface is labelled as more
 # exposed or more buried only above this many Å². 26 Å² is a quarter of
 # glycine's maximum accessible surface (104 Å², Tien et al. 2013, PLoS ONE
-# 8:e80635): the smallest change that can carry even the smallest residue
-# across the 25% relative-accessibility line that best separates surface from
-# interior residues (Levy 2010, J Mol Biol 403:660-670).
+# 8:e80635): the least by which a fully buried residue's area must grow to
+# reach the 25% relative-accessibility line used to separate surface from
+# interior residues (Levy 2010, J Mol Biol 403:660-670). Glycine is the
+# smallest residue, so every other needs more.
 SASA_SHIFT_THRESHOLD = 26.0
 
 # A change in normalized B-factor is labelled as rigidified or flexible only
@@ -3171,11 +2931,9 @@ def classify_bnorm_shift(delta_bnorm, threshold=BNORM_SHIFT_THRESHOLD):
     return "Little change"
 
 
-# Minimum number of paired residues required before a local terminal RMSD is
-# computed at all. Three points is the least that describes a spatial
-# relationship rather than a coincidence, but an RMSD over three residues is
-# not the same measurement as one over fifteen -- so the pair count is
-# returned with the value and reported alongside it, never dropped.
+# Minimum paired residues for a local terminal RMSD. Three is the least that
+# describes a spatial relationship; the pair count is reported with the
+# value, since an RMSD over three residues is not one over fifteen.
 MIN_RMSD_RESIDUE_PAIRS = 3
 
 
@@ -3235,13 +2993,13 @@ def superposed_rmsd(pairs):
     return math.sqrt(max(0.0, (e0 - 2.0 * largest) / n))
 
 
-def compute_local_terminal_rmsd_detail(ref_obj, cmp_obj, chain, terminus, window=15, ref_offset=0, cmp_offset=0, cmp_chain=None, residue_pairs=None):
-    """RMSD (Å) over the first/last `window` Cα atoms of one chain, comparing
-    ref_obj and cmp_obj (both already aligned into the same coordinate
-    frame), together with the number of residues the value was actually
-    computed from.
+def compute_local_terminal_rmsd_detail(ref_obj, cmp_obj, chain, terminus, window=TERMINUS_WINDOW, ref_offset=0, cmp_offset=0, cmp_chain=None, residue_pairs=None):
+    """RMSD (Å) over the first or last `window` Cα atoms of one chain,
+    between ref_obj and cmp_obj (already in one coordinate frame), with the
+    number of residues it was computed from.
 
-    Returns a dict:
+    Returns None when either structure has too few residues on the chain or
+    fewer than MIN_RMSD_RESIDUE_PAIRS could be paired; otherwise
 
         {"rmsd": float, "rmsd_refit": float, "residues_used": int,
          "residues_requested": int, "residues_available_reference": int,
@@ -3250,36 +3008,19 @@ def compute_local_terminal_rmsd_detail(ref_obj, cmp_obj, chain, terminus, window
     "rmsd" is measured in place, where the atoms sit after the whole-chain
     superposition, so it includes any rigid shift of the terminus as well as
     any change in its shape. "rmsd_refit" uses the same pairs after
-    superposing the two windows onto each other, which removes the shift and
-    leaves only the shape difference. It is never larger than "rmsd".
+    superposing the two windows on each other, which leaves only the shape
+    difference; it is never larger than "rmsd".
 
-    or None if either structure lacks enough residues on this chain, or if
-    fewer than MIN_RMSD_RESIDUE_PAIRS residues could be paired.
+    residues_used can be smaller than residues_requested: only residues
+    present in both structures can be paired, so unresolved residues,
+    residues dropped by an offset correction and residues the alignment
+    leaves unpaired all reduce it. Whatever shows the value must show
+    residues_used with it.
 
-    The requested window is TERMINUS_WINDOW, matching the window the residue
-    pairing itself comes from.
-
-    residues_used is the count that matters and can still be smaller than
-    residues_requested. Only residues present on BOTH structures can be
-    paired: unresolved residues (present in the deposited sequence but with
-    no coordinates), residues dropped by an offset correction, and residues
-    the alignment leaves unpaired all reduce it. A 15-residue window that
-    yields 6 pairs produces a real RMSD over 6 residues, and a report that
-    prints the value without the count invites the reader to assume 15.
-    Callers must carry residues_used through to whatever they display.
-
-    ref_offset/cmp_offset independently shift each structure's window
-    inward from its raw terminus before measuring (see
-    compute_terminus_vectors' offset parameter for the same idea) -- used
-    to recompute this metric against a sequence-corrected window once a
-    user approves excluding a leading/trailing residue that doesn't
-    correspond to the other structure's terminus.
-
-    cmp_chain, if given, is the comparison structure's chain letter when it
-    differs from `chain` (the reference's letter) -- e.g. after a
-    letter-mismatched cross-structure match (see match_chains_across_structures).
-    Defaults to `chain` for full backward compatibility with same-letter
-    callers.
+    ref_offset and cmp_offset shift each structure's window inward from its
+    terminus (as compute_terminus_vectors' offset does), for a
+    sequence-corrected window. cmp_chain is the comparison structure's chain
+    letter when it differs from `chain` (see match_chains_across_structures).
     """
     if cmp_chain is None:
         cmp_chain = chain
@@ -3297,14 +3038,10 @@ def compute_local_terminal_rmsd_detail(ref_obj, cmp_obj, chain, terminus, window
         ref_window = ref_coords[max(0, ref_end - window):ref_end]
         cmp_window = cmp_coords[max(0, cmp_end - window):cmp_end]
 
-    # Preferred pairing: the correspondence established by aligning the two
-    # terminal sequences (see match_terminus_windows). Pairing by residue
-    # number instead assumes both structures share a numbering scheme, which
-    # independently deposited entries routinely do not -- two entries can use
-    # unrelated numbering for the same protein, so resv equality either finds
-    # no overlap at all or, worse, pairs residues that merely happen to carry
-    # the same number while sitting at different points in the fold. The
-    # latter produces a plausible-looking RMSD from a meaningless pairing.
+    # Pairs from aligning the terminal sequences (match_terminus_windows).
+    # Independently deposited entries often number the same protein differently,
+    # so pairing by residue number finds no overlap or, worse, pairs residues at
+    # different points in the fold into a plausible-looking RMSD.
     if residue_pairs:
         ref_by_resi = {resi: xyz for resi, _, xyz in ref_window}
         cmp_by_resi = {resi: xyz for resi, _, xyz in cmp_window}
@@ -3343,32 +3080,14 @@ def compute_local_terminal_rmsd_detail(ref_obj, cmp_obj, chain, terminus, window
     }
 
 
-def compute_local_terminal_rmsd(ref_obj, cmp_obj, chain, terminus, window=15, ref_offset=0, cmp_offset=0, cmp_chain=None, residue_pairs=None):
-    """Local terminal RMSD as a bare float, or None.
-
-    Thin wrapper over compute_local_terminal_rmsd_detail for callers that
-    only want the value. Anything that reports the number to a user should
-    use the detail form instead, so the residue count travels with it.
-    """
-    detail = compute_local_terminal_rmsd_detail(ref_obj, cmp_obj, chain, terminus, window,
-                                                ref_offset, cmp_offset, cmp_chain, residue_pairs)
-    return detail["rmsd"] if detail else None
-
-
 def get_terminus_sequence(ordered_coords, terminus, window=TERMINUS_WINDOW, extra=10):
-    """Return a one-letter sequence string for the residues at one end of a
-    chain, plus a bit extra context, for use in terminus sequence matching
-    (get_terminus_sequence itself only returns the window+extra actually
-    resolved -- callers decide how much of it to use). window+extra residues
-    are pulled from the terminus end so the offset-search in
-    match_terminus_windows below has room to look past a short insertion or
-    numbering offset without needing a second PyMOL query.
+    """One-letter sequence of the residues at one end of a chain, with
+    `extra` residues beyond the window so match_terminus_windows can search
+    past a short insertion or a numbering offset.
 
-    Returns (sequence_str, ordered_subset) where ordered_subset is the same
-    (resi, resv, coord) tuples get_ordered_ca_coords produces, in N-to-C
-    order, for the residues the sequence was built from. Both are read via
-    cmd.iterate against the resi values already collected by
-    get_ordered_ca_coords, so no atom coordinates are refetched.
+    Returns (sequence, ordered_subset): ordered_subset is the (resi, resv,
+    coord) tuples from get_ordered_ca_coords, in N-to-C order, for the
+    residues the sequence was built from.
     """
     pull = window + extra
     if terminus == "N":
@@ -3395,6 +3114,28 @@ def _resn_for_resis(obj, chain, resi_list):
         if resi in resi_set:
             lookup[resi] = AA_3TO1.get(resn, "X")
     return "".join(lookup.get(r, "X") for r in resi_list)
+
+
+def _terminus_slots(obj, chain, resi_list, sequence):
+    """resi_list (consecutive observed residues of one chain, tip first) and its
+    one-letter sequence, with None and "X" wherever a residue between two
+    neighbours is unobserved: listed as missing by the file, or modeled with a
+    zero-occupancy Cα. An unobserved residue then keeps its place, so the
+    residues either side of it stay in register with another structure."""
+    missing = set(astra3_measure._unobserved(obj, chain))
+    for resi in summarize_unobserved_residues(obj, [chain]).get(chain, []):
+        key = astra3_measure._resi_key(resi)
+        if key is not None:
+            missing.add(key)
+    letters = dict(zip(resi_list, sequence))
+    residues = list(resi_list[:1])
+    for a, b in zip(resi_list, resi_list[1:]):
+        ka, kb = astra3_measure._resi_key(a), astra3_measure._resi_key(b)
+        if missing and ka is not None and kb is not None:
+            lo, hi = min(ka, kb), max(ka, kb)
+            residues += [None] * sum(1 for u in missing if lo < u < hi)
+        residues.append(b)
+    return residues, "".join("X" if r is None else letters[r] for r in residues)
 
 
 def match_terminus_windows(ref_obj, cmp_obj, chain, terminus, window=TERMINUS_WINDOW,
@@ -3461,32 +3202,43 @@ def match_terminus_windows(ref_obj, cmp_obj, chain, terminus, window=TERMINUS_WI
         ref_resi_tip_first = ref_resi_ext
         cmp_resi_tip_first = cmp_resi_ext
 
+    # The search runs over slots: every observed residue, plus a slot for each
+    # unobserved residue lying between two observed ones. Identical residues
+    # are counted only where both structures have an observed residue.
+    ref_slots, ref_slot_seq = _terminus_slots(ref_obj, chain, ref_resi_tip_first, ref_seq_tip_first)
+    cmp_slots, cmp_slot_seq = _terminus_slots(cmp_obj, cmp_chain, cmp_resi_tip_first, cmp_seq_tip_first)
+
     best = None
-    for offset in range(-search_extra, search_extra + 1):
-        # offset > 0: comparison has `offset` extra residues before its true
-        # terminus match point (skip them in the comparison sequence). offset
-        # < 0: reference has the extra residues instead (skip in ref).
-        if offset >= 0:
-            r_seq = ref_seq_tip_first
-            c_seq = cmp_seq_tip_first[offset:]
-        else:
-            r_seq = ref_seq_tip_first[-offset:]
-            c_seq = cmp_seq_tip_first
-        compare_len = min(len(r_seq), len(c_seq), window)
-        if compare_len < min(window, 5):
+    for shift in range(-search_extra, search_extra + 1):
+        # shift > 0: the comparison has `shift` extra slots before its true
+        # terminus match point (skipped in the comparison). shift < 0: the
+        # reference has the extra slots instead.
+        r_skip, c_skip = (0, shift) if shift >= 0 else (-shift, 0)
+        r_seen = c_seen = comparable = matches = 0
+        for r_res, c_res, r_aa, c_aa in zip(ref_slots[r_skip:], cmp_slots[c_skip:],
+                                            ref_slot_seq[r_skip:], cmp_slot_seq[c_skip:]):
+            if r_seen >= window or c_seen >= window:
+                break
+            r_seen += r_res is not None
+            c_seen += c_res is not None
+            if r_res is not None and c_res is not None:
+                comparable += 1
+                matches += r_aa == c_aa
+        if comparable < min(window, TERMINUS_MIN_OVERLAP):
             continue
-        r_window = r_seq[:compare_len]
-        c_window = c_seq[:compare_len]
-        matches = sum(1 for a, b in zip(r_window, c_window) if a == b)
-        identity = matches / compare_len
-        if best is None or identity > best["identity"] or (identity == best["identity"] and abs(offset) < abs(best["offset"])):
-            best = {"identity": identity, "offset": offset, "compare_len": compare_len}
+        # Residues trimmed from the tip: the observed ones among the skipped slots.
+        offset = sum(1 for r in cmp_slots[:c_skip] if r is not None) - sum(1 for r in ref_slots[:r_skip] if r is not None)
+        # The offset with the most identical residues wins, so a short overlap
+        # that matches completely does not outrank a longer one that matches better.
+        if best is None or matches > best["matches"] or (matches == best["matches"] and abs(shift) < abs(best["shift"])):
+            best = {"identity": matches / comparable, "offset": offset, "shift": shift, "matches": matches,
+                    "comparable": comparable}
 
     if best is None:
         return None
 
     offset = best["offset"]
-    compare_len = best["compare_len"]
+    compare_len = min(window, len(ref_resi_tip_first) - max(0, -offset), len(cmp_resi_tip_first) - max(0, offset))
     if offset >= 0:
         ref_window_resi_tf = ref_resi_tip_first[:compare_len]
         cmp_window_resi_tf = cmp_resi_tip_first[offset:offset + compare_len]
@@ -3506,20 +3258,11 @@ def match_terminus_windows(ref_obj, cmp_obj, chain, terminus, window=TERMINUS_WI
     ref_seq_display = _resn_for_resis(ref_obj, chain, ref_window_resi)
     cmp_seq_display = _resn_for_resis(cmp_obj, cmp_chain, cmp_window_resi)
 
-    # Explicit residue correspondence for the matched window.
-    #
-    # The offset search above shifts one window relative to the other, which
-    # handles a terminus that simply starts a few residues earlier or later.
-    # It cannot represent an insertion or deletion INSIDE the window: from
-    # that point on, every subsequent residue is compared against the wrong
-    # partner, and the resulting identity and any structural pairing built on
-    # it are both wrong.
-    #
-    # A gap-aware alignment of the two windows produces the actual
-    # correspondence, which is then carried as explicit (ref_resi, cmp_resi)
-    # pairs so downstream structural work follows the alignment rather than
-    # re-deriving a pairing from residue numbers. Both windows are in
-    # tip-first order here, so this is identical for N and C termini.
+    # Explicit residue pairs for the matched window. The offset search handles a
+    # terminus that starts earlier or later, but not an indel inside the window,
+    # after which every residue would be paired wrongly. A gap-aware alignment
+    # gives the correspondence as (ref_resi, cmp_resi) pairs for later steps.
+    # Both windows are tip-first, so this is the same for N and C termini.
     residue_pairs = []
     align_metrics = None
     try:
@@ -3529,23 +3272,31 @@ def match_terminus_windows(ref_obj, cmp_obj, chain, terminus, window=TERMINUS_WI
         # Aligned with their unobserved residues in place, so the residues
         # either side of a gap in one structure are not paired with unrelated
         # ones in the other.
-        ref_res, ref_seq = astra3_measure.gapped_sequence(ref_obj, chain, ref_window_resi_tf, ref_win_seq)
-        cmp_res, cmp_seq = astra3_measure.gapped_sequence(cmp_obj, cmp_chain, cmp_window_resi_tf, cmp_win_seq)
+        ref_res, ref_seq = _terminus_slots(ref_obj, chain, ref_window_resi_tf, ref_win_seq)
+        cmp_res, cmp_seq = _terminus_slots(cmp_obj, cmp_chain, cmp_window_resi_tf, cmp_win_seq)
         for ri, ci in astra3_align.aligned_pairs(ref_seq, cmp_seq):
             if ri < len(ref_res) and ci < len(cmp_res) and ref_res[ri] is not None and cmp_res[ci] is not None:
                 residue_pairs.append((ref_res[ri], cmp_res[ci]))
+        if residue_pairs:
+            # Identity, similarity and coverage over the residues actually
+            # paired, so an unobserved residue's placeholder is not counted
+            # as a substitution.
+            ref_letter = dict(zip(ref_window_resi_tf, ref_win_seq))
+            cmp_letter = dict(zip(cmp_window_resi_tf, cmp_win_seq))
+            letters = [(ref_letter[a], cmp_letter[b]) for a, b in residue_pairs]
+            same = sum(1 for a, b in letters if a == b)
+            similar = sum(1 for a, b in letters if a == b or astra3_align._score(a, b) > 0)
+            align_metrics = dict(align_metrics, identity=same / len(letters), similarity=similar / len(letters),
+                                 coverage_a=len(letters) / len(ref_window_resi_tf),
+                                 coverage_b=len(letters) / len(cmp_window_resi_tf))
     except Exception:
         # Falls back to the offset-only result, which remains correct for
         # windows that differ by a shift alone.
         residue_pairs = []
         align_metrics = None
 
-    # "Before" sequences: the naive first/last-`window` selection each
-    # structure would show with NO offset correction applied (offset=0),
-    # regardless of what the best-scoring offset turned out to be. Derived
-    # from the already-fetched extended sequences rather than a fresh PyMOL
-    # query. Used by the approval prompt to show the user exactly what would
-    # change, before any correction is applied.
+    # "Before" sequences: what each structure's window would be with no offset,
+    # from the sequences already fetched, for the approval prompt.
     ref_naive_seq = ref_seq_ext[:window] if terminus == "N" else ref_seq_ext[-window:]
     cmp_naive_seq = cmp_seq_ext[:window] if terminus == "N" else cmp_seq_ext[-window:]
     ref_naive_resi = ref_resi_ext[:window] if terminus == "N" else ref_resi_ext[-window:]
@@ -3553,11 +3304,9 @@ def match_terminus_windows(ref_obj, cmp_obj, chain, terminus, window=TERMINUS_WI
 
     ref_offset = max(0, -offset)
     cmp_offset = max(0, offset)
-    # Residues excluded by the correction: the ones strictly closer to the tip
-    # than the corrected window's first residue, in N-to-C order (i.e. exactly
-    # what a physical trim would delete from that end of the chain). Only one
-    # side is ever non-empty for a given offset -- the reference has extras
-    # when offset < 0, the comparison when offset > 0.
+    # Residues the correction excludes: those nearer the tip than the corrected
+    # window, in N-to-C order. Only one side has any: the reference when
+    # offset < 0, the comparison when offset > 0.
     ref_excluded_tf = ref_resi_tip_first[:ref_offset]
     cmp_excluded_tf = cmp_resi_tip_first[:cmp_offset]
     ref_excluded_resi = list(reversed(ref_excluded_tf)) if terminus == "C" else ref_excluded_tf
@@ -3567,6 +3316,9 @@ def match_terminus_windows(ref_obj, cmp_obj, chain, terminus, window=TERMINUS_WI
         "identity": best["identity"],
         "offset": offset,
         "compare_len": compare_len,
+        # Positions where both structures have an observed residue: what the
+        # identity is a fraction of.
+        "comparable_positions": best["comparable"],
         "reference_window_resi": ref_window_resi,
         "comparison_window_resi": cmp_window_resi,
         "reference_seq": ref_seq_display,
@@ -3575,27 +3327,21 @@ def match_terminus_windows(ref_obj, cmp_obj, chain, terminus, window=TERMINUS_WI
         "comparison_naive_seq": cmp_naive_seq,
         "reference_naive_resi": ref_naive_resi,
         "comparison_naive_resi": cmp_naive_resi,
-        # Exact resi's a physical trim should delete from each structure's
-        # object (empty on the side that had no extra residues at this
-        # terminus). Used by reconcile_termini_coloring to actually remove the
-        # excluded residues from the .pse, not just recolor around them.
+        # The resi values a trim deletes from each object (empty on the side with no
+        # extras); reconcile_termini_coloring removes them from the .pse.
         "reference_excluded_resi": ref_excluded_resi,
         "comparison_excluded_resi": cmp_excluded_resi,
         "confident_match": best["identity"] >= min_identity,
-        # True when, even at the best-scoring offset, fewer than a full
-        # `window` residues of overlap were available on both sides (e.g. a
-        # structure is simply too short past the offset point to supply a full
-        # 10-residue window). Recoloring should not silently pad this with
-        # unrelated residues -- the caller should warn instead.
+        # True when even the best offset leaves less than a full window on both
+        # sides. The caller warns rather than padding with unrelated residues.
         "window_gap": compare_len < window,
         # Explicit correspondence from the gap-aware alignment of the two
         # windows: [(reference_resi, comparison_resi), ...] in tip-first
         # order. Empty if the alignment could not be produced, in which case
         # callers fall back to their previous pairing.
         "residue_pairs": residue_pairs,
-        # Auditability: what was asked for, what existed, and what was
-        # actually compared, so a report can never imply more residues were
-        # examined than the structures supplied.
+        # What was asked for, what existed and what was compared, so a report never
+        # implies more residues were examined.
         "search_extra": search_extra,
         "large_offset": abs(offset) >= LARGE_TERMINUS_OFFSET,
         "requested_window": window,
@@ -3694,27 +3440,22 @@ def _format_resi_range(window_resi):
 
 
 def apply_corrected_terminus_window(obj, chain, terminus, window_resi, n_term_name, c_term_name):
-    """Re-select and recolor one structure's N- or C-terminus selection to
-    an explicit, already-determined list of resi's (from
-    match_terminus_windows' offset-corrected window), replacing whatever
-    process_structure originally picked via naive first/last-N-by-number
-    slicing. Only the requested terminus (N or C) is touched; the other
-    terminus's existing selection is left as-is.
+    """Re-select and recolor one terminus of a structure to an explicit list
+    of residues (match_terminus_windows' offset-corrected window), replacing
+    the first or last residues process_structure selected. The other
+    terminus is left as it is.
 
-    Excluded residues themselves are removed from the object separately by
-    remove_excluded_terminus_residues (called by reconcile_termini_coloring
-    before this function) -- this function only handles selecting and
-    coloring the residues that remain.
+    Excluded residues are removed from the object by
+    remove_excluded_terminus_residues (reconcile_termini_coloring calls it
+    first); this selects and colors what remains.
 
-    n_term_name/c_term_name must be the existing selection names created by
-    process_structure for this object (process_result["n_term_name"] /
-    ["c_term_name"]) -- reused rather than creating new selection objects,
-    so every other part of Astra3 that already references those names
-    (rendering, reports, CSV/JSON export) picks up the correction for free.
+    n_term_name and c_term_name are the selection names process_structure
+    created for the object (process_result["n_term_name"] and
+    ["c_term_name"]). They are reused, so rendering, reports and exports
+    that refer to them show the correction.
 
-    Prints a short confirmation (residue range, atom count, color) -- never
-    silent, so a failed or empty correction is always visible rather than
-    looking identical to a successful one.
+    Prints the residue range, atom count and color, so an empty correction
+    is visible.
     """
     target_name = n_term_name if terminus == "N" else c_term_name
     if not window_resi:
@@ -3742,20 +3483,11 @@ def apply_corrected_terminus_window(obj, chain, terminus, window_resi, n_term_na
 
 
 def _format_terminus_diff_line(label, seq, label_width=22):
-    """One line of the before/after diff table: a fixed-width label
-    followed by the sequence. Kept as plain fixed-width text so the two
-    lines stay character-aligned regardless of terminal width.
+    """One line of the before/after diff table: a fixed-width label followed by
+    the sequence, so both lines stay aligned in any terminal.
 
-    label_width should be computed by the caller from the ACTUAL pair of
-    labels being printed together (see show_termini_offset_and_confirm's
-    own call sites) rather than assumed as a fixed constant -- a
-    structure ID longer than the old hardcoded 22 (an imported AST-XXXX
-    ID is short, but nothing enforces a hard cap on a real PDB ID's
-    length in principle) would silently overflow past a fixed width with
-    no truncation, breaking alignment between the two lines with no
-    warning. Sizing to the real longest label in THIS pair guarantees
-    both lines always start their sequence at the same column,
-    regardless of how long either ID happens to be.
+    label_width comes from the caller, sized to the longer label of the pair
+    (see show_termini_offset_and_confirm), so no ID overflows the column.
     """
     return f"  {label:<{label_width}}{seq}"
 
@@ -3763,26 +3495,17 @@ def _format_terminus_diff_line(label, seq, label_width=22):
 def show_termini_offset_and_confirm(pdb_id_ref, pdb_id_cmp, chain, n_match_result, c_match_result,
                                     window=TERMINUS_WINDOW, cmp_chain=None, auto_decision=None,
                                     allow_advanced=True):
-    """Show one combined before/after summary covering BOTH the N-terminus
-    and C-terminus offset findings for one chain pair, then ask a SINGLE
-    y/n confirmation that applies to whichever of the two need a
-    correction. Only termini with a nonzero offset (i.e. actually needing a
-    decision) are shown -- pass None for whichever terminus doesn't need
-    one; if both are None this returns False without printing or asking
-    anything.
+    """Show one before/after summary of the N- and C-terminus offsets for a
+    chain pair and ask one y/n for whichever need correcting. Pass None for a
+    terminus that needs none; with both None this returns False without
+    printing.
 
-    auto_decision, if given, is "always" or "never" (see -alwaysmatch/
-    -nevermatch in astra3.py's own flag parsing) -- skips the interactive
-    y/n prompt entirely and applies that decision, still printing the
-    same before/after summary so the run's own output stays a complete,
-    reproducible record of what happened and why, just without blocking
-    on input(). "always" applies a correction only when the match reaches
-    AUTO_MATCH_MIN_IDENTITY; a weaker one is left uncorrected and reported
-    under "auto_held" so the caller can say why.
+    auto_decision ("always" or "never", from -alwaysmatch and -nevermatch)
+    skips the question but still prints the summary. "always" corrects only a
+    match reaching AUTO_MATCH_MIN_IDENTITY; a weaker one is left as it is and
+    reported under "auto_held".
 
-    Returns True if the user approved (applies to every terminus passed
-    in), False otherwise -- both termini are always corrected or declined
-    together, since there's no real reason to want only one corrected.
+    Returns True if approved, for every terminus passed in.
     """
     if cmp_chain is None:
         cmp_chain = chain
@@ -3807,12 +3530,9 @@ def show_termini_offset_and_confirm(pdb_id_ref, pdb_id_cmp, chain, n_match_resul
 
         print(f"{term_color}{terminus}-terminus{RESET}{WHITE}: {pdb_id_ref} and {pdb_id_cmp} don't align at "
               f"the naive first/last {window} residues. Shifting by {trimmed_count} residue(s) gives a "
-              f"{match_result['identity']*100:.0f}% match over {match_result['compare_len']} residues.{RESET}", flush=True)
-        # See _format_terminus_diff_line's own docstring for why this is
-        # computed from the real label pair rather than assumed fixed -- the
-        # previous flat 22 is kept as a floor (preserving the same spacious
-        # look for ordinary 4-character PDB IDs), only extended beyond that if
-        # a label would otherwise genuinely overflow and silently misalign.
+              f"{match_result['identity']*100:.0f}% match over {match_result.get('comparable_positions', match_result['compare_len'])} residues.{RESET}", flush=True)
+        # Wide enough for the longest label pair (see
+        # _format_terminus_diff_line), at least 22.
         diff_label_width = max(len(pdb_id_ref) + 1, len(pdb_id_cmp) + 1, 20) + 2
         print(f"{WHITE}  Before:{RESET}", flush=True)
         print(_format_terminus_diff_line(pdb_id_ref + ":", match_result["reference_naive_seq"], diff_label_width), flush=True)
@@ -3822,11 +3542,7 @@ def show_termini_offset_and_confirm(pdb_id_ref, pdb_id_cmp, chain, n_match_resul
         print(_format_terminus_diff_line(pdb_id_cmp + ":", match_result["comparison_seq"], diff_label_width), flush=True)
         print("", flush=True)
 
-    # One question per terminus. The two ends of a chain are independent
-    # measurements: one can line up cleanly while the other does not, and a
-    # single decision covering both forces an all-or-nothing answer to two
-    # unrelated questions. Each terminus is asked about on its own terms,
-    # with its own trim description and its own escalation offer.
+    # One question per terminus: one end can line up while the other does not.
     approved_termini = []
     auto_held = {}
     escalate = False
@@ -3846,12 +3562,8 @@ def show_termini_offset_and_confirm(pdb_id_ref, pdb_id_cmp, chain, n_match_resul
               f"{trimmed_count} {residue_word} of {trimmed_from} chain {trimmed_chain} from the structure, "
               f"coloring, labeling, and numeric metrics.{RESET}", flush=True)
 
-        # Escalation is offered only where it can actually help: this
-        # terminus is not confident by the system's existing standard
-        # (match_terminus_windows marks a window confident at identity >=
-        # min_identity), and a more thorough pass has not already been run.
-        # Offering it on a confident match, or after the deepest analysis,
-        # would advertise an option that does nothing.
+        # Escalation is offered only when this terminus is not confident (identity
+        # below min_identity) and the deeper pass has not already run.
         this_weak = not match_result.get("confident_match", False)
         offer_advanced = this_weak and allow_advanced
 
@@ -3921,19 +3633,14 @@ def show_termini_offset_and_confirm(pdb_id_ref, pdb_id_cmp, chain, n_match_resul
 
 
 def remove_excluded_terminus_residues(obj, chain, excluded_resi, pdb_id, terminus):
-    """Physically delete excluded_resi from obj (a real cmd.remove, not just
-    a selection change) so a terminus offset correction is reflected in the
-    actual structure and the saved .pse, not only in which atoms happen to
-    be colored. Returns True if any atoms were removed.
+    """Delete excluded_resi from obj (cmd.remove), so an approved terminus
+    offset correction is part of the structure and the saved session, not
+    only of the coloring. Returns True if any atoms were removed.
 
-    This mirrors apply_intra_structure_homomer_reduction's approach: once
-    the user approves a correction, the excluded residues are gone from the
-    object entirely, so there is nothing left in the session that still
-    looks like it belongs to this terminus. Recoloring alone is not
-    sufficient here -- a selection change does not undo color already
-    painted onto now-excluded atoms, so those residues would otherwise
-    remain visibly green/red even after being dropped from the terminus
-    selection.
+    As with apply_intra_structure_homomer_reduction, the residues are gone
+    from the object once the correction is approved. Recoloring alone would
+    leave the excluded atoms green or red, since a selection change does not
+    undo color already applied.
     """
     if not excluded_resi:
         return False
@@ -3958,15 +3665,11 @@ def remove_excluded_terminus_residues(obj, chain, excluded_resi, pdb_id, terminu
 def reconcile_termini_coloring(ref_obj, cmp_obj, chain, terminus, match_result,
                                ref_n_term_name, ref_c_term_name, cmp_n_term_name, cmp_c_term_name,
                                ref_pdb_id, cmp_pdb_id, cmp_chain=None):
-    """Apply an ALREADY-APPROVED offset correction: physically remove the
-    excluded residue(s) from whichever structure had them, then recolor
-    both structures' terminus selections to the shared, offset-aligned
-    window. Caller (TerminiExecution.run) is responsible for obtaining
-    approval via prompt_terminus_offset_correction first -- this function
-    no longer decides or asks anything itself, it only applies what's been
-    approved. No-ops if offset is 0 (nothing to correct) -- callers should
-    not reach this function at all in that case, but it's a safe no-op
-    regardless.
+    """Apply an approved offset correction: remove the excluded residues
+    from the structure that has them, then recolor both structures' terminus
+    selections to the shared window. The caller (TerminiExecution.run) gets
+    the approval first (show_termini_offset_and_confirm); nothing is asked
+    here. Does nothing when the offset is 0.
 
     cmp_chain, if given, is the comparison structure's chain letter when it
     differs from `chain` (the reference's letter). Defaults to `chain`.
@@ -3977,9 +3680,8 @@ def reconcile_termini_coloring(ref_obj, cmp_obj, chain, terminus, match_result,
         return
 
     if match_result.get("window_gap"):
-        # Even the best-scoring offset can't supply a full window of
-        # overlapping residues on both sides -- don't guess further or pad
-        # with unrelated residues; just tell the user there will be a gap.
+        # Not even the best offset gives a full window on both sides; say there will
+        # be a gap rather than pad.
         print(f"{YELLOW}{terminus}-terminus: after aligning {ref_pdb_id} (chain {chain}) and "
               f"{cmp_pdb_id} (chain {cmp_chain}), there are fewer than {TERMINUS_WINDOW} corresponding "
               f"residues available at this terminus on at least one structure. The colored/labeled "
@@ -3996,13 +3698,10 @@ def reconcile_termini_coloring(ref_obj, cmp_obj, chain, terminus, match_result,
 
 
 def prompt_terminus_mismatch(pdb_id_ref, pdb_id_cmp, chain, terminus, match_result, window=TERMINUS_WINDOW, cmp_chain=None):
-    """Print a warning (never blocking, since TERMINI already reports
-    numeric results independently of this check) when a terminus match is
-    not confident, showing both structures' terminus sequences so the user
-    can judge for themselves whether these are really the same terminus of
-    the same protein. This is purely informational -- Astra3 does not
-    decide for the user whether a mismatched terminus is scientifically
-    meaningful; it only surfaces the sequences so a human can.
+    """Warn when a terminus match is not confident, showing both
+    structures' terminus sequences so the person can judge whether they are
+    the same terminus of the same protein. Informational: the numeric
+    results are reported either way.
     """
     if cmp_chain is None:
         cmp_chain = chain
@@ -4036,42 +3735,31 @@ def _build_terminus_metrics_dict(chain, ref_vecs, cmp_vecs, local_rmsd, sequence
                                  sasa_reference=None, sasa_comparison=None,
                                  bnorm_reference=None, bnorm_comparison=None,
                                  local_rmsd_detail=None):
-    """Assemble one terminus's metrics dict from already-computed vector data.
-    Shared by compare_termini's initial (naive) pass and
-    recompute_terminus_metrics' offset-corrected pass, so the two paths can
-    never produce a differently-shaped result or silently diverge in which
-    fields get populated.
+    """Assemble one terminus's metrics dict from computed vector data. Shared
+    by compare_termini's first pass and recompute_terminus_metrics'
+    corrected pass, so both produce the same shape.
 
-    offset_applied, if given, records {"reference": int, "comparison": int}
-    -- the per-structure offsets actually used to compute this dict, so the
-    report/JSON/CSV can show whether a given row reflects the raw window or
-    a user-approved correction, rather than that being invisible after the
-    fact.
+    offset_applied, if given, is {"reference": int, "comparison": int}, the
+    offsets used, so the outputs show whether a row is the raw window or an
+    approved correction.
 
-    comparison_chain, if given, records the comparison structure's actual
-    chain letter when it differs from `chain` (the reference's letter) --
-    e.g. when match_chains_across_structures paired chains with different
-    IDs. Defaults to `chain` so existing same-letter callers/reports are
-    unaffected.
+    comparison_chain is the comparison's chain letter when it differs from
+    `chain` (the reference's), as when match_chains_across_structures pairs
+    different IDs. Defaults to `chain`.
 
     sasa_reference/sasa_comparison (Å²) and bnorm_reference/bnorm_comparison
-    are this terminus's SASA and normalized B-factor on each structure (see
-    compute_terminus_sasa/compute_terminus_bnorm) -- None when unavailable
-    (e.g. no B-factors present). \u0394SASA and \u0394Bnorm are derived here rather
-    than by the caller, so every caller reports the same delta convention
-    (comparison minus reference) and the same None-propagation behavior.
+    are this terminus's SASA and normalized B-factor in each structure
+    (compute_terminus_sasa, compute_terminus_bnorm), None when unavailable.
+    ΔSASA and ΔBnorm (comparison minus reference) are derived here so every
+    caller uses the same convention.
     """
     if comparison_chain is None:
         comparison_chain = chain
     if local_rmsd_detail is not None and local_rmsd is None:
         local_rmsd = local_rmsd_detail.get("rmsd")
     detail = local_rmsd_detail or {}
-    # Residues the window-based metrics were actually measured over. The
-    # window sizes are requests, not guarantees: only residues with
-    # coordinates exist to be measured, so a 10-residue terminus window on a
-    # chain whose last three residues are unresolved is a 7-residue
-    # measurement. These counts make that visible in every output rather
-    # than leaving the requested size to be assumed.
+    # Residues actually measured. Window sizes are requests: a 10-residue window
+    # on a chain whose last three residues are unresolved measures seven.
     ref_window_resi = ref_vecs.get("window_resi") or []
     cmp_window_resi = cmp_vecs.get("window_resi") or []
     tip_displacement = _vec_distance(ref_vecs["tip_coord"], cmp_vecs["tip_coord"])
@@ -4180,24 +3868,20 @@ def recompute_terminus_metrics(ref_obj, cmp_obj, chain, terminus, sequence_match
 
 
 def compare_termini(ref_obj, cmp_obj, chain, tip_n=TERMINUS_WINDOW // 2, orientation_n=TERMINUS_WINDOW // 2, local_rmsd_window=TERMINUS_WINDOW, cmp_chain=None):
-    """Compute all TERMINI metrics for one chain, comparing cmp_obj against
-    ref_obj (both must already be aligned into the same coordinate frame,
-    e.g. via cmd.align). Returns a dict with "N" and "C" keys, each either
-    a metrics dict or None if that terminus couldn't be measured (too few
-    residues, no shared numbering, etc.) -- callers should report those
-    explicitly as unavailable rather than omitting them silently.
+    """All TERMINI metrics for one chain, comparing cmp_obj with ref_obj
+    (already superposed into one coordinate frame). Returns {"N": ..., "C":
+    ...}, each a metrics dict or None when that terminus could not be
+    measured (too few residues, nothing to pair); callers report None as
+    unavailable.
 
     cmp_chain, if given, is the comparison structure's chain letter when it
-    differs from `chain` (the reference's letter) -- e.g. when
-    match_chains_across_structures paired chains with different letters.
-    Defaults to `chain` for full backward compatibility.
+    differs from `chain`, as when match_chains_across_structures paired
+    chains with different letters. Defaults to `chain`.
 
-    This always computes the RAW/naive window (offset=0 on both sides) --
-    it does not apply any sequence-based correction itself. Each result's
-    "sequence_match" field carries the match_terminus_windows finding for
-    that terminus; callers that want the corrected numbers (after user
-    approval) should call recompute_terminus_metrics with that same
-    sequence_match once approved.
+    The uncorrected windows are measured (offset 0 on both sides). Each
+    result's "sequence_match" holds match_terminus_windows' finding for that
+    terminus; recompute_terminus_metrics gives the corrected numbers once a
+    correction is approved.
     """
     if cmp_chain is None:
         cmp_chain = chain
@@ -4226,11 +3910,9 @@ def compare_termini(ref_obj, cmp_obj, chain, tip_n=TERMINUS_WINDOW // 2, orienta
                                                          residue_pairs=(sequence_match or {}).get("residue_pairs"))
         local_rmsd = rmsd_detail["rmsd"] if rmsd_detail else None
 
-        # Solvent accessibility and flexibility shifts at this terminus,
-        # computed over the same TERMINUS_WINDOW-sized window as the
-        # coloring/report (ref_vecs["window_resi"]/cmp_vecs["window_resi"]),
-        # in the FULL loaded object so real burial context (other chains,
-        # ligands) is reflected -- see compute_terminus_sasa's docstring.
+        # SASA and flexibility shifts over the coloured TERMINUS_WINDOW
+        # (window_resi), in the full object so other chains and ligands count as
+        # burial (compute_terminus_sasa).
         sasa_ref = compute_terminus_sasa(ref_obj, chain, ref_vecs.get("window_resi"))
         sasa_cmp = compute_terminus_sasa(cmp_obj, cmp_chain, cmp_vecs.get("window_resi"))
         bnorm_ref = compute_terminus_bnorm(ref_obj, chain, ref_vecs.get("window_resi"))
@@ -4261,9 +3943,9 @@ def comparison_arrow_colors(index):
 
 def draw_termini_vectors(cgo_name, comparison_results, vector_length=8.0, dash_length=0.3, dash_gap=0.15,
                          shaft_radius=0.15, head_radius=0.35, comparison_index=0):
-    """Draw CGO objects visualizing terminus orientation vectors and
-    centroid-to-centroid displacement for one comparison structure's results
-    (the per-chain dict returned by compare_termini).
+    """Draw CGO arrows for terminus orientation vectors and the
+    centroid-to-centroid displacement of one comparison structure's results
+    (the per-chain dict from compare_termini).
 
     Each arrow is that structure's orientation vector (see
     compute_terminus_vectors), the overall direction of its last ten
@@ -4271,29 +3953,20 @@ def draw_termini_vectors(cgo_name, comparison_results, vector_length=8.0, dash_l
     between a reference arrow and a comparison arrow is the orientation
     change.
 
-    Color scheme:
+    Colors:
       Reference N vector: orange    Reference C vector: pink
       Comparison vectors: one pair per comparison (comparison_arrow_colors)
       Centroid displacement: dashed white line
-    (N-/C-terminus TIP RESIDUES themselves stay green/red -- that is a
-    separate, always-on coloring from apply_terminus_colors, not these
-    vectors; see the report's own legend text for the same distinction.)
+    The terminus residues themselves stay green and red
+    (apply_terminus_colors); that coloring is separate from these arrows.
 
-    Each vector is drawn as a genuine arrow (cylinder shaft + cone head,
-    matching the reference TPV-visualization snippet this was checked
-    against) rather than a plain CGO line -- a bare LINES primitive has
-    no arrowhead and reads as a thin, directionless stick regardless of
-    color, which is what this replaces.
+    Each vector is a cylinder shaft with a cone head, anchored at the
+    structure's tip centroid and drawn at a fixed length (vector_length, Å):
+    only its direction carries meaning, and at its true length, a few Å, it
+    would be hard to see.
 
-    Vectors are drawn anchored at each structure's tip centroid, scaled
-    to a fixed on-screen length (vector_length, in Å) rather than the
-    vector's raw magnitude, since vectors from a few Å of Cα atoms
-    window of Cα atoms are already short and a raw-length arrow would
-    be hard to see; only the *direction* is meaningful for this
-    visualization, not the drawn length.
-
-    Returns the CGO object name on success, or None if nothing could be
-    drawn (e.g. every chain returned None from compare_termini).
+    Returns the CGO object name, or None when nothing could be drawn (every
+    chain returned None from compare_termini).
     """
     try:
         from pymol import cgo
@@ -4306,13 +3979,9 @@ def draw_termini_vectors(cgo_name, comparison_results, vector_length=8.0, dash_l
     COLOR_DASH = (0.85, 0.85, 0.85)   # light grey/white dashed connector
 
     def _arrow_segment(origin, direction, color):
-        # A real arrow -- cylinder shaft + cone head -- not a bare CGO line.
-        # Signature against PyMOL's own CGO primitive reference (CYLINDER:
-        # x1,y1,z1, x2,y2,z2, radius, r1,g1,b1, r2,g2,b2 -- two colors for a
-        # gradient, same color used for both ends here; CONE: x1,y1,z1,
-        # x2,y2,z2, radius1, radius2, r1,g1,b1, r2,g2,b2, cap1, cap2),
-        # matching the same construction as the reference TPV-arrow snippet
-        # this was checked against.
+        # A cylinder shaft and cone head. CYLINDER: x1,y1,z1, x2,y2,z2, radius,
+        # r1,g1,b1, r2,g2,b2; CONE: x1,y1,z1, x2,y2,z2, radius1, radius2, r1,g1,b1,
+        # r2,g2,b2, cap1, cap2.
         mag = _vec_mag(direction)
         if mag == 0:
             return []
@@ -4380,12 +4049,9 @@ def draw_termini_vectors(cgo_name, comparison_results, vector_length=8.0, dash_l
             obj_data += cmp_arrow
             obj_data += _dashed_segment(metrics["reference_centroid"], metrics["comparison_centroid"], COLOR_DASH)
 
-            # An arrow pair with one arrow missing is the hard case to read: a
-            # close-up showing one arrow looks like a finished picture, so the
-            # absent one reads as a rendering fault rather than as a terminus
-            # whose orientation vector could not be measured. The warning above
-            # only fires when NOTHING at all was drawable, which is why a
-            # single missing arrow passed without comment.
+            # A pair with one arrow missing looks finished, so the missing one reads as
+            # a rendering fault rather than an orientation that could not be measured.
+            # The warning above only covers nothing being drawable.
             for label, drawn_arrow in (("reference", ref_arrow), ("comparison", cmp_arrow)):
                 if not drawn_arrow:
                     print(f"{YELLOW}No {terminus}-terminus arrow drawn for the {label} structure "
@@ -4393,14 +4059,9 @@ def draw_termini_vectors(cgo_name, comparison_results, vector_length=8.0, dash_l
                           f"direction to point in. The other arrow and the connecting line are "
                           f"unaffected.{RESET}", flush=True)
 
-    # Check the actual accumulated CGO data, not a separately-tracked flag --
-    # _arrow_segment/_dashed_segment can each legitimately return [] (e.g. a
-    # zero-magnitude orientation vector, or identical centroids), and a flag
-    # set unconditionally inside the loop would desync from whether any
-    # segment actually contributed real geometry. cmd.load_cgo([], name) does
-    # not raise, but also does not register a selectable object -- calling
-    # code must never receive a name back that isn't real, or later selections
-    # referencing it (e.g. during rendering) fail with Selector-Error.
+    # Checked on the accumulated CGO data: _arrow_segment and _dashed_segment can
+    # return [] (zero-length vector, identical centroids). load_cgo([]) creates
+    # no object, so returning its name would make later selections fail.
     if not obj_data:
         print(f"{YELLOW}TERMINI visualization skipped for '{cgo_name}': no drawable vectors "
               f"(every terminus had a zero-length orientation vector or identical centroids).{RESET}", flush=True)
@@ -4434,18 +4095,16 @@ def draw_termini_vectors(cgo_name, comparison_results, vector_length=8.0, dash_l
 def report_binding_sites(obj, ligand_info, ligand_environment=None):
     """Build the BINDING SITE INFORMATION text section.
 
-    ligand_environment, if provided, must be the return value of
-    analyze_ligand_environment(obj, ligand_info) -- passing it in avoids
-    recomputing the same PyMOL geometry twice when both the TXT report and
-    another export (HTML/CSV/JSON) need this data in the same run. If not
-    provided, it is computed here so this function still works standalone.
+    ligand_environment, if given, is the return value of
+    analyze_ligand_environment(obj, ligand_info), so the geometry is computed
+    once per run for every report format. Without it, it is computed here.
     """
     lines = []
     lines.append("BINDING SITE INFORMATION")
     lines.append("-" * 60)
-    lines.append("Nearby residues: any protein residue with an atom within 4.0 Å")
+    lines.append(f"Nearby residues: any protein residue with an atom within {LIGAND_CONTACT_CUTOFF:.1f} Å")
     lines.append("of the ligand. Possible polar atom pairs: ligand N/O atoms within")
-    lines.append("3.5 Å of protein N/O atoms. These are geometric atom pairs only and do")
+    lines.append(f"{POLAR_CONTACT_CUTOFF:.1f} Å of protein N/O atoms. These are geometric atom pairs only and do")
     lines.append("not confirm hydrogen bonds, donor/acceptor status, or specific")
     lines.append("interactions.")
     lines.append("Detailed interaction typing, such as salt bridges,")
@@ -4471,10 +4130,10 @@ def report_binding_sites(obj, ligand_info, ligand_environment=None):
         lines.append(sel_name + " (" + chain_label(lig["chain"]) + ", residue " + lig["resi"] + "):")
         if lig.get("identity_confirmed") is False:
             lines.append("  Warning: insertion code or ambiguous residue numbering detected; ligand identity and automatic naming cannot be fully confirmed.")
-        lines.append("  Nearby residues (within 4.0 Å): " + str(len(near_unique)))
+        lines.append(f"  Nearby residues (within {LIGAND_CONTACT_CUTOFF:.1f} Å): " + str(len(near_unique)))
         for r in near_unique:
             lines.append("    " + _sentence_start(chain_label(r["chain"])) + ", " + r["resn"] + r["resi"])
-        lines.append("  Possible polar atom pairs (N/O within 3.5 Å): " + str(polar_count))
+        lines.append(f"  Possible polar atom pairs (N/O within {POLAR_CONTACT_CUTOFF:.1f} Å): " + str(polar_count))
         polar_contacts = env.get("polar_contacts")
         if polar_contacts:
             for pc in polar_contacts:
@@ -4483,7 +4142,7 @@ def report_binding_sites(obj, ligand_info, ligand_environment=None):
         overlapping = env.get("overlapping_pairs") or []
         if overlapping:
             lines.append(f"  Left out: {len(overlapping)} N/O pair(s) closer than {POLAR_CONTACT_MIN_DISTANCE} Å, which no "
-                         f"real contact can be -- overlapping atom positions, usually alternative conformations the "
+                         f"real contact can be: overlapping atom positions, usually alternative conformations the "
                          f"depositor labelled with the same letter:")
             for pc in overlapping:
                 lines.append(f"    {pc['ligand_atom']} ... {pc['protein_resn']}{pc['protein_resi']} ({chain_label(pc['protein_chain'])}) "
@@ -4496,28 +4155,38 @@ def report_ions(obj, ion_info):
     lines = []
     lines.append("IONS")
     lines.append("-" * 60)
-    lines.append("Coordinating atoms: protein N/O/S atoms within 2.6 Å of the")
-    lines.append("ion (one fixed geometric cutoff for every ion; longer contacts are not counted).")
-    lines.append("")
     if not ion_info:
         lines.append("None detected.")
         lines.append("")
         return lines
+    lines.append("Coordinating atoms: protein O, His N and Cys S atoms within the distance limit for")
+    lines.append("each metal and donor, from Harding (2006), Acta Cryst D62:678-682. For O the limit")
+    lines.append("is the longest metal-oxygen distance accepted there as a bond; for His N and Cys S")
+    lines.append(f"it is the target distance plus {METAL_DONOR_TOLERANCE:.1f} Å. Water and ligand atoms are not listed.")
+    lines.append("")
 
     for ion in ion_info:
-        sel_name = ion["sel_name"]
-        coordinating = []
-        for ion_state, prot_state in conformation_pairs(sel_name, obj + " and polymer.protein"):
-            cmd.iterate("(" + prot_state + " and (elem O+N+S)) within 2.6 of (" + ion_state + ")",
-                        "coordinating.append((chain, resi, resn, name))", space={'coordinating': coordinating})
-        coord_unique = sorted(set(coordinating))
-
-        lines.append(sel_name + " (" + ion["resn"] + ", " + chain_label(ion["chain"]) + ", residue " + ion["resi"] + "):")
-        if coord_unique:
-            for c, ri, rn, an in coord_unique:
-                lines.append("    " + _sentence_start(chain_label(c)) + ", " + rn + ri + ", atom " + an)
-        else:
-            lines.append("    No coordinating protein atoms found within 2.6 Å.")
+        lines.append(ion["sel_name"] + " (" + ion["resn"] + ", " + chain_label(ion["chain"]) + ", residue " + ion["resi"] + "):")
+        metal = ion_element(ion)
+        try:
+            coordinating = metal_coordination(obj, ion)
+        except Exception as exc:  # noqa: BLE001 # one ion that cannot be measured must not end the report
+            lines.append(f"    Coordinating atoms could not be measured ({exc}).")
+            continue
+        if coordinating is None:
+            lines.append("    No reference distances for this ion (the table covers "
+                         "Na, Mg, K, Ca, Mn, Fe, Co, Cu and Zn); coordinating atoms are not listed.")
+            continue
+        limits = [f"O {METAL_OXYGEN_LIMIT[metal]:.1f} Å"]
+        limits += [f"{label} {metal_donor_limit(metal, kind):.2f} Å" for label, kind in (("His N", "histidine"), ("Cys S", "cysteine"))
+                   if metal_donor_limit(metal, kind) is not None]
+        lines.append("    Limits: " + ", ".join(limits))
+        if not coordinating:
+            lines.append("    No coordinating protein atoms within these limits.")
+        for c in coordinating:
+            target = f" (target {c['target']:.2f} Å)" if c["target"] is not None else ""
+            lines.append(f"    {_sentence_start(chain_label(c['chain']))}, {c['resn']}{c['resi']}, atom {c['atom']}, "
+                         f"{c['distance']:.2f} Å{target}")
     lines.append("")
     return lines
 
@@ -4624,14 +4293,14 @@ def report_disulfides(obj):
                 continue
             dist = ((x1 - x2) ** 2 + (y1 - y2) ** 2 + (z1 - z2) ** 2) ** 0.5
             key = tuple(sorted([(c1, r1), (c2, r2)]))
-            if dist <= 2.5 and key not in seen_pairs:
+            if dist <= DISULFIDE_CUTOFF and key not in seen_pairs:
                 seen_pairs.add(key)
                 bonds.append((c1, r1, c2, r2, dist))
     if bonds:
         for c1, r1, c2, r2, dist in bonds:
             lines.append("  Chain %s Cys%s to Chain %s Cys%s (%.2f Å)" % (c1, r1, c2, r2, dist))
     else:
-        lines.append("  None detected (no SG-SG pairs within 2.5 Å).")
+        lines.append(f"  None detected (no SG-SG pairs within {DISULFIDE_CUTOFF:.1f} Å).")
     lines.append("")
     return lines
 
@@ -4729,7 +4398,7 @@ def report_structure_validation(header_info, annotations=None):
                 value = f"{float(value):.3f}"
             except (TypeError, ValueError):
                 pass
-            kind = " -- reported as the overall R-value; the entry has no test set" if (
+            kind = "; reported as the overall R-value, since the entry has no test set" if (
                 header_key == "r_work" and (header_info or {}).get("r_work_kind") == "observed") else ""
             lines.append(f"{label}: {value} (depositor, from the file header{kind})")
         elif validation.get(rcsb_key) is not None:
@@ -4770,15 +4439,12 @@ def build_protein_information(obj, header_info, process_result, ligand_environme
     lines.append("-" * 60)
     lines.append("Experimental Method: " + format_method(header_info))
     lines.append("Resolution: " + resolution_display(header_info))
-    lines.append("Resolution classification: " + resolution_classification(header_info.get("resolution")))
+    lines.append("Resolution class: " + resolution_classification(header_info.get("resolution"), header_info.get("method")))
     lines.append("")
-    lines.append("General guide:")
-    lines.append("  < 1.5 Å : Exceptional")
-    lines.append("  1.5-2.0 Å : Excellent")
-    lines.append("  2.0-2.5 Å : Good")
-    lines.append("  2.5-3.0 Å : Moderate")
-    lines.append("  3.0 Å or more : Lower classification for atomic details")
-    lines.append("")
+    guide = resolution_guide_lines(header_info.get("method"))
+    if guide:
+        lines.extend(guide)
+        lines.append("")
 
     lines.extend(report_biological_assembly(obj, process_result["chain_list"], chain_reduction=chain_reduction,
                                             assemblies=((annotations or {}).get("file") or {}).get("assemblies"),
