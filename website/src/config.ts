@@ -25,7 +25,7 @@ const doi = '10.5281/zenodo.22928159';
 export const CONFIG = {
   name: 'Astra3',
   fullName: 'Structural Analysis Toolkit for PDB Rendering Automation',
-  version: '2.0.2',
+  version: '2.0.3',
   githubUrl,
   doi,
   doiUrl: `https://doi.org/${doi}`,
@@ -62,8 +62,20 @@ export const CONFIG = {
 
   releases: [
     {
+      version: '2.0.3',
+      date: '2026-11-25',
+      items: [
+        ['Terminus offsets', 'a residue near a terminus deposited with zero occupancy keeps its place in the offset search, so the residues after it are no longer compared one place off. Identity is counted only where both structures have an observed residue. For 2B29 and 4IPH the search now finds a shift of 5 residues at 89% instead of 4 at 70%.'],
+        ['Offset ranking', 'the offset with the most identical residues wins, ties to the smaller shift, and an offset has to compare at least eight residues, so a short overlap that matches completely no longer outranks a full window that matches better. Chain matching between entries follows the same rule.'],
+        ['Occupancy', 'an atom, and a residue by its Cα, counts as observed when its occupancy is above zero. Residues between 0 and 0.01 used to be treated as unobserved.'],
+        ['Methods text', 'gives the gap costs for overlay and termini alignments: 11 for a gap’s first residue, 1 for each further residue, terminal gaps free.'],
+        ['Overlay reports', 'give the atom pairs before outlier rejection beside the aligned atoms, in the text report and the JSON.'],
+        ['Security', 'Astra3 opens and reads files only from its output folders and the run folders inside them. Electron 43.8.1 blocks a set of compromised TLS certificates.'],
+      ],
+    },
+    {
       version: '2.0.2',
-      date: 'TBD',
+      date: '2026-11-24',
       items: [
         ['Output folder', 'Astra3 checks it when it starts and when you change it, and says when it cannot be used instead of saving somewhere else. Some Windows installs had saved results to a folder from the computer Astra3 was built on.'],
         ['Delete with files', 'an entry leaves History only once its folder is gone from disk. A folder that cannot be deleted (open in another program, or not allowed by macOS or Controlled Folder Access) stays listed with the reason.'],
