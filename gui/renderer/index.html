@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<!-- Only Astra3's own files run here. The page reaches RCSB for entry
+     pictures and the connection check, and nothing else. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.rcsb.org; font-src 'self'; connect-src https://files.rcsb.org; worker-src blob:; frame-src 'self'; base-uri 'none'; form-action 'none'" />
 <title>Astra3: Structural Analysis Toolkit</title>
 <style id="astra3-fonts">
-/* Local, vendored fonts -- see scripts/vendor-deps.sh. If renderer/vendor/
-   doesn't have these files yet (before `npm run vendor` has been run),
-   these @font-face rules simply fail to match and the --font-ui/--font-mono
-   fallback stacks in the token block below take over -- both stacks lead
-   with genuinely neutral OS-native UI fonts (San Francisco / Segoe UI), not
-   a jarring serif fallback, so degradation is graceful either way.
+/* Vendored fonts (scripts/vendor-deps.sh). Without the files in
+   renderer/vendor/, these rules do not match and the --font-ui and
+   --font-mono stacks below fall back to the system UI fonts.
  */
 @font-face {
   font-family: 'Inter';
@@ -59,43 +59,31 @@
   --accent-dim:#7344A6;
   --accent-bright:#BF98EB;
   --accent-wash: rgba(171,122,223,0.14);
-  --amber:#E8C63D;        /* running / warning -- shifted slightly toward yellow from the original orange-leaning amber */
+  --amber:#E8C63D;        /* running / warning */
   --amber-wash: rgba(232,198,61,0.12);
   --coral:#E8614F;        /* error */
   --coral-wash: rgba(232,97,79,0.12);
   --sage:#7FBF8A;         /* success */
   --sage-wash: rgba(127,191,138,0.12);
-  --violet:#6E8EE8;       /* secondary structural accent (chains/ligand tags) -- blue-leaning, distinct from the now-purple primary accent */
-  --gold:#F0C361;         /* tertiary accent -- sampled from the Astra3 logo's stars; used sparingly for "take me to the good stuff" actions like opening the real HTML report */
+  --violet:#6E8EE8;       /* secondary structural accent (chains, ligand tags): blue-leaning, distinct from the purple primary accent */
+  --gold:#F0C361;         /* tertiary accent, from the logo's stars; used sparingly, e.g. for opening the HTML report */
   --gold-bright:#FFD98A;
   --gold-wash: rgba(240,195,97,0.14);
 
-  --text-on-accent:#1E1030; /* dark purple, legible on the purple accent fill -- swaps per theme below */
-  --console-bg:#0B0D10;   /* the live console panel's own background -- deliberately distinct from bg-0 in BOTH themes: slightly darker here (a console reading as visually "deeper"/more like a terminal than the page around it), and near-white in light theme below (bg-0 there leans pale lavender, which read as an odd, slightly-off console background) */
+  --text-on-accent:#1E1030; /* dark purple, legible on the purple accent fill; set per theme */
+  --console-bg:#0B0D10;   /* the console panel's background, distinct from bg-0 in both themes: slightly darker here, near-white in the light theme */
 
   /* ===== Type ===== */
-  /* Kept specifically for tabs, nav labels, and input fields -- a
-     more formal/geometric face reads as more
-     precise for interactive controls a scientist is actively typing
-     into or navigating with, versus the general reading text around
-     them. */
+  /* Tabs, nav labels and input fields: a more geometric face for
+     controls a person types into or navigates with. */
   --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
-  /* General body/paragraph text (report content, descriptions, hints,
-     card copy). Defaults to IBM Plex Mono, a monospace face read as
-     precise and technical for this kind of structural-analysis
-     content; this is the DEFAULT starting value only, not a fixed
-     choice -- Settings -> Appearance -> "Content font" lets the person
-     pick from a wide range of bundled and system fonts, applied live
-     via this same --font-body-rounded variable (see AppProvider's own
-     effect in app.jsx). */
+  /* Body text (descriptions, hints, card copy). IBM Plex Mono by
+     default; Settings > Appearance > Content font changes it through
+     this variable (see AppProvider in app.jsx). */
   --font-body-rounded: 'IBM Plex Mono', ui-monospace, monospace;
-  /* Both Inter and Nunito are variable fonts (real weight axes, not
-     fixed static cuts), and the default browser weight (400) reads
-     thin at this app's small UI text sizes -- 500 is a real, modest
-     bump, not just a visual trick, and it's a CSS variable specifically
-     so the font picker on the Home page (see app.jsx's own
-     FontExperimentPicker) can override it live app-wide. */
+  /* 500 rather than the browser's 400, which reads thin at these text
+     sizes. A variable so the content-font setting can change it. */
   --font-weight-base: 500;
 
   /* ===== Scale ===== */
@@ -129,7 +117,7 @@
   --accent-dim:#5E3A96;
   --accent-bright:#6B3DB8;
   --accent-wash: rgba(124,79,196,0.10);
-  --amber:#9A7A1A;        /* shifted slightly toward yellow, darkened to keep the same text contrast on light backgrounds the original orange-leaning amber had */
+  --amber:#9A7A1A;        /* darkened to keep its text contrast on light backgrounds */
   --amber-wash: rgba(154,122,26,0.10);
   --coral:#C43A28;
   --coral-wash: rgba(196,58,40,0.10);
@@ -140,7 +128,7 @@
   --gold-bright:#96701F;
   --gold-wash: rgba(184,134,46,0.12);
   --text-on-accent:#FFFFFF; /* white reads correctly on the darker light-mode purple, unlike the dark theme's near-black */
-  --console-bg:#FCFCFE;   /* near-white, distinct from bg-0's pale lavender tint -- see the :root definition's own comment for why this needs to differ from bg-0 in both themes */
+  --console-bg:#FCFCFE;   /* near-white, distinct from bg-0's pale lavender tint */
 }
 
 *,*::before,*::after{box-sizing:border-box;}
@@ -156,14 +144,9 @@ body{
   -webkit-font-smoothing:antialiased;
   overflow:hidden;
 }
-/* Tabs/nav labels and every text input keep the more formal
-   --font-ui typeface (Inter) rather than the rounded body default
-   above -- interactive controls a person is
-   navigating with or actively typing into should read as precise,
-   not rounded/soft. .astra-nav-btn covers the sidebar's own page
-   tabs; input/textarea covers every text field app-wide (SegmentedControl's
-   own buttons and TextInput both render as real <input>/<button>
-   elements, so this reaches them without needing a class on each one). */
+/* Tabs, nav labels and every text input use --font-ui (Inter), not the
+   body font. .astra-nav-btn covers the sidebar; input and textarea cover
+   every text field. */
 /* Text fields carried no visible edge in the dark theme: the field
    background and the panel behind it are close enough in value that the box
    disappeared, so a form read as floating placeholder text. A hairline in
@@ -238,9 +221,8 @@ mark.astra-find-hit-current{ background:var(--accent); color:#fff; }
 @keyframes astra-cursor-blink{ 0%,49%{opacity:1;} 50%,100%{opacity:0;} }
 .astra-cursor-blink{ animation:astra-cursor-blink 1s step-end infinite; font-weight:400; }
 
-/* Slow red "breathing" pulse for a nav item with an unanswered prompt --
-   deliberately gentle (2.2s ease cycle, not a rapid blink) so it reads as
-   "there's something here whenever you're ready" rather than an alarm. */
+/* Slow red pulse for a nav item with an unanswered prompt: a 2.2 s ease
+   cycle, noticeable without reading as an alarm. */
 @keyframes astra-nav-breathe{
   0%,100%{ box-shadow:0 0 0 0 rgba(232,97,79,0.0); }
   50%{ box-shadow:0 0 0 4px rgba(232,97,79,0.16); }
@@ -263,29 +245,17 @@ mark.astra-find-hit-current{ background:var(--accent); color:#fff; }
 }
 .astra-setup-glow{ animation:astra-setup-glow 3.2s ease-in-out infinite; }
 
-/* Small, gentle twinkling stars around the PyMOL setup dialog --
-   opacity/scale pulse only (no orbital transform math), staggered per-star
-   duration/delay so they twinkle asynchronously rather than in one obvious
-   synchronized pulse, which reads as much more organic and "starlight"-like
-   than everything animating in lockstep. Kept purely decorative and
-   low-opacity so it never competes with the dialog's own actual content for
-   attention. Color is set per-star inline (see SETUP_STARS in app.jsx)
-   rather than fixed here, since the whole point is a MIX of yellow shades,
-   not one uniform color. With 12 staggered delays, that meant every star
-   appeared instantly at full brightness together, then visibly "popped"
-   down to the dim twinkle state one by one as each one's own delay elapsed,
-   exactly matching what was reported ("they all start visible and go away
-   one by one"). Fixed with two chained animations instead of one:
-   astra-star-fade-in plays once per star (its own staggered delay,
-   animation-fill-mode "both" so the star stays fully transparent for its
-   ENTIRE delay window, then holds its end state once done rather than
-   snapping back), smoothly raising opacity from 0 up to the twinkle loop's
-   own resting point. astra-star-twinkle then takes over at the exact moment
-   fade-in finishes (its own delay = the star's stagger delay plus fade-in's
-   fixed duration) and loops forever from there. Because fade-in's end state
-   and twinkle's own 0%/100% state are identical (opacity 0.2, scale 0.7),
-   the handoff between the two is seamless -- no jump at the moment
-   twinkling begins.
+/* Twinkling stars around the setup dialog: opacity and scale only, with a
+   different duration and delay per star so they do not pulse together.
+   Decorative and low-opacity. Each star's colour is set inline (SETUP_STARS
+   in app.jsx).
+
+   Two chained animations. astra-star-fade-in plays once: fill-mode "both"
+   keeps the star transparent through its stagger delay, then raises it to
+   the twinkle's resting state. astra-star-twinkle starts as fade-in ends
+   (its delay is the stagger plus fade-in's duration) and loops. Fade-in's
+   end state equals twinkle's 0%/100% state (opacity 0.2, scale 0.7), so
+   there is no jump between them.
  */
 @keyframes astra-star-fade-in{
   from{ opacity:0; transform:scale(0.4); }
@@ -318,10 +288,9 @@ mark.astra-find-hit-current{ background:var(--accent); color:#fff; }
   background:rgba(4,5,8,0.86); -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
 }
 
-/* A single "breath" (not looping, unlike astra-nav-breathe above) around
-   the whole window's edge when a real analysis finishes -- an inset
-   box-shadow so it reads as a glow along the border rather than a
-   filled overlay blocking anything underneath. */
+/* One pulse (not looping) around the window's edge when an analysis
+   finishes: an inset box-shadow, so it glows along the border without
+   covering anything. */
 @keyframes astra-completion-glow{
   0%{ box-shadow: inset 0 0 0 0 rgba(127,191,138,0); }
   30%{ box-shadow: inset 0 0 40px 6px rgba(127,191,138,0.35); }
@@ -401,24 +370,7 @@ textarea:focus{ border-color:var(--accent) !important; }
 <script src="./vendor/react-dom.production.min.js"></script>
 <script src="./vendor/3Dmol-min.js"></script>
 
-<script>
-  // Fail loudly, not silently, if scripts/vendor-deps.sh hasn't been run
-  // yet.
-  window.addEventListener("load", function () {
-    setTimeout(function () {
-      if (!window.React || !window.ReactDOM) {
-        document.getElementById("root").innerHTML =
-          '<div style="display:flex;align-items:center;justify-content:center;height:100vh;' +
-          'flex-direction:column;gap:12px;font-family:sans-serif;color:#EDEFF2;background:#0F1216;">' +
-          '<div style="font-size:16px;font-weight:600;">Astra3 could not load its interface</div>' +
-          '<div style="font-size:13px;color:#A7AFBC;max-width:420px;text-align:center;">' +
-          "Required scripts are missing from renderer/vendor/. Run " +
-          '<code style="background:#1D222A;padding:2px 6px;border-radius:4px;">scripts/vendor-deps.sh</code> ' +
-          "once (with internet access), then relaunch Astra3.</div></div>";
-      }
-    }, 800);
-  });
-</script>
+<script src="./vendor-check.js"></script>
 <script src="./app.bundle.js"></script>
 </body>
 </html>

@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<!-- A report is shown here, in a sandboxed frame, as untrusted content: its
+     scripts run, but it cannot reach the app, the network or any file.
+     What it needs from the app (its images, the clipboard, opening its
+     session) it asks for by message, and the app checks every request. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:" />
+<title>Astra3 report</title>
+<script>
+"use strict";
+(() => {
+  const app = window.parent;
+  const IMAGE_LOADS_AT_ONCE = 3;
+  const waiting = new Map();
+  let calls = 0;
+
+  const tell = (type, detail) => app.postMessage({ astra3Report: true, type, ...detail }, "*");
+  // Resolves with the app's answer, or null when it refuses the request.
+  const ask = (type, detail) => new Promise((resolve) => {
+    calls += 1;
+    waiting.set(calls, resolve);
+    tell(type, { ...detail, id: calls });
+  });
+
+  function onMessage(event) {
+    if (event.source !== app) return;
+    const message = event.data;
+    if (!message || message.astra3Report !== true) return;
+    if (message.type === "show") {
+      show(message);
+      return;
+    }
+    const resolve = waiting.get(message.id);
+    if (!resolve) return;
+    waiting.delete(message.id);
+    resolve(message.result);
+  }
+
+  function show({ html, theme }) {
+    waiting.clear();
+    document.open();
+    document.write(html);
+    document.close();
+    // document.open() removes every listener, this page's included.
+    window.addEventListener("message", onMessage);
+    applyTheme(theme);
+    wireLinks();
+    wireCopyButtons();
+    showImages();
+    addFigureButtons();
+    tell("shown");
+  }
+
+  // The report keeps its theme in localStorage, which a sandboxed page does
+  // not have. The app keeps it instead.
+  function applyTheme(theme) {
+    const root = document.documentElement;
+    if (theme === "dark") root.setAttribute("data-theme", "dark");
+    const box = document.getElementById("astra3-theme-toggle");
+    if (!box) return;
+    box.checked = root.getAttribute("data-theme") === "dark";
+    box.addEventListener("change", () => tell("theme", { dark: box.checked }));
+  }
+
+  // Session and folder links open through the app. Other links are left to
+  // the browser the app hands them to.
+  function wireLinks() {
+    document.addEventListener("click", (event) => {
+      const anchor = event.target.closest && event.target.closest("a[href]");
+      if (!anchor) return;
+      const href = anchor.getAttribute("href") || "";
+      const isFolder = anchor.hasAttribute("data-astra-folder");
+      if (!isFolder && !/\.(pse|cxs)$/i.test(href)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (isFolder) tell("openFolder");
+      else tell("openSession", { href });
+    });
+  }
+
+  // The report's Copy buttons (citation, Methods) use the web Clipboard API,
+  // which a sandboxed page is refused. Their clicks are taken here and the
+  // text is copied by the app.
+  function wireCopyButtons() {
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest && event.target.closest("#astra3-citation-copy-btn, button[data-methods-text]");
+      if (!button) return;
+      event.preventDefault();
+      event.stopPropagation();
+      let text = button.getAttribute("data-methods-text");
+      if (text === null) {
+        const source = document.getElementById("astra3-citation-text");
+        text = source ? (source.innerText || source.textContent || "") : "";
+      }
+      if (!button.dataset.label) button.dataset.label = button.textContent;
+      const label = button.dataset.label;
+      ask("copyText", { text: text.trim() }).then((copied) => {
+        button.textContent = copied ? "Copied" : "Could not copy";
+        clearTimeout(button.resetTimer);
+        button.resetTimer = setTimeout(() => { button.textContent = label; }, 1600);
+      });
+    }, true);
+  }
+
+  function addStyle(rules) {
+    const style = document.createElement("style");
+    style.textContent = rules.join("\n");
+    document.head.appendChild(style);
+  }
+
+  // The app sends each image as a reduced copy, a few at a time: decoding a
+  // whole report of full-size renders at once can exhaust the page.
+  function showImages() {
+    const refs = Array.from(document.querySelectorAll(".image-card .astra3-image-ref"))
+      .filter((ref) => ref.getAttribute("data-src"));
+    if (!refs.length) return;
+    addStyle([
+      ".astra3-image-missing{display:flex;align-items:center;justify-content:center;min-height:120px;",
+      "padding:12px;font-size:12px;color:#8e8e93;text-align:center}",
+    ]);
+
+    const queue = refs.map((ref) => {
+      const frame = document.createElement("div");
+      frame.className = "image-frame";
+      // Holds the card's shape until its image arrives (renders are 4:3).
+      frame.style.aspectRatio = "4 / 3";
+      ref.parentNode.insertBefore(frame, ref);
+      return { frame, ref };
+    });
+
+    const next = () => {
+      const job = queue.shift();
+      if (!job) return;
+      ask("image", { src: job.ref.getAttribute("data-src") }).then((uri) => {
+        if (uri) {
+          const img = document.createElement("img");
+          img.alt = job.ref.getAttribute("data-alt") || "";
+          img.onload = () => { job.frame.style.aspectRatio = ""; };
+          img.src = uri;
+          job.frame.appendChild(img);
+        } else {
+          const note = document.createElement("div");
+          note.className = "astra3-image-missing";
+          note.textContent = "Image not found in the run folder";
+          job.frame.appendChild(note);
+        }
+        next();
+      });
+    };
+    for (let i = 0; i < IMAGE_LOADS_AT_ONCE; i += 1) next();
+  }
+
+  // Image groups in a report: each .images block, with the heading and
+  // colour key that precede it (up to the previous block).
+  function imageGroups() {
+    const groups = [];
+    document.querySelectorAll("div.images").forEach((imagesEl) => {
+      const panels = Array.from(imagesEl.querySelectorAll(".image-card")).map((card) => {
+        const ref = card.querySelector(".astra3-image-ref");
+        const caption = card.querySelector(".image-caption");
+        return {
+          src: ref ? ref.getAttribute("data-src") : null,
+          label: caption ? caption.textContent.replace(/\s+/g, " ").trim() : "",
+        };
+      });
+      if (!panels.length || !panels.every((panel) => panel.src)) return;
+      let head = null;
+      let key = null;
+      for (let el = imagesEl.previousElementSibling; el && !el.classList.contains("images"); el = el.previousElementSibling) {
+        if (!key && el.classList.contains("color-key")) key = el;
+        if (el.classList.contains("img-group-head")) { head = el; break; }
+      }
+      groups.push({ imagesEl, head, figure: { panels, key: colorKeyEntries(key) } });
+    });
+    return groups;
+  }
+
+  // Colour key entries as drawn in the report: a name, an optional label
+  // ("reference"), and swatch/label pairs.
+  function colorKeyEntries(keyEl) {
+    if (!keyEl) return [];
+    return Array.from(keyEl.querySelectorAll(".key-item")).map((item) => {
+      const entry = { name: "", note: "", swatches: [] };
+      let last = null;
+      item.childNodes.forEach((node) => {
+        if (node.nodeType === 1 && node.tagName === "STRONG") entry.name = node.textContent.trim();
+        else if (node.nodeType === 1 && node.classList.contains("key-note")) entry.note = node.textContent.trim();
+        else if (node.nodeType === 1 && node.classList.contains("key-swatch")) {
+          const colour = /background(?:-color)?:\s*([^;]+)/i.exec(node.getAttribute("style") || "");
+          last = { color: colour ? colour[1].trim() : "#999999", label: "" };
+          entry.swatches.push(last);
+        } else if (node.nodeType === 3 && last && !last.label) {
+          last.label = node.textContent.trim();
+        }
+      });
+      return entry;
+    });
+  }
+
+  // Copy figure: one button per image group. The app composes the group's
+  // images and colour key into a single picture and puts it on the clipboard.
+  function addFigureButtons() {
+    const groups = imageGroups();
+    if (!groups.length) return;
+    // Grey at rest, purple while pressed and once the figure is on the
+    // clipboard, then back to grey.
+    addStyle([
+      ".astra3-copy-btn{margin-left:auto;float:right;font:inherit;font-size:11.5px;font-weight:500;letter-spacing:normal;text-transform:none;",
+      "color:#8e8e93;background:transparent;border:1px solid #c7c7cc;border-radius:6px;padding:3px 10px;cursor:pointer;",
+      "transition:color .15s,border-color .15s,background-color .15s}",
+      ".astra3-copy-btn:hover{color:#5f5f64;border-color:#a1a1a6}",
+      ".astra3-copy-btn:active,.astra3-copy-btn.is-copied{color:#8d66c2;border-color:#8d66c2;background:#f4f0fa}",
+      ".astra3-copy-btn:disabled{cursor:default}",
+      ".astra3-copy-bar{display:flex;justify-content:flex-end;margin:6px 0}",
+      "@media print{.astra3-copy-btn,.astra3-copy-bar{display:none}}",
+    ]);
+
+    groups.forEach((group) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "astra3-copy-btn";
+      const idleTitle = "Copy these images and their colour key as one picture";
+      if (group.head) {
+        group.head.appendChild(button);
+      } else {
+        const bar = document.createElement("div");
+        bar.className = "astra3-copy-bar";
+        bar.appendChild(button);
+        group.imagesEl.parentNode.insertBefore(bar, group.imagesEl);
+      }
+
+      // The app starts composing the picture as soon as the pointer or
+      // keyboard focus reaches the button, so a click usually only has to
+      // place it on the clipboard.
+      const prepare = () => tell("prepareFigure", group.figure);
+      button.addEventListener("pointerenter", prepare);
+      button.addEventListener("focus", prepare);
+
+      let resetTimer = null;
+      const display = (text, state, title, resetAfter) => {
+        button.textContent = text;
+        button.title = title;
+        button.disabled = state === "busy";
+        button.classList.toggle("is-copied", state === "copied");
+        clearTimeout(resetTimer);
+        if (resetAfter) resetTimer = setTimeout(() => display("Copy figure", "idle", idleTitle, 0), resetAfter);
+      };
+      display("Copy figure", "idle", idleTitle, 0);
+
+      button.addEventListener("click", () => {
+        display("Copying…", "busy", idleTitle, 0);
+        ask("copyFigure", group.figure).then((outcome) => {
+          if (outcome && outcome.ok) display("Copied", "copied", idleTitle, 1500);
+          else display("Could not copy", "idle", (outcome && outcome.error) || idleTitle, 5000);
+        });
+      });
+    });
+  }
+
+  window.addEventListener("message", onMessage);
+  tell("ready");
+})();
+</script>
+</head>
+<body></body>
+</html>

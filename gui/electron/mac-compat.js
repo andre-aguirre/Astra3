@@ -43,23 +43,50 @@ function electronHasShadowFix(version) {
   return false;
 }
 
+// Whether this macOS can run Intel programs on Apple silicon through Rosetta.
+// Rosetta is available up to macOS 27; from macOS 28 it remains only for
+// certain older games ("Using Intel-based apps on a Mac with Apple silicon",
+// Apple Support article 102527). macOS 27 reports Darwin 27 (27.2 is
+// Darwin 27.2.0), so macOS 28 is taken to be Darwin 28.
+const FIRST_DARWIN_WITHOUT_ROSETTA = 28;
+
+function rosettaAvailable(release) {
+  return darwinMajor(release) < FIRST_DARWIN_WITHOUT_ROSETTA;
+}
+
 // A readable explanation for a PyMOL launch failure, or null when the error
 // needs no translation.
 //
 // macOS reports "Bad CPU type in executable" as errno 86, which Node surfaces
-// as "spawn Unknown system error -86". On Apple Silicon that means the PyMOL
-// build is Intel-only and Rosetta 2 is not installed; on an Intel Mac it means
-// the PyMOL build is Apple Silicon-only.
-function describePymolLaunchError(err, pymolPath, platform, arch) {
+// as "spawn Unknown system error -86". On Apple silicon that means the PyMOL
+// build is Intel-only and Rosetta cannot run it (not installed, or no longer
+// provided by this macOS); on an Intel Mac it means the PyMOL build is
+// Apple silicon-only.
+function describePymolLaunchError(err, pymolPath, platform, arch, release) {
   if (platform !== "darwin" || !err) return null;
   const badCpu = err.errno === -86 || /(^|\D)-86(\D|$)/.test(String(err.code || "")) || /Unknown system error -86\b/.test(String(err.message || ""));
   if (!badCpu) return null;
-  if (arch === "arm64") {
-    return `The PyMOL at "${pymolPath}" is built for Intel Macs, and this Mac cannot run Intel software until Rosetta is installed. ` +
-      "Install Rosetta by running  softwareupdate --install-rosetta  in Terminal, or install a PyMOL build for Apple Silicon, then start the analysis again.";
+  if (arch !== "arm64") {
+    return `The PyMOL at "${pymolPath}" is built only for Apple silicon Macs and cannot run on this Intel Mac. ` +
+      "Install a PyMOL build for Intel Macs, then select it in Settings.";
   }
-  return `The PyMOL at "${pymolPath}" is built only for Apple Silicon Macs and cannot run on this Intel Mac. ` +
-    "Install a PyMOL build for Intel Macs, then select it in Settings.";
+  if (!rosettaAvailable(release)) {
+    return `The PyMOL at "${pymolPath}" is built for Intel Macs, which this version of macOS no longer runs. ` +
+      "Install a Universal or Apple silicon version of PyMOL, then choose it in Settings > Analysis engine.";
+  }
+  return `The PyMOL at "${pymolPath}" is built for Intel Macs, and this Mac cannot run Intel software until Rosetta is installed. ` +
+    "Install a Universal or Apple silicon version of PyMOL (macOS 28 and later will not run an Intel one), " +
+    "or install Rosetta by running  softwareupdate --install-rosetta  in Terminal, then start the analysis again.";
+}
+
+// What to tell someone whose engine is an Intel build running through
+// Rosetta, or null. machine is what the engine's own Python reports
+// (platform.machine()), so it describes the interpreter that runs Astra3's
+// code however the engine was installed or started.
+function intelEngineNotice(engineName, machine, platform, arch) {
+  if (platform !== "darwin" || arch !== "arm64" || !/^(x86_64|i386)$/i.test(String(machine || ""))) return null;
+  return `This ${engineName} is built for Intel Macs and is running through Rosetta, which macOS 28 and later will not provide. ` +
+    `Replace it with a Universal or Apple silicon version of ${engineName} before upgrading macOS.`;
 }
 
 // Recognises the output of a PyMOL too old to run Astra3 and says what is
@@ -78,4 +105,7 @@ function explainStartupFailure(output) {
     + ". Install a current PyMOL from pymol.org, then choose it in Settings > Analysis engine.";
 }
 
-module.exports = { darwinMajor, macWindowShadowAllowed, electronHasShadowFix, describePymolLaunchError, explainStartupFailure };
+module.exports = {
+  darwinMajor, macWindowShadowAllowed, electronHasShadowFix, rosettaAvailable, describePymolLaunchError, intelEngineNotice,
+  explainStartupFailure,
+};

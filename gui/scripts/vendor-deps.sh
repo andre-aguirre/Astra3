@@ -58,28 +58,13 @@ fetch "https://3Dmol.org/build/3Dmol-min.js" \
   e5b7daf4264660c6514ce0474e2d7b8dc582fb7186fa5def60b6be553b87ea4a renderer/vendor/3Dmol-min.js
 
 # ------------------------------------------------------------
-# Fonts are NOT downloaded by this script. Inter, Nunito, and IBM Plex
-# Mono (regular/medium/semibold) are committed directly into
-# renderer/vendor/ as real .woff2 files, the same way any other
-# project asset is versioned -- there is nothing for this script to
-# fetch. This used to download Inter from rsms.me and Nunito/IBM Plex
-# Mono from Google Fonts' CSS2 API (fonts.googleapis.com, which
-# redirects the actual .woff2 payload to fonts.gstatic.com) at vendor
-# time, which meant `npm run vendor` -- and by extension a machine
-# that ran it as part of first-time setup -- could fail outright with
-# "curl: (28) Failed to connect to fonts.googleapis.com port 443" on
-# a network with no outbound access, exactly the situation Astra3.app
-# itself is built to run in. Fonts don't change on every vendor run
-# the way the upstream JS libraries above might; there's no ongoing
-# reason to re-fetch them from a font CDN each time, so committing the
-# actual files removes that failure mode entirely rather than working
-# around it.
+# Fonts are not downloaded. Inter, Nunito and IBM Plex Mono (regular,
+# medium, semibold) are committed in renderer/vendor/ as .woff2 files, so
+# setting up a build needs no font service.
 #
-# If Astra3 ever needs a different weight or a new typeface, add the
-# real .woff2 file(s) to renderer/vendor/ directly (check licensing
-# and update gui/THIRD_PARTY_NOTICES.txt the same way the existing
-# fonts are documented there) and add the matching @font-face rule in
-# index.html; there is no download step to update here.
+# To add a weight or a typeface, put its .woff2 file in renderer/vendor/,
+# record its licence in gui/THIRD_PARTY_NOTICES.txt as for the others, and
+# add its @font-face rule to index.html.
 # ------------------------------------------------------------
 
 # ------------------------------------------------------------
@@ -119,6 +104,5 @@ echo ""
 echo "Done. renderer/vendor/ now contains:"
 ls -la renderer/vendor/
 echo ""
-echo "index.html's <script>/@font-face rules already point at these"
-echo "local files -- no further changes needed. Astra3.app will now"
-echo "work fully offline."
+echo "index.html already loads these local files, so Astra3 needs no"
+echo "network access to show its interface."

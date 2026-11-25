@@ -1,3 +1,4 @@
+import { runFolderForEntry, planDeletion, settleDeletion, describeProblems } from "./run-paths.js";
 const { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } = React;
 
 /* ============================================================
@@ -105,11 +106,7 @@ const Button = ({ variant = "secondary", size = "md", icon, iconRight, children,
     ghost: { background: "transparent", color: "var(--text-1)", borderColor: "transparent" },
     danger: { background: "transparent", color: "var(--coral)", borderColor: "var(--line-1)" },
     gold: { background: "var(--gold)", color: "#2B1D06", borderColor: "var(--gold)" },
-    // Solid green/red -- distinct from the existing muted "danger" variant
-    // (which stays as-is for other destructive actions elsewhere in the app)
-    // -- used specifically for y/n prompt answer buttons, where the color
-    // itself is the primary way to tell the two apart at a glance, same as
-    // the console's own colored (y/n) text.
+    // Solid green/red for y/n answer buttons, where colour is the main cue.
     confirm: { background: "var(--sage)", color: "#0A1F14", borderColor: "var(--sage)" },
     decline: { background: "var(--coral)", color: "#2A0A08", borderColor: "var(--coral)" },
   };
@@ -191,12 +188,8 @@ const TextInput = React.forwardRef(({ icon, mono, style = {}, ...props }, ref) =
       ref={ref}
       {...props}
       style={{
-        // Matches the Quick Action cards on Home: those read as clearly
-        // bounded because --bg-1 sits a step lighter than the --bg-0 page
-        // behind them, not because of their border colour. A field painted
-        // --bg-0 on a --bg-0 page has no surface contrast at all, so its
-        // hairline was the only thing separating it from the background and
-        // in the dark theme that was not enough to see.
+        // --bg-1 on the --bg-0 page, like the Home cards; a --bg-0 field has no
+        // contrast and its hairline alone is too faint in the dark theme.
         width: "100%", background: "var(--bg-1)", border: "1px solid var(--line-1)",
         borderRadius: "var(--radius-md)", color: "var(--text-0)",
         padding: icon ? "9px 10px 9px 32px" : "9px 10px",
@@ -287,12 +280,8 @@ const Tooltip = ({ text, children, align = "center", placement = "top", block = 
     : align === "left"
       ? { left: 0, transform: "none" }
       : { left: "50%", transform: "translateX(-50%)" };
-  // placement="bottom" flips the tooltip to render below its trigger instead
-  // of above, needed for anything sitting at the very top of the window (the
-  // zoom/keyboard-shortcuts/notification icons in TopBar), where "above" has
-  // nowhere to go and the tooltip was getting clipped by the window's own top
-  // edge. Default stays "top" since that's correct for every other tooltip in
-  // the app.
+  // placement="bottom" for triggers at the top of the window, where a tooltip
+  // above would be clipped.
   const placementStyle = placement === "right"
     ? { position: "fixed", left: beside ? beside.left : 0, top: beside ? beside.top : 0, transform: "translateY(-50%)" }
     : placement === "bottom"
@@ -325,32 +314,17 @@ const Tooltip = ({ text, children, align = "center", placement = "top", block = 
   );
 };
 
-// Strips ANSI/SGR color escape sequences (the "ESC [ <digits/semicolons> m"
-// form is the only one Astra3 emits) -- same regex/reasoning as
-// pymol-bridge.js's own stripAnsi. Console lines are stored RAW so ConsoleLine
-// can color each segment individually, which means anything matching on their
-// CONTENT has to strip them first. Declared here rather than down with the
-// console rendering it also serves, because the progress model below is the
-// part that breaks silently without it.
+// Strips SGR colour codes, the only escape sequences Astra3 prints. Console
+// lines are stored raw for colouring, so content matching must strip first.
 function stripAnsi(text) {
   return text.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-// Progress for ONE Astra3 run: SINGLE, OVERLAY, TERMINI, and each individual
-// item inside a BATCH queue.
+// Progress for one run (SINGLE, OVERLAY, TERMINI, or one BATCH item).
 //
-// Astra3 never reports a percentage. What it does print is a fixed sequence
-// of stage lines, in the same order every run, and one line per image as that
-// image is written. Both are used: the stage lines place the run on a coarse
-// timeline, and the image lines carry it through rendering -- the only part
-// of a run whose cost is uniform, countable, and long enough to matter.
-//
-// Every pattern below is matched against STRIPPED text. Astra3 colors nearly
-// every line it prints and `lines` holds the raw text, so "Saved
-// view_front.png" arrives with an escape code in front of the S: an anchored
-// pattern tested against the raw line matches nothing at all.
-//
-// Every literal matched here is a real print statement. See astra3.py,
+// Astra3 prints no percentage: its fixed sequence of stage lines places the run
+// coarsely, and its per-image lines carry it through rendering. Patterns match
+// stripped text and real print statements in astra3.py,
 // astra3_structure.py and astra3_render_report.py.
 
 const RENDER_FLOOR = 38;
@@ -367,19 +341,15 @@ const VIEWS_PER_RENDER = 6;
 // from that real number.
 const CLOSEUPS_PER_COMPARISON = 4;
 
-// Used ONLY to keep the bar creeping through the image currently being
-// ray-traced, before enough images have been saved to measure the real rate.
-// It never reaches a displayed time estimate: guesses drive motion,
-// measurements drive the number shown.
+// Keeps the bar moving through the first images, before a rate can be
+// measured. Never shown as a time estimate.
 const ASSUMED_IMAGE_MS = 20000;
 
 // Report/session/export work that follows the last image.
 const TAIL_MS = 4000;
 
-// `pct` is the floor the bar reaches on entering the stage. `seconds` is
-// roughly how long the stage itself lasts, used only to decide how fast the
-// bar creeps toward the next floor while inside it -- it never crosses that
-// floor, so an inaccurate figure here costs smoothness, never correctness.
+// `pct`: where the bar starts in the stage. `seconds`: roughly how long the
+// stage lasts, used only for how fast the bar creeps toward the next floor.
 const ANALYSIS_STAGES = [
   { pct: 5, seconds: 15, label: "Loading structures", test: /^(Fetching |Processing: |Starting alignment of )/ },
   { pct: 12, seconds: 12, label: "Reading chains", test: /^(Chain \S+ named |Ligand named |Ion named |N-Terminus: |C-Terminus: )/ },
@@ -413,12 +383,8 @@ function newRunScan() {
   };
 }
 
-// Applies ONE console line to a scan, in place.
-//
-// Incremental on purpose: pages append to `lines` continuously while a run is
-// going, and re-reading the whole array on every arriving line is quadratic
-// over a long BATCH. useRunScan below only ever feeds this the lines it has
-// not already seen.
+// Applies one console line to a scan, in place; incremental so a long BATCH
+// is not rescanned on every line.
 function applyRunLine(scan, entry) {
   const raw = typeof entry === "string" ? entry : (entry && entry.text) || "";
   const text = stripAnsi(raw).trim();
@@ -462,18 +428,8 @@ function applyRunLine(scan, entry) {
   if (RUN_LINE_FINISHED.test(text)) scan.finished = true;
 }
 
-function scanRunLines(lines) {
-  const scan = newRunScan();
-  for (const entry of lines || []) applyRunLine(scan, entry);
-  return scan;
-}
-
-// How many images this run will produce in total.
-//
-// A single structure and an overlay both render exactly six views, so the
-// caller can state that up front. TERMINI cannot: the close-up count depends
-// on how many chains matched and which termini exist. So the figure is
-// refined from evidence as it arrives, and can only ever grow.
+// Total images expected. SINGLE and OVERLAY render six views; TERMINI's
+// close-up count is only known as evidence arrives, so it can only grow.
 function expectedImageCount(scan, plan) {
   const announced = scan.viewImages + scan.closeupGroups * CLOSEUPS_PER_COMPARISON;
   let expected = Math.max((plan && plan.images) || 0, announced, scan.imagesSaved);
@@ -530,10 +486,8 @@ function projectRunProgress(scan, plan, now) {
       pct = 0;
       label = "Starting";
     } else {
-      // With images skipped the render stage is never reached, so it is not
-      // the next floor either -- the stage before it has to creep toward the
-      // finish instead, or a -skipimage run sits at 37% while it writes its
-      // reports and then jumps straight to done.
+      // With images skipped there is no render stage, so the previous stage creeps
+      // toward the finish instead.
       const skippingImages = !!plan && plan.images === 0;
       const lastReachable = ANALYSIS_STAGES.length - (skippingImages ? 2 : 1);
       const next = scan.stageIndex < lastReachable ? ANALYSIS_STAGES[scan.stageIndex + 1] : null;
@@ -550,10 +504,8 @@ function projectRunProgress(scan, plan, now) {
     label = "Finishing";
   }
 
-  // Only ever derived from measured image times. Before three images have
-  // been saved there is nothing to measure and no estimate is offered, which
-  // is honest -- a number invented from a stage table would be wrong by
-  // whatever the person's machine and the chosen quality happen to be.
+  // Only from measured image times, and only after three images; no estimate
+  // before that.
   let remainingMs = null;
   if (measured && !scan.finished) {
     const left = Math.max(0, expected - scan.imagesSaved);
@@ -574,18 +526,8 @@ function projectRunProgress(scan, plan, now) {
   };
 }
 
-// One-shot form: scan and project in a single call, for anything holding a
-// finished run's lines rather than a live feed.
-function analysisProgressFrom(lines, plan, now) {
-  return projectRunProgress(scanRunLines(lines), plan || {}, now || 0);
-}
-
-// What a BATCH bar should read, given the queue's statuses and how far into
-// the structure currently running the queue is (0-1).
-//
-// Cancelling marks every structure still waiting as cancelled, so counting
-// everything settled would read as a full queue however few of them actually
-// ran. Only the ones that finished count toward the bar.
+// A BATCH bar from the queue's statuses and the current item's progress
+// (0-1). Only finished structures count; cancelled ones do not.
 function batchProgressFrom(queue, itemFraction) {
   const list = queue || [];
   const total = list.length || 1;
@@ -594,9 +536,7 @@ function batchProgressFrom(queue, itemFraction) {
   const cancelled = list.filter((j) => j.status === "cancelled").length;
   const done = complete + failed;
   const fraction = Math.max(0, Math.min(0.99, itemFraction || 0));
-  // A queue stopped before anything finished has no progress to show, so
-  // it fills red and simply says so. One that got through some structures
-  // keeps them: the bar stops where it actually reached.
+  // Nothing finished: red, and says so. Otherwise the bar stops where it got.
   const value = cancelled
     ? (complete === 0 ? 100 : (complete / total) * 100)
     : Math.min(100, ((done + fraction) / total) * 100);
@@ -606,9 +546,7 @@ function batchProgressFrom(queue, itemFraction) {
     failed,
     cancelled,
     done,
-    // Amber for failures beats green at any completion level: a full bar that
-    // finished with problems is worth saying so. Red beats both -- a stopped
-    // queue is neither.
+    // Amber when any failed; red when stopped.
     tone: cancelled ? "coral" : failed ? "amber" : (done === list.length && list.length > 0) ? "sage" : "accent",
     label: cancelled
       ? (complete === 0 ? "Cancelled" : `Cancelled at ${complete} of ${list.length}`)
@@ -651,12 +589,8 @@ const ProgressBar = ({ value, tone = "accent", label, animated = false, showValu
   );
 };
 
-// A clock that ticks only while `active`.
-//
-// Astra3 prints nothing at all while an image is being ray-traced, which on
-// excellent quality is the majority of a run's wall time. Without a tick, a
-// bar derived from console lines has nothing to redraw it and stands still
-// through exactly the stretch a person is most likely to be watching it.
+// A clock that ticks while `active`, so the bar keeps moving during
+// ray-tracing, when Astra3 prints nothing.
 function useNow(active, intervalMs = 500) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -683,16 +617,9 @@ function useRunScan(lines) {
   return held.current.scan;
 }
 
-// The progress bar for one analysis run (Single Structure, Overlay, Termini).
-//
-// It owns its own ticking so that a bar moving between console lines
-// re-renders only itself, and not the live console beside it, which is the
-// expensive part of these pages.
-//
-// `outcome` is null while running, then "complete", "cancelled" or "failed".
-// Only a completion fills the bar. A cancelled or failed run freezes where it
-// actually got to and says so, because a full red bar for a run stopped at a
-// fifth of the way through claims work that was never done.
+// Progress bar for SINGLE, OVERLAY and TERMINI. It ticks itself so the
+// console beside it does not re-render. `outcome` is null while running, then
+// "complete", "cancelled" or "failed"; only completion fills the bar.
 function RunProgressBar({ lines, plan, outcome, prefix }) {
   const active = !outcome;
   const now = useNow(active);
@@ -713,10 +640,7 @@ function RunProgressBar({ lines, plan, outcome, prefix }) {
 
   return (
     <ProgressBar
-      // Only a completion fills the bar. A cancelled or failed run freezes
-      // where it actually stopped and says so in its label, which is more
-      // use than a full bar: how far it got is the one thing worth knowing
-      // about a run that did not finish.
+      // A run that did not finish shows how far it got.
       value={outcome === "complete" ? 100 : reached}
       tone={tone}
       label={label}
@@ -727,12 +651,8 @@ function RunProgressBar({ lines, plan, outcome, prefix }) {
   );
 }
 
-// The progress bar for a BATCH queue.
-//
-// Counts the structures that actually produced an outcome, plus how far the
-// one currently running has got, so the bar moves continuously instead of
-// jumping a whole structure at a time. Cancelled items count for nothing:
-// their partial output is deleted, so they produced no result to show.
+// Progress bar for a BATCH queue: finished structures plus the running one's
+// progress. Cancelled items count for nothing.
 function BatchProgressBar({ queue, itemLines, itemPlan, running, startedAt }) {
   const now = useNow(running);
   const scan = useRunScan(itemLines);
@@ -748,11 +668,7 @@ function BatchProgressBar({ queue, itemLines, itemPlan, running, startedAt }) {
   // finishes, a beat before the queue count that replaces it goes up.
   if (state.value > reachedRef.current.pct) reachedRef.current.pct = state.value;
 
-  // A queue-level estimate taken from how long the finished structures
-  // actually took -- the only rate that accounts for fetch time, prompts and
-  // the size of the structures in this particular queue. Held back until at
-  // least one whole structure has completed, so it is never extrapolated from
-  // nothing.
+  // Estimated from finished structures only, once at least one has completed.
   let hint = null;
   if (running && startedAt && state.done >= 1) {
     const perItem = (now - startedAt) / (state.done + itemFraction);
@@ -835,39 +751,23 @@ const ToastProvider = ({ children }) => {
 /* ============================================================
    BACKEND BRIDGE
    ============================================================
-   HONEST BOUNDARY: Astra3's real engine (astra3.py + friends) is an
-   interactive script meant to run *inside* a live PyMOL session via
-   `run astra3.py`, reading commands from stdin in a loop and printing
-   colored status lines to stdout. It is not an importable library or
-   a network service today.
-
-   The correct way to wrap it in a desktop app (e.g. via Electron) is:
-     1. The Electron MAIN process spawns PyMOL as a child process
-        (using the user's configured PyMOL executable path -- see the
-        Settings page) with a flag that runs Astra3's script on
-        startup, similar to what astra3.command already does.
-     2. GUI actions (Analyze, Overlay, Termini, Batch, etc.) are
-        translated into the exact same command strings a person would
-        type at the "Enter a PDB ID:" prompt -- e.g.
-        "9BOX -low -csv" or "OVERLAY 6DK3 9BOX -mmCIF" -- and written
-        to that child process's stdin. This deliberately reuses
-        Astra3's EXISTING command grammar rather than inventing a
-        second, parallel API, so the console (stdin) and the GUI
-        (buttons) can never drift out of sync with each other -- the
-        brief's own requirement that "GUI actions should update
-        console history where appropriate" falls out of this for free.
-     3. stdout is parsed line-by-line. Astra3's own print statements
-        already carry ANSI color codes and consistent phrasing
-        ("Ligand named...", "Report saved:", "Selector-Error:", the
-        homomer/sequence-identity prompts, etc.) -- these are matched
-        with a small set of regexes to drive progress state, surface
-        y/n prompts as native dialogs instead of raw stdin waits, and
-        populate the live console view.
-     4. When Astra3 prints a completed output folder path, the GUI
-        reads the HTML report / images / .pse it already generated
-        from that folder -- nothing about report generation, HTML
-        styling, or session-file format changes. This file is that
-        integration's client-side half.
+   Astra3's engine (astra3.py and its modules) is an interactive script that
+   runs inside a PyMOL session, reading commands from stdin in a loop and
+   printing coloured status lines. The desktop app drives it as follows:
+     1. The main process spawns PyMOL (the executable set in Settings) with
+        astra3.py as its startup script.
+     2. Analyze, Overlay, Termini, Batch and the rest send the same commands a
+        person would type at "Enter a PDB ID:", e.g. "9BOX -low -csv" or
+        "OVERLAY 6DK3 9BOX -mmCIF", to its stdin. One command grammar serves
+        both the console and the buttons, so console history includes runs
+        started from the interface.
+     3. stdout is parsed line by line. Astra3's phrasing ("Ligand named...",
+        "Report saved:", "Selector-Error:", the homomer and sequence-identity
+        prompts) drives progress, shows y/n prompts as dialogs, and fills the
+        live console.
+     4. When a run prints its output folder, the interface reads the HTML
+        report, images and .pse it wrote there. This file is the client side
+        of that.
 
    Outside the desktop app (a plain browser) there is no PyMOL, so
    AstraBridgeUnavailable below refuses every command with an explanation.
@@ -929,12 +829,8 @@ class AstraBridgeElectron {
         const answer = await onPrompt(state.prompt);
         window.astra3Native.pymolAnswerPrompt(answer);
       }
-      // state.prompt === null (as opposed to simply absent/undefined) is an
-      // explicit "close whatever prompt is open" signal, emitted by the main
-      // process when PyMOL exits while a prompt was pending (see pymol-
-      // bridge.js's exit handler). Without this, a page's PromptDialog stays
-      // open forever after a crash, since nothing else ever resolves the
-      // promise that's holding it open.
+      // A null prompt closes any open prompt dialog; the bridge sends it when the
+      // engine exits mid-prompt.
       if (state.prompt === null && onPromptClosed) onPromptClosed();
     });
     try {
@@ -968,75 +864,32 @@ class AstraBridgeElectron {
 const AppContext = createContext(null);
 const useApp = () => useContext(AppContext);
 
-// Path helpers that work on BOTH separators.
-//
-// Windows paths use backslashes, so walking up a path by searching only for
-// "/" would find nothing and cut characters instead of path segments. These
-// helpers accept either separator.
-//
-// Node's own path module isn't available in the renderer (no Node
-// integration), hence doing it here rather than importing it.
+// Path helpers that accept both separators; the renderer has no Node path module.
 function dirnameOf(p) {
   if (!p) return "";
   const cut = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
   return cut > 0 ? p.slice(0, cut) : "";
 }
 
-// Joins using whichever separator the base path already uses, so a Windows
-// path stays all-backslash. Windows APIs do accept forward slashes, but a
-// mixed-separator path shown in an error message or a toast looks broken to
-// the person reading it.
+// Joins with the separator the base already uses, so displayed Windows paths
+// stay all-backslash.
 function joinPath(base, ...parts) {
   if (!base) return parts.join("/");
   const sep = base.includes("\\") && !base.includes("/") ? "\\" : "/";
   return [base.replace(/[/\\]+$/, ""), ...parts].join(sep);
 }
 
-// Astra3's Python side always writes into a folder literally named
-// "Protein_outputs" beneath ASTRA3_BASE_DIR, and the GUI passes
-// dirname(outputDir) as that base. So the setting only lines up with reality
-// when it ENDS in "Protein_outputs".
-//
-// picking any other folder name silently split the app in two. Choosing
-// "...\\Documents\\Astra3_Outputs" made the base "...\\Documents", so Astra3
-// wrote everything to "...\\Documents\\Protein_outputs" while the GUI went on
-// measuring, listing and offering to clear the empty "Astra3_Outputs" folder.
-// Nothing warned about it, because from each side's own point of view
-// everything was consistent.
-//
-// Normalising here means the person picks WHERE Astra3 keeps its work and the
-// app appends the folder Astra3 actually uses, so the two can no longer
-// disagree whatever gets typed or browsed to.
-function normalizeOutputDir(dir) {
-  if (!dir) return dir;
-  const trimmed = dir.replace(/[/\\]+$/, "");
-  const sep = trimmed.includes("\\") && !trimmed.includes("/") ? "\\" : "/";
-  const base = trimmed.slice(trimmed.lastIndexOf(sep) + 1);
-  if (base.toLowerCase() === "protein_outputs") return trimmed;
-  return trimmed + sep + "Protein_outputs";
-}
-
-// Every path Astra3 prints during a run sits inside that run's own output
-// folder, and every one of those folders ends in "_Output"
-// (safe_output_dirname's own suffix, for a single structure, an OVERLAY and a
-// TERMINI comparison alike). Reading the folder back out of a printed path is
-// what makes cleaning up after a cancel possible at all: the GUI cannot
-// reconstruct these names itself -- OVERLAY and TERMINI build theirs from the
-// structure IDs in a scheme a guess has got wrong before.
-// An imported structure, registered by IMPORT and referred to by the
-// temporary id it was given.
+// An imported structure's temporary ID.
 const AST_ID_RE = /^AST-\d+$/i;
 // A wwPDB extended ID with no 4-character form. Such entries are issued in mmCIF only.
 const EXTENDED_ONLY_ID_RE = /^PDB_(?!0000)[A-Z0-9]{8}$/i;
 
 const ENGINE_NAMES = { pymol: "PyMOL", chimerax: "ChimeraX", astra3: "Astra3 Engine" };
-// The engine key for the name Astra3 prints ("Engine: Astra3 Engine v2.0.1").
+// The engine key for the name Astra3 prints ("Engine: Astra3 Engine v2.0.3").
 const engineKey = (name) => Object.keys(ENGINE_NAMES).find((k) => ENGINE_NAMES[k] === name) || "pymol";
 
-// Whether a location is the program it was entered for: a PyMOL location
-// accepts only PyMOL and a ChimeraX location only ChimeraX. Resolves to
-// { error } with the reason when it is not, or { version } (ChimeraX's, which
-// it reports without starting) when it is.
+// Whether a location holds the program it was entered for (PyMOL or ChimeraX).
+// Resolves to { error }, or for ChimeraX to { version }.
 async function checkEnginePath(engine, candidate) {
   const p = String(candidate || "").trim();
   if (!p) return { error: `Enter where ${ENGINE_NAMES[engine]} is installed.` };
@@ -1057,6 +910,8 @@ async function checkEnginePath(engine, candidate) {
 // file is read as it is, so it has no fetch format.
 const structureSourceLabel = (id, format) => (AST_ID_RE.test(String(id || "").trim()) ? "Import" : format === "cif" ? "mmCIF" : "PDB");
 
+// Lines that print a path inside the run's folder. The folder is read from
+// them because OVERLAY and TERMINI folder names cannot be rebuilt from the IDs.
 const RUN_OUTPUT_PATH_LINE = /^(?:Session saved|Report saved|Overlay report saved|HTML report saved|JSON export saved|CSV export saved|Saving images to|Structure also exported as PDB for the viewer|Structure saved as PDB fallback|Output folder):\s*(\S.*?)\s*$/;
 
 function runFolderFromLines(lines) {
@@ -1070,7 +925,7 @@ function runFolderFromLines(lines) {
     const sep = raw.includes("\\") && !raw.includes("/") ? "\\" : "/";
     const parts = raw.split(/[/\\]/);
     for (let j = parts.length - 1; j >= 0; j -= 1) {
-      if (/_Output$/i.test(parts[j])) {
+      if (/_Output(?: \(\d+\))?$/i.test(parts[j])) {
         return { parent: parts.slice(0, j).join(sep), name: parts[j] };
       }
     }
@@ -1078,22 +933,10 @@ function runFolderFromLines(lines) {
   return null;
 }
 
-// Whether a run wrote anything durable.
-//
-// A structure ID Astra3 cannot fetch or resolve writes nothing at all: it
-// prints its own error and goes back to the prompt, which at this level is
-// otherwise indistinguishable from a finished run, since the command returns
-// normally either way. Anything the run announced a path for, or any image it
-// saved, is output and makes the run a real one.
-//
-// Deliberately not narrowed to the closing "Output folder:" line. A run's
-// report, session and images are real whether or not it reached that line,
-// and a rule that recognized only the last line called a fully finished
-// single-structure analysis a failure.
-//
-// The error text is deliberately not matched either. It varies with the cause
-// (an ID that does not exist, a host that could not be reached, a fetch that
-// returned nothing) and is written to be read by a person, not parsed.
+// Whether a run wrote anything. An ID that cannot be fetched returns to the
+// prompt like a finished run but prints no path, so any announced path or
+// saved image counts as output. Error text is written for people and is not
+// parsed.
 function runProducedOutput(lines) {
   return (lines || []).some((entry) => {
     const text = stripAnsi(typeof entry === "string" ? entry : (entry && entry.text) || "").trim();
@@ -1101,21 +944,9 @@ function runProducedOutput(lines) {
   });
 }
 
-// Removes what a cancelled run left on disk.
-//
-// A run stopped part-way has written some of its output and none of the rest:
-// images with no report, a session of a half-built scene, or just the empty
-// folder it opened before it got anywhere. All of it looks like a finished
-// result until someone opens it. Nothing is kept from a cancelled run, so
-// nothing of it stays on disk either.
-//
-// For OVERLAY and TERMINI this matters more than for a single structure: the
-// output is one comparison of several structures against each other, so a
-// half-finished one is not a smaller result, it is not a result.
-//
-// `fallbackId` is only for the single-structure shape, whose folder is named
-// for the structure ID alone. It covers a cancel that landed before Astra3
-// had printed any path at all, leaving an empty folder behind.
+// Removes what a cancelled run left on disk, since a partial report or session
+// looks like a finished result. `fallbackId` names a single-structure folder
+// for a cancel that came before Astra3 printed any path.
 async function discardRunOutput(lines, fallbackId, outputDir, startedAt) {
   let target = runFolderFromLines(lines);
   if (!target && fallbackId && outputDir) {
@@ -1156,11 +987,8 @@ const DEFAULT_SETTINGS = {
   defaultFormat: "cif",
   outputDir: "~/Documents/Astra3/Protein_outputs",
   pymolPath: "",
-  // Off by default. On a first run this fires Windows' "How do you want to
-  // open this file?" chooser for an .html the person has not asked for and
-  // may not recognise -- an alarming first impression for a tool that just
-  // finished doing something they DID ask for. Anyone who finds this setting
-  // and turns it on has chosen it deliberately, and that choice persists.
+  // Off by default: on Windows, opening an .html for the first time raises a
+  // "How do you want to open this file?" chooser.
   autoOpenReport: false,
   autoOpenSession: false,
   completionSound: true,
@@ -1169,14 +997,8 @@ const DEFAULT_SETTINGS = {
   contentFont: "IBM Plex Mono",
 };
 
-// Content-font options for the Settings page's own selector below (body text,
-// card copy, descriptions -- everything on --font-body-rounded; the
-// tabs/inputs on --font-ui are a separate, fixed typeface and unaffected by
-// this). "Bundled with Astra3" are the app's own vendored, offline-guaranteed
-// files (see gui/renderer/vendor/); everything under "System fonts"
-// references a common OS font by name only, so it renders correctly if that
-// font happens to be installed and falls back gracefully (to the same bundled
-// default) if not, same as any other font-family stack.
+// Content fonts. Bundled ones work offline; system ones render when installed
+// and otherwise fall back to the bundled default.
 const CONTENT_FONT_GROUPS = [
   {
     label: "Bundled with Astra3",
@@ -1263,102 +1085,50 @@ function AppProvider({ children }) {
     try { return JSON.parse(localStorage.getItem("astra3_quickviews")) || []; }
     catch { return []; }
   });
-  // Captured once, at app startup -- used to tell apart a history entry from
-  // THIS running session (if its output folder can't be found, that's a
-  // genuine, worth-investigating problem) from one that predates this launch
-  // entirely (its files may simply have been moved, renamed, or cleaned up
-  // sometime since -- expected, not a bug). History itself is persisted
-  // across restarts (see the localStorage read/write around this same state),
-  // so old entries are always still visible by name; this only affects how
-  // their "couldn't find it" message reads when someone tries to open one.
+  // Launch time, to tell entries from this session (missing files are
+  // unexpected) from older ones (files may have been moved since).
   const sessionStartTime = useRef(Date.now()).current;
   const [consoleLog, setConsoleLog] = useState([
     { text: "Astra3: Structural Analysis Toolkit", tone: "info" },
   ]);
   const [activeJobs, setActiveJobs] = useState([]);
-  // Single global lock: PyMOL is one process that runs one command at a time
-  // (see electron/pymol-bridge.js's own single-in-flight-command guard on the
-  // real backend side) -- this mirrors that real constraint in the UI rather
-  // than inventing a GUI-only notion of concurrency. Every page/console
-  // checks this before allowing a new run, and every other page's controls
-  // grey out while it's true.
+  // One command at a time, as the engine process runs one at a time.
   const [isBusy, setIsBusy] = useState(false);
   const isBusyRef = useRef(false); // synchronous mirror of isBusy, so two near-simultaneous runAstraCommand calls can't both slip past the check before state updates land
   // Not a boolean: an incrementing "generation" so a NEW holdLock sequence
   // starting right as an old one finishes can never be confused with the old
   // one still being active.
   const holdLockGenerationRef = useRef(0);
-  // Cross-page handoff: Import's multi-select "Overlay selected" / "Termini
-  // selected" actions set this, then navigate; the Overlay/Termini pages
-  // read-and-clear it on mount to pre-populate their structure list. Kept as
-  // plain app state (not a router param) since this is a one-shot
-  // producer/consumer relationship, not a URL-shaped concept.
+  // One-shot handoff from Import's "Overlay/Termini selected" to those pages,
+  // which read and clear it on mount.
   const [pendingStructureSeed, setPendingStructureSeed] = useState(null);
-  // Tracks which page (if any) currently has an unanswered y/n prompt waiting
-  // -- PyMOL itself is genuinely blocked on stdin until this is answered (see
-  // pymol-bridge.js), so the underlying wait is real, but that doesn't mean
-  // the WHOLE APP should be visually locked behind a full-screen modal while
-  // the person decides. Sets { pageId, prompt } so any page (nav rail, top
-  // bar) can show a non-blocking indicator pointing at wherever the real
-  // prompt actually lives, rather than that page needing its own screen-
-  // covering backdrop.
+  // { pageId, prompt } while a prompt waits, so the nav rail and top bar can
+  // point to it without a blocking modal.
   const [pendingPromptPage, setPendingPromptPage] = useState(null);
-  // Bumped (to a new random value, so consecutive completions each trigger
-  // their own effect even if fired in quick succession) every time a run
-  // finishes successfully -- consumed by a single CompletionPulse component
-  // rendered once in AstraApp for the window-edge glow + optional sound, same
-  // "one global thing, fed by every page's run" pattern as
-  // prompt/pendingPromptPage above.
+  // A new random value per successful run, so back-to-back completions each
+  // trigger CompletionPulse.
   const [completionPulse, setCompletionPulse] = useState(0);
-  // Which history entry the Reports page should show.
-  //
-  // clicking a history row navigated to the Reports tab but left whatever was
-  // already selected on screen, so it showed a different structure than the
-  // one that was clicked -- with no indication that it had ignored the
-  // choice.
+  // The History entry the Reports page should show.
   const [selectedReportId, setSelectedReportId] = useState(null);
-  // Separate from selectedReportId on purpose. Both the Reports page and the
-  // 3D Viewer consume a requested selection and then clear it; sharing one
-  // value means whichever page happens to run its effect first consumes the
-  // request and the other never sees it. Two channels make the destination
-  // explicit at the call site.
+  // Separate from selectedReportId: each page consumes and clears its request,
+  // so a shared value could be consumed by the wrong page.
   const [selectedViewerId, setSelectedViewerId] = useState(null);
-  // The single, global source of truth for "PyMOL is currently blocked on
-  // input() waiting for an answer". Moved here so exactly one PromptDialog,
-  // rendered once in AstraApp, is visible and answerable from every page
-  // regardless of which page actually started the run. { text, options,
-  // allowFreeText, resolve } while a prompt is pending; null otherwise.
+  // The pending engine prompt, answered from one dialog on any page:
+  // { text, options, allowFreeText, resolve }, or null.
   const [prompt, setPrompt] = useState(null);
-  // Checked once on launch (Electron only): is the PyMOL executable
-  // configured, and was astra3.py found alongside this app? pymolPath is a
-  // real one-time user setup step; scriptOk is a resolved-automatically
-  // sanity check (astra3.py always ships next to this app) that should
-  // normally always be true. If it's false, the install itself is missing
-  // files, not something Settings can fix. null means not checked yet
-  // (Electron only checks after mount); { pymolOk, scriptOk } once checked.
-  // pymolOk now comes from verifyPymolPath(), a real fs.access X_OK check,
-  // not just "a path string exists in pymol_path.txt"; see main.js's own
-  // verifyPymolPath comment.
+  // Setup check after mount: { pymolOk, scriptOk, isFirstLaunch, ... }, or null
+  // before it runs. scriptOk false means the installation is missing astra3.py.
   const [setupStatus, setSetupStatus] = useState(null);
-  // Real OS platform ("darwin", "win32", "linux"), exposed via context so any
-  // component can render platform-appropriate text (e.g. the PyMOL path
-  // placeholder in PymolSetupDialog) without each one needing its own
-  // separate getPaths() IPC round-trip. Populated by the SAME getPaths() call
-  // the settings-correction effect below already makes, not a duplicate one.
-  // null outside Electron or before that call resolves; callers should treat
-  // null as "unknown, don't assume a specific OS."
+  // "darwin", "win32" or "linux" from getPaths(); null until it resolves.
   const [platform, setPlatform] = useState(null);
-  // The OS user-profile folder, used to render a Windows PyMOL path example
-  // the person can actually go and check. Null
-  // until getPaths() resolves, which that helper handles by falling back to a
-  // USERNAME placeholder.
+  // Home folder, for a Windows PyMOL path example; null until getPaths().
   const [homeDir, setHomeDir] = useState(null);
+  // Startup notice about the output folder, shown once by OutputLocationNotice.
+  const [outputNotice, setOutputNotice] = useState(null);
   const bridge = useMemo(() => (typeof window !== "undefined" && window.astra3Native ? new AstraBridgeElectron() : new AstraBridgeUnavailable()), []);
 
-  // The analysis engine shown in the top bar: the one analyses run with, its
-  // version as that engine last reported it, whether it is running now, and
-  // which engines this computer has. Versions are remembered per engine, so
-  // the indicator can show one before that engine has started this session.
+  // The engine shown in the top bar: which runs analyses, its last reported
+  // version (kept per engine), whether it is running, and which are installed.
   const [engineInfo, setEngineInfo] = useState(() => {
     const blank = { engine: "pymol", name: "PyMOL", version: null, running: false, error: null,
       versions: {}, available: null, none: false };
@@ -1444,31 +1214,14 @@ function AppProvider({ children }) {
     // recolour. (Windows draws a tintable overlay and does need this.)
   }, [settings.theme]);
 
-  // Applies the person's chosen content font (Settings -> Appearance) to
-  // --font-body-rounded, the same way the theme effect above applies --data-
-  // theme. This only affects body text, card copy, and descriptions; --font-
-  // ui (tabs, inputs) is a separate, fixed typeface and untouched here,
-  // so tabs stay as they are regardless of
-  // content-font choice. CONTENT_FONT_LOOKUP falling through to the raw
-  // settings.contentFont string covers a value saved by an older version of
-  // this setting that isn't in the current option list; the font-family CSS
-  // property degrades gracefully (falls through its own fallback stack)
-  // rather than breaking if that ever happens.
+  // The content font sets --font-body-rounded only; --font-ui (tabs, inputs)
+  // is fixed. A saved name no longer listed is used as a raw font-family.
   useEffect(() => {
     const family = CONTENT_FONT_LOOKUP[settings.contentFont] || settings.contentFont || CONTENT_FONT_LOOKUP[DEFAULT_SETTINGS.contentFont];
     document.documentElement.style.setProperty("--font-body-rounded", family);
   }, [settings.contentFont]);
-  // A detected path is correct on the machine it is running on, which no
-  // constant can be. See autodetectPymolPath() in main.js for the locations
-  // probed. The placeholder below is shown only when detection finds nothing.
-  // installer is Miniconda-based, so its location depends on all-users vs
-  // just-me and can be redirected at install time, and MIT IS&T's own PyMOL
-  // install documentation gives the Windows prefix as "C:\\PyMOL". A detected
-  // path is correct on the machine it's running on, which no constant can be.
-  // See autodetectPymolPath() in main.js for the locations probed. The
-  // placeholder below is only ever shown when detection finds nothing, i.e.
-  // PyMOL genuinely isn't installed in a standard spot and the person has to
-  // browse for it anyway.
+  // A detected PyMOL is right for this machine where no fixed default can be
+  // (see autodetectPymolPath in main.js).
   useEffect(() => {
     if (!isElectron) return;
     Promise.all([
@@ -1482,56 +1235,27 @@ function AppProvider({ children }) {
       // The PyMOL Astra3 uses (saved, or found where PyMOL is usually
       // installed), or blank when this computer has none.
       if ((pymolPath || "") !== settings.pymolPath) patch.pymolPath = pymolPath || "";
-      if (settings.outputDir === DEFAULT_SETTINGS.outputDir && paths.defaultOutputDir) {
-        // Taken from the main process rather than rebuilt here, so the GUI's
-        // output folder and the ASTRA3_BASE_DIR handed to PyMOL come from one
-        // definition and cannot drift apart.
-        patch.outputDir = paths.defaultOutputDir;
-      }
       if (Object.keys(patch).length > 0) updateSettings(patch);
     });
   }, [isElectron]);
 
-  // Keeps the main process's copy of the output directory (used to set
-  // ASTRA3_BASE_DIR when PyMOL is spawned -- see pymol-bridge.js) in sync
-  // with the Settings page's value. Without this, "Default output directory"
-  // would only ever affect what path strings the GUI itself builds (viewer
-  // file loads, "open output folder" buttons) while the actual Python backend
-  // kept writing wherever its own detect_base_dir() fallback chose -- a real,
-  // easy-to-miss mismatch once the two diverge. Runs on every
-  // settings.outputDir change, not just once, so an edit takes effect for
-  // PyMOL's NEXT start even if it doesn't affect a PyMOL process already
-  // running (see requiresRestart handling in the Settings page).
+  // The main process owns the output folder. The stored value is only offered
+  // as a fallback for when the main process has nothing saved.
   useEffect(() => {
-    if (!isElectron) return;
-    window.astra3Native.setOutputDir(settings.outputDir);
-  }, [isElectron, settings.outputDir]);
+    if (!isElectron || !window.astra3Native.getOutputLocation) return;
+    const remembered = settings.outputDir && settings.outputDir !== DEFAULT_SETTINGS.outputDir ? settings.outputDir : null;
+    window.astra3Native.getOutputLocation(remembered).then((location) => {
+      if (!location || !location.dir) return;
+      if (location.dir !== settings.outputDir) updateSettings({ outputDir: location.dir });
+      if (location.notice) setOutputNotice(location.notice);
+    }).catch(() => {
+      // The engine still gets the main process's folder; only the display lags.
+    });
+  }, [isElectron]);
 
-  // Validates the stored PyMOL path on every launch (not just "is a path
-  // configured," ) and distinguishes two real, differently-handled cases:
-  // isFirstLaunch (tools/pymol_path.txt has literally never been written --
-  // getPymolPath() returns nothing at all, not even a wrong value) versus an
-  // existing, previously saved path that no longer verifies (PyMOL was moved,
-  // deleted, or had its permissions changed). Both need the setup dialog, but
-  // with different wording (see PymolSetupDialog in this file) -- a first-
-  // time user should see a real welcome and explanation, while an existing
-  // user whose install broke needs a short, direct recovery message instead.
-  //
-  // Deliberately uses verifyPymolPath (the fast file-existence check) here,
-  // NOT verifyIsRealPymol (a separate, plain path-identity check -- see its
-  // own comment in main.js for why it no longer spawns anything at all).
-  // A spawn-based variant of verifyIsRealPymol was used to gate this effect
-  // and incorrectly rejected a person's own genuinely correct, working PyMOL
-  // path; spawn-based detection could not be made reliable, which is why that
-  // approach was replaced.
-  // verifyPymolPath (isFile() + X_OK) is the one check
-  // reliable enough to gate this. verifyIsRealPymol is now also a cheap,
-  // instant path check (no spawn/timeout involved anymore -- see its own
-  // comment in main.js) and is a hard requirement wherever it's used
-  // (confirm() below), but this specific effect still only needs
-  // verifyPymolPath: it's asking "is the already-saved path still usable,"
-  // not "is a brand-new candidate being actively set," which is what
-  // verifyIsRealPymol's identity check is really for.
+  // Checks the saved engine at every launch. The setup dialog opens with a
+  // welcome when nothing is set up, or a short recovery message when a saved
+  // engine no longer works.
   useEffect(() => {
     if (!isElectron) { setSetupStatus({ pymolOk: true, scriptOk: true, isFirstLaunch: false }); return; }
     let cancelled = false;
@@ -1571,12 +1295,8 @@ function AppProvider({ children }) {
     });
   }, []);
 
-  // Returns the id of the entry it created, so a caller that needs to refer
-  // back to it later can. The batch queue uses this to record exactly which
-  // runs belong to it (see batchEntryIds) rather than re-deriving that from
-  // labels and timestamps afterwards, which could and did claim other
-  // batches' runs.
-  // The engine a run used, recorded with it for the Summary cards.
+  // Returns the new entry's id; Batch records these (batchEntryIds) to know
+  // exactly which runs it produced. Each entry records the engine used.
   const engineRef = useRef(engineInfo.engine);
   useEffect(() => { engineRef.current = engineInfo.engine; }, [engineInfo.engine]);
   const addHistoryEntry = useCallback((entry) => {
@@ -1587,10 +1307,7 @@ function AppProvider({ children }) {
 
   const toggleFavorite = (id) => setHistory((h) => h.map((e) => (e.id === id ? { ...e, favorite: !e.favorite } : e)));
   const deleteHistoryEntry = (id) => setHistory((h) => h.filter((e) => e.id !== id));
-  // Clears the LIST only -- never touches files on disk. Deleting the actual
-  // output folders is a separate, explicitly-confirmed action handled by the
-  // main process (see fs:clearOutputs), so that the destructive operation and
-  // the harmless one can never be confused for each other.
+  // Clears the list only; deleting files is a separate, confirmed action.
   const clearHistory = useCallback(() => setHistory([]), []);
   // Opening the same structure again moves its entry to the top instead of
   // adding a second one. Returns the entry.
@@ -1603,28 +1320,12 @@ function AppProvider({ children }) {
   const removeQuickView = useCallback((id) => setQuickViews((list) => list.filter((e) => e.id !== id)), []);
 
   const runAstraCommand = useCallback(async (commandString, { silent = false, originPage = null, onLog: callerOnLog, holdLock = false, lockToken = null, bridgeCall = null } = {}) => {
-    // Real, fresh safety check before ANY PyMOL-dependent operation starts,
-    // not just once at app launch -- catches the exact cases described
-    // directly: PyMOL deleted, PyMOL.app moved, permissions changed, or the
-    // executable replaced/corrupted AFTER the app already launched
-    // successfully with a path that was fine at the time. Uses
-    // verifyPymolPath (the file-existence check) rather than also re-running
-    // verifyIsRealPymol's own path-identity check here: that one already ran
-    // once, deliberately, when this exact path was last set (Settings or the
-    // setup dialog's own confirm() flow), and a saved path's own string
-    // content can't silently change on its own the way file
-    // existence/permissions can -- so there's nothing new for it to catch by
-    // re-running here on every single command. On failure, updates the SAME
-    // setupStatus the dialog already watches (isFirstLaunch stays false here
-    // -- this is always a recovery case, since a command could only be
-    // attempted after setup already succeeded once) and stops before
-    // acquiring the busy lock or sending anything to a PyMOL process, so
-    // nothing half-starts.
+    // Re-checks the engine before every command, since it may have been moved
+    // or removed since launch. On failure the setup dialog reopens and nothing
+    // is started.
     if (isElectron) {
-      // Resolved again here, not just at launch: the engine may have been
-      // moved or removed since. If the one in use has gone and the other is
-      // installed, that one is used (the top bar and the console say which);
-      // only when neither is found does the setup dialog open.
+      // If the engine in use has gone, another installed one is used; the setup
+      // dialog opens only when none is found.
       const status = await refreshEngineStatus();
       if (status && !status.engine && !status.running) {
         setSetupStatus((s) => ({ pymolOk: false, scriptOk: s?.scriptOk ?? true, isFirstLaunch: false }));
@@ -1633,14 +1334,8 @@ function AppProvider({ children }) {
         throw err;
       }
     }
-    // The busy guard normally rejects any call while isBusyRef is true -- but
-    // Batch's own runQueue calls this repeatedly, back to back, for each item
-    // in its queue, deliberately keeping the lock held the ENTIRE time
-    // (holdLock:true) so no other page can jump in mid-batch. That same "lock
-    // is held" state was ALSO tripping this guard against Batch's own NEXT
-    // item -- runQueue had no way to prove "I am the one already holding this
-    // lock, let me continue" versus "a different, unrelated caller is trying
-    // to interrupt a batch in progress.
+    // Batch holds the lock across its queue (holdLock) and proves it with
+    // lockToken, so its next item is not refused as a competing caller.
     const holdsLockAlready = lockToken !== null && lockToken === holdLockGenerationRef.current;
     if (isBusyRef.current && !holdsLockAlready) {
       const err = new Error("Astra3 is already running a command. Wait for it to finish, or cancel it from the Advanced Console.");
@@ -1649,40 +1344,21 @@ function AppProvider({ children }) {
     }
     isBusyRef.current = true;
     setIsBusy(true);
-    // Cleared per command, set by cancelRun. A page cannot read its own
-    // `cancelling` state to tell whether the run it is awaiting was cancelled:
-    // that value was captured by the closure when the run STARTED, and setting
-    // the state afterwards builds a new closure for the next render, not for
-    // the call already in flight. A ref is read live. Living here rather than
-    // on each page means a cancel from the top bar or the Advanced Console
-    // counts the same as one from the page's own button.
+    // A ref, not page state: an in-flight call cannot see state set after it
+    // started. Kept here so a cancel from anywhere counts.
     cancelRequestedRef.current = false;
-    // Always recorded in the shared console log, including for "silent" runs.
-    //
-    // Batch runs pass silent:true so their output renders in the batch page's
-    // own embedded console, and that flag also suppressed the shared log --
-    // so batch runs never appeared in the Advanced Console at all. The batch
-    // console's own overflow notice literally says "Scroll up in the Advanced
-    // Console for the full session log", which was untrue for the exact runs
-    // most likely to overflow it. The two are separate views, not duplicates:
-    // the page's console shows that page's run, the Advanced Console is the
-    // whole session.
+    // Every run is logged to the session console, silent ones (Batch items)
+    // included; the page console shows only its own run.
     appendLog(commandString, "command");
     const jobId = Math.random().toString(36).slice(2);
     setActiveJobs((j) => [...j, { id: jobId, command: commandString, progress: 0, status: "running" }]);
-    // runLines is THIS call's own isolated output -- returned to the caller
-    // alongside the bridge result, so a page's embedded console can show
-    // exactly (and only) what its own run produced instead of slicing the
-    // shared, cross-page consoleLog and picking up whatever another page's
-    // command happened to print around the same time.
+    // This call's output only, for the calling page's console.
     const runLines = [];
     // The command is shown once, above. The bridge repeats it when it reaches
     // PyMOL; that copy is kept with the run's lines but not printed twice.
     let bridgeEchoSeen = false;
     const recordLine = (text, tone) => {
-      // Stamped on arrival. How long images take is measured from these,
-      // which is the only thing that makes a real time estimate possible --
-      // Astra3 itself prints no timing at all.
+      // Arrival times, for estimating how long images take.
       const entry = { text, tone, at: Date.now() };
       runLines.push(entry);
       if (tone === "command" && !bridgeEchoSeen && text === commandString) {
@@ -1690,49 +1366,31 @@ function AppProvider({ children }) {
         callerOnLog && callerOnLog(entry, runLines);
         return;
       }
-      appendLog(text, tone); // see the commandString appendLog above -- the shared log is the session log, silent or not
-      callerOnLog && callerOnLog(entry, runLines); // live stream, not just the final batch -- lets a page render output as it arrives
+      appendLog(text, tone); // the shared log is the session log, silent or not
+      callerOnLog && callerOnLog(entry, runLines); // streamed as it arrives
     };
     try {
-      // bridgeCall lets a caller swap WHICH underlying bridge method actually
-      // runs, while still going through every bit of this function's own
-      // lock/busy/log/prompt/completion machinery unchanged -- used by IMPORT
-      // (see importStructureFile below), which needs to call
-      // bridge.runImportCommand(filePath, ...) instead of
-      // bridge.runCommand(commandString, ...), but is otherwise a completely
-      // ordinary run in every other respect (same busy guard, same live
-      // console, same global prompt handling for anything it might still
-      // raise, same completion pulse eligibility). Defaults to the normal
-      // path when not given.
+      // bridgeCall replaces the bridge method (IMPORT uses runImportCommand)
+      // while keeping the lock, logging and prompt handling.
       const callFn = bridgeCall || ((cmd, opts) => bridge.runCommand(cmd, opts));
       const result = await callFn(commandString, {
         onLog: recordLine,
         onProgress: (value) => setActiveJobs((j) => j.map((job) => (job.id === jobId ? { ...job, progress: value } : job))),
-        // Global prompt handling -- see the `prompt` state declared above.
-        // Every run funnels through here regardless of which page called
-        // runAstraCommand, so the SAME PromptDialog (rendered once, in
-        // AstraApp) can see and answer a prompt no matter which page is
-        // actually visible right now, including the Advanced Console for a
-        // run started elsewhere.
+        // Prompts go to the single global dialog, whichever page is visible.
         onPrompt: (rawPrompt) => new Promise((resolve) => {
           setPrompt({ ...rawPrompt, resolve });
           if (originPage) setPendingPromptPage(originPage);
         }),
         onPromptClosed: () => {
-          // PyMOL exited while this was open (crash, etc.) -- resolve the
-          // dangling promise so nothing hangs, then close it.
+          // The engine exited while the prompt was open.
           setPrompt((p) => { p?.resolve(null); return null; });
           setPendingPromptPage((current) => (originPage && current === originPage ? null : current));
         },
       });
-      // A cancelled run resolves like any other -- see the bridge's own
-      // cancelled flag -- so it has to be recorded as what it was, or the top
-      // bar reports a completion.
+      // A cancelled run resolves like a finished one; record it as cancelled.
       const wasCancelled = result?.cancelled === true;
-      // An analysis that produced no output did not succeed either, however
-      // normally it returned. Only the analysis pages are judged this way:
-      // the Advanced Console runs helper commands like -help that produce no
-      // output folder and are not failures.
+      // An analysis that produced nothing failed. Console commands such as
+      // -help produce no output folder and are not judged this way.
       const producedOutput = runProducedOutput(runLines);
       const isAnalysis = originPage === "single" || originPage === "overlay"
         || originPage === "termini" || originPage === "batch";
@@ -1741,16 +1399,9 @@ function AppProvider({ children }) {
           : (isAnalysis && !producedOutput) ? "failed" : "complete", progress: 100 }
         : job)));
       setTimeout(() => setActiveJobs((j) => j.filter((job) => job.id !== jobId)), 2500);
-      // Celebration pulse (window-edge glow + optional sound, see
-      // CompletionPulse in AstraApp) -- only for a REAL analysis finishing on
-      // its own page (single/overlay/termini), not every arbitrary command
-      // typed in the Advanced Console, and not individual items within a
-      // Batch queue (those fire silent:true and their own per-item toasts
-      // already; the whole QUEUE finishing is a separate, deliberate trigger
-      // in BatchPage's own runQueue, not here).
-      // Not for a cancelled run, and not for one that produced nothing: the
-      // glow and the chime say "your analysis is done", which in neither case
-      // is what happened.
+      // The completion pulse is for an analysis that finished on its own page
+      // and produced output: not console commands, Batch items (the queue has
+      // its own), cancelled runs or empty runs.
       if (!wasCancelled && producedOutput && !silent
         && (originPage === "single" || originPage === "overlay" || originPage === "termini")) {
         setCompletionPulse(Math.random());
@@ -1762,19 +1413,12 @@ function AppProvider({ children }) {
       // A failed/cancelled run has the same "clear itself after a moment"
       // behavior as a completed one.
       setTimeout(() => setActiveJobs((j) => j.filter((job) => job.id !== jobId)), 2500);
-      // A command the bridge refused (PyMOL missing, still busy, exited) comes
-      // back as an error with no output of its own. Print its reason, so a
-      // command never just vanishes.
+      // A refused command has no output of its own; log the reason.
       if (e && e.message && !runLines.some((l) => l.text === e.message)) appendLog(e.message, "error");
       e.lines = runLines;
       throw e;
     } finally {
-      // holdLock=true (used by Batch, which runs several commands back to
-      // back as one logical operation) skips releasing the lock here -- the
-      // caller MUST call releaseLock() itself once its whole sequence is
-      // done, or the app stays locked forever. Without this, the per-command
-      // lock would release between each batch item, letting another page's
-      // BusyLock flicker unlocked mid-batch.
+      // With holdLock the caller releases the lock after its whole sequence.
       if (!holdLock) {
         isBusyRef.current = false;
         setIsBusy(false);
@@ -1782,10 +1426,8 @@ function AppProvider({ children }) {
     }
   }, [bridge, appendLog, refreshEngineStatus]);
 
-  // Output that arrives while no command is in flight -- the launch banner
-  // when Astra3 starts ahead of a command, or a line that lands just after a
-  // command finished -- is kept in the session log. Each command listens only
-  // for its own output, so without this those lines were dropped.
+  // Output between commands (the launch banner, late lines) still goes to the
+  // session log.
   useEffect(() => {
     if (!bridge || typeof bridge.on !== "function") return undefined;
     return bridge.on("log-line", ({ text, tone }) => {
@@ -1797,100 +1439,54 @@ function AppProvider({ children }) {
     if (isBusyRef.current) return null;
     isBusyRef.current = true;
     setIsBusy(true);
-    // Same reset as runAstraCommand's -- a queue holding the lock across
-    // several commands starts without a previous run's cancellation.
+    // A queue holding the lock starts without a previous cancellation.
     cancelRequestedRef.current = false;
-    // See runAstraCommand's own comment on lockToken -- bumping this here
-    // (not just on release) means a NEW acquireLock() call always hands out a
-    // token that's guaranteed different from whatever the previous holder
-    // had, even in a same-tick acquire/release/ acquire sequence.
+    // A new token per acquisition, so an old holder cannot pass the guard.
     holdLockGenerationRef.current += 1;
     return holdLockGenerationRef.current;
   }, []);
   const releaseLock = useCallback(() => {
     isBusyRef.current = false;
     setIsBusy(false);
-    // Invalidates the current token immediately -- any call still holding the
-    // OLD token (a bug, or a stray late call from an already-finished
-    // sequence) can no longer bypass the busy guard with it.
+    // Invalidate the token so late calls from a finished sequence are refused.
     holdLockGenerationRef.current += 1;
   }, []);
 
-  // Set by cancelRun() below and read by any multi-step sequence that loops
-  // over several runs (currently the Batch queue).
-  //
-  // cancelling during a batch killed only the structure that happened to be
-  // running. The queue loop had no idea a cancellation had been requested, so
-  // it marked that one item failed and moved straight on to the next --
-  // cancelling repeatedly just cancelled each structure in turn while the
-  // batch ran to completion.
-  //
-  // Lives here, in the provider, rather than inside BatchPage, so that EVERY
-  // cancel path stops the queue -- not just a button that happens to be on
-  // the batch page itself. A ref rather than state because a loop that is
-  // already mid-await must see the change immediately.
+  // Set by cancelRun() and read by multi-run sequences (the Batch queue), so
+  // any cancel stops the whole queue. A ref so a loop mid-await sees it at once.
   const sequenceCancelRef = useRef(false);
-  // Whether a cancel was asked for during the command currently in flight.
-  // Separate from sequenceCancelRef, which stops a whole BATCH queue and
-  // must survive between its items.
+  // A cancel requested during the command in flight. sequenceCancelRef
+  // instead stops a whole queue and persists between its items.
   const cancelRequestedRef = useRef(false);
-  // True while a multi-run sequence (the Batch queue) is looping. Lets
-  // cancelRun tell "there was nothing at all to cancel" apart from "the
-  // individual command had already finished, but the queue behind it is still
-  // going and has now been told to stop."
+  // True while a multi-run sequence loops, so cancelRun can stop the queue even
+  // between commands.
   const sequenceActiveRef = useRef(false);
 
   const cancelRun = useCallback(async () => {
     sequenceCancelRef.current = true;
     cancelRequestedRef.current = true;
-    // If a question is on screen, answer it first.
-    //
-    // while a homomer-reduction or termini prompt was waiting, Astra3 was
-    // blocked inside input() and had not reached any of its own cancellation
-    // checkpoints -- so cancelling did nothing useful and, on Windows,
-    // reported an error on top of that. Answering "n" unblocks the analysis
-    // at the safest possible point: "n" declines the optional step being
-    // offered, so nothing is modified on the way out, and Astra3 then runs on
-    // to its next check_for_cancellation() and stops there cleanly.
+    // A prompt blocks Astra3 in input(), out of reach of its cancellation
+    // checkpoints. Answering "n" declines the optional step and lets it reach
+    // the next checkpoint.
     setPrompt((p) => {
       if (p) p.resolve("n");
       return null;
     });
-    // The nav-rail "Needs input" badge is driven by pendingPromptPage, which
-    // is separate from the prompt itself. Clearing only the prompt above left
-    // the badge lit after a cancel: the question is gone, nothing is waiting,
-    // and the rail still points at a page with no prompt on it. A force-cancel
-    // can also kill the process before the bridge emits the closing state that
-    // would otherwise clear it, so this cannot rely on onPromptClosed firing.
+    // Clear the "Needs input" badge too; a force-cancel can kill the process
+    // before the bridge reports the prompt closed.
     setPendingPromptPage(null);
-    // Sends SIGINT to the PyMOL child process (see pymol-bridge.js's cancel()
-    // -- equivalent to Ctrl+C at a real terminal, which astra3_core.py's own
-    // handle_sigint()/check_for_cancellation() machinery already knows how to
-    // handle gracefully). Does not release the app lock itself -- the run's
-    // own _pendingCommand promise will reject or resolve once PyMOL actually
-    // finishes cancelling and prints its own "Ready for next" line, and the
-    // normal runAstraCommand finally-block releases the lock then, same as
-    // any other run ending.
+    // SIGINT via the bridge. The lock is released when the run itself ends.
     const result = bridge.cancel ? await bridge.cancel() : { ok: false };
-    // The bridge only knows about the single command in flight, and between
-    // queue items -- or just after one was killed -- there isn't one, so it
-    // correctly answered that IT had nothing to cancel. But the queue had
-    // still been told to stop, which is what the person actually asked for
-    // and what actually happened. Showing a failure for a cancellation that
-    // succeeded is worse than showing nothing: it teaches you not to trust
-    // the button.
+    // Between queue items no command is in flight, but the queue was told to
+    // stop, so the cancel succeeded.
     if (!result.ok && sequenceActiveRef.current) {
       return { ok: true, note: "The queue will stop after the current step." };
     }
     return result;
   }, [bridge]);
 
-  // Answers the single global pending prompt (see the `prompt` state above)
-  // -- used by the one PromptDialog rendered in AstraApp, and also directly
-  // wireable from the Advanced Console's own input so a person can type "y",
-  // "n", a chain letter, or "skip" straight into the console instead of using
-  // the dialog's buttons/field, matching how a real terminal would let you
-  // answer inline.
+  // Answers the pending prompt, from the dialog or typed in the Advanced
+  // Console.
   const answerPrompt = useCallback((answer) => {
     setPrompt((p) => { p?.resolve(answer); return null; });
     // Cleared here unconditionally on every real answer, not just the
@@ -1898,11 +1494,7 @@ function AppProvider({ children }) {
     setPendingPromptPage(null);
   }, []);
 
-  // Safety net for the same invariant: the "Needs input" badge must never be
-  // lit while nothing is actually waiting on input. Any path that clears the
-  // prompt without going through answerPrompt or cancelRun -- a crash, a
-  // process exit, a bridge error -- is covered here rather than needing to
-  // remember to clear both pieces of state itself.
+  // The "Needs input" badge must never stay lit with no prompt waiting.
   useEffect(() => {
     if (!prompt && pendingPromptPage && !isBusy) setPendingPromptPage(null);
   }, [prompt, pendingPromptPage, isBusy]);
@@ -1925,6 +1517,7 @@ function AppProvider({ children }) {
     setupStatus,
     platform,
     homeDir,
+    outputNotice, setOutputNotice,
   };
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
@@ -1952,13 +1545,8 @@ const NAV_BOTTOM = [
   { id: "citation", label: "Citation & Docs", icon: "citation" },
 ];
 
-// Network reachability, graded rather than binary.
-//
-// navigator.onLine only reports whether an interface exists, not whether
-// anything is reachable through it, so a captive portal or a dead VPN reads
-// as "online" right up until a PDB fetch fails. This times a small request to
-// the RCSB endpoint Astra3 actually downloads from, so the indicator reflects
-// the connection that matters rather than the one the OS thinks it has.
+// Network reachability, graded. navigator.onLine misses captive portals and
+// dead VPNs, so this times a small request to the RCSB host downloads use.
 const CONNECTION_PROBE_HOST = "files.rcsb.org";
 const CONNECTION_PROBE_URL = `https://${CONNECTION_PROBE_HOST}/`;
 const CONNECTION_POLL_MS = 30000;
@@ -2028,20 +1616,10 @@ function useConnectionQuality() {
   return { state, latency, refresh: probeRef.current || (() => {}) };
 }
 
-// Icon-only in the top bar, expanding on click into a panel with the detail.
-// A hover tooltip was the first attempt and it read badly: the text is long
-// enough to be clipped by the window edge, and connection detail is something
-// a person goes looking for rather than something that should appear because
-// the pointer passed over it. Same click-to-expand convention as ZoomControl
-// beside it.
-// A banner shown while a download is in flight on a connection measured as
-// slow. Structure downloads are the one step that can stall for a long time
-// with no output at all -- "Fetching 6F7R from the PDB..." is the last line
-// printed, and nothing follows until the file arrives. The console cannot
-// carry this well: a line written there stays in the transcript afterwards,
-// implying something went wrong when the download eventually succeeded. A
-// banner that appears and then disappears says the same thing without
-// leaving a trace.
+// Icon-only in the top bar; a click opens the detail (long text would clip as
+// a hover tooltip). Same convention as ZoomControl.
+// A banner while a download runs on a slow connection: downloads can stall
+// with no output, and a console line would linger after it succeeds.
 function SlowNetworkNotice({ active }) {
   const { state, latency } = useConnectionQuality();
   const slow = state === "medium" || state === "weak" || state === "offline";
@@ -2264,10 +1842,7 @@ function ConnectionIndicator() {
 function NavRail({ page, setPage, collapsed, setCollapsed }) {
   const { activeJobs, isBusy, pendingPromptPage } = useApp();
 
-  // Best-effort mapping from the raw command string of the one in-flight job
-  // back to which page most likely started it, purely for the small "running"
-  // dot in the sidebar -- doesn't affect command execution or grammar at all,
-  // just where the indicator shows up.
+  // Which page most likely started the running job, for the sidebar's dot only.
   const runningPageId = useMemo(() => {
     const job = activeJobs.find((j) => j.status === "running");
     if (!job) return null;
@@ -2275,7 +1850,7 @@ function NavRail({ page, setPage, collapsed, setCollapsed }) {
     if (cmd.startsWith("OVERLAY")) return "overlay";
     if (cmd.startsWith("TERMINI")) return "termini";
     if (cmd.startsWith("AST-")) return "import";
-    return null; // bare IDs are ambiguous between Home/Single/Batch -- no dot rather than a guess that's often wrong
+    return null; // a bare ID could be Home, Single or Batch
   }, [activeJobs]);
 
   return (
@@ -2283,13 +1858,9 @@ function NavRail({ page, setPage, collapsed, setCollapsed }) {
       width: collapsed ? 60 : 210, flexShrink: 0, background: "var(--bg-1)", borderRight: "1px solid var(--line-0)",
       display: "flex", flexDirection: "column", transition: "width 160ms ease", overflow: "hidden",
     }}>
-      {/* The window's close/minimise/zoom buttons are inlaid into the top of
-          the content area, which is directly over this sidebar. This reserves
-          the vertical space they occupy so the wordmark and the navigation
-          below it start clear of them. Only the top section is offset -- the
-          bottom group (Settings, Console, Citation, Collapse) is anchored to
-          the bottom edge and is unaffected. Doubles as the window drag
-          region, since the system title bar is hidden. */}
+      {/* The window controls are inlaid over the top of this sidebar; this keeps
+          the wordmark and navigation clear of them. Only the top section is offset.
+          Also the window drag region, since the title bar is hidden. */}
       <div style={{ height: 22, flexShrink: 0, WebkitAppRegion: "drag" }} />
       <div style={{ padding: collapsed ? "18px 0" : "18px 16px", display: "flex", alignItems: "center", justifyContent: collapsed ? "center" : "space-between", WebkitAppRegion: "drag" }}>
         <div onClick={() => setPage("home")} style={{ cursor: "pointer", WebkitAppRegion: "no-drag" }}>
@@ -2409,21 +1980,13 @@ function NotificationsPanel({ onClose }) {
   );
 }
 
-// Collapsed to a single magnifying-glass button by default; clicking it
-// expands into the real +/-/% controls, and clicking the glass again (now
-// shown highlighted/active) collapses it back -- keeps the top bar clean when
-// zoom isn't actively being adjusted, , rather than permanently showing three
-// controls that are used rarely. The keyboard shortcuts (Cmd/Ctrl +/-/0,
-// wired in AstraApp) still work regardless of whether this is expanded, so
-// collapsing it never removes functionality, only the always-visible buttons.
+// A magnifier button that expands into the zoom controls. The keyboard
+// shortcuts work either way.
 function ZoomControl({ zoomFactor, zoomIn, zoomOut, zoomReset }) {
   const [expanded, setExpanded] = useState(false);
   const containerRef = useRef(null);
 
-  // Collapse on an outside click, same convention as other click-to-expand
-  // controls in this app (e.g. the shortcuts panel) -- otherwise it would
-  // stay expanded until the person happened to click the glass icon again
-  // specifically.
+  // Collapse on an outside click.
   useEffect(() => {
     if (!expanded) return;
     const handler = (e) => {
@@ -2464,11 +2027,8 @@ function ZoomControl({ zoomFactor, zoomIn, zoomOut, zoomReset }) {
 function TopBar({ page, setPage, zoomFactor, zoomIn, zoomOut, zoomReset }) {
   const { activeJobs, isBusy, cancelRun } = useApp();
   const toast = useToast();
-  // Fullscreen auto-hide: the bar slides away and comes back when the pointer
-  // reaches the top edge, the way a browser or a video player does. Windows
-  // already hides the native window-control overlay in fullscreen, so without
-  // this the app's own bar would be the only thing left taking up space for
-  // controls that aren't there.
+  // In fullscreen the bar slides away and returns when the pointer reaches the
+  // top edge.
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [edgeHover, setEdgeHover] = useState(false);
   useEffect(() => {
@@ -2478,10 +2038,8 @@ function TopBar({ page, setPage, zoomFactor, zoomIn, zoomOut, zoomReset }) {
   }, []);
   useEffect(() => {
     if (!isFullScreen) { setEdgeHover(false); return; }
-    // A pointer listener rather than a CSS :hover on a hit strip, because the
-    // bar itself must stay visible while the pointer is ON it -- a hit strip
-    // would lose the hover the moment the bar slid down under the cursor and
-    // the two would fight each other.
+    // A pointer listener rather than :hover on a hit strip, which would lose the
+    // hover as soon as the bar slid under the cursor.
     const onMove = (e) => setEdgeHover(e.clientY <= (edgeHoverRef.current ? 56 : 4));
     window.addEventListener("pointermove", onMove);
     return () => window.removeEventListener("pointermove", onMove);
@@ -2492,10 +2050,6 @@ function TopBar({ page, setPage, zoomFactor, zoomIn, zoomOut, zoomReset }) {
   const pageTitle = [...NAV_ITEMS, ...NAV_BOTTOM].find((n) => n.id === page)?.label || "Astra3";
   const [openPanel, setOpenPanel] = useState(null); // null | "keys" | "notifications"
   const [cancelling, setCancelling] = useState(false);
-  // What the last run ended as: null while idle or running, then "complete",
-  // "cancelled" or "failed". Kept separate from `busy` so the bar can stay on
-  // screen after the run with an honest final state instead of vanishing.
-  const [runOutcome, setRunOutcome] = useState(null);
 
   useEffect(() => {
     if (!openPanel) return;
@@ -2504,10 +2058,7 @@ function TopBar({ page, setPage, zoomFactor, zoomIn, zoomOut, zoomReset }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [openPanel]);
 
-  // isBusy flips back to false (via runAstraCommand's finally-block) once the
-  // run actually ends, whether that's a normal finish, a successful cancel,
-  // or PyMOL exiting/crashing -- so cancelling only needs to reset if the app
-  // stops being busy while it was still true.
+  // isBusy clears when the run ends however it ends, which resets cancelling.
   useEffect(() => {
     if (!isBusy) setCancelling(false);
   }, [isBusy]);
@@ -2515,12 +2066,7 @@ function TopBar({ page, setPage, zoomFactor, zoomIn, zoomOut, zoomReset }) {
   const handleCancel = async () => {
     setCancelling(true);
     const result = await cancelRun();
-    // The top-bar Cancel appeared to "do nothing" during a batch: it did
-    // request the cancellation, but nothing here reported back either way,
-    // and (before cancelRun learned about queues) the bridge's own answer was
-    // a failure even when the queue really was stopping. Reporting the
-    // outcome is what makes the button feel connected to anything -- a
-    // control that gives no feedback is indistinguishable from a broken one.
+    // Report the cancel outcome so the button visibly does something.
     if (result?.ok) {
       toast.push({ tone: "neutral", title: "Cancelling", message: result.note || "Stopping the current analysis." });
     } else if (result?.error) {
@@ -2559,11 +2105,8 @@ function TopBar({ page, setPage, zoomFactor, zoomIn, zoomOut, zoomReset }) {
               </div>
             );
           }
-          // Nothing actually running anymore -- everything left in activeJobs
-          // is complete/failed, about to clear itself (see runAstraCommand's
-          // cleanup timeout). Shown briefly so finishing doesn't just
-          // silently vanish with no confirmation, without the fuller "no jobs
-          // running at all" check above ever having been true in between.
+          // All remaining jobs have finished and are about to clear; shown briefly as
+          // confirmation.
           const anyCancelled = activeJobs.some((j) => j.status === "cancelled");
           const anyFailed = activeJobs.some((j) => j.status === "failed");
           return (
@@ -2623,14 +2166,8 @@ function TopBar({ page, setPage, zoomFactor, zoomIn, zoomOut, zoomReset }) {
 function DropZone({ onFiles, accept = ".pdb,.ent,.cif,.mmcif,.pse,.gz", compact = false }) {
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef(null);
-  // Resolves each browser File object to its real absolute filesystem path
-  // (via preload's getPathForFile, see preload.js's own comment on why this
-  // must go through the preload script rather than being called directly
-  // here) before handing off to the caller -- {name, size, ext, path}
-  // objects, not raw File objects. Outside the desktop app
-  // (window.astra3Native missing) path is simply null; callers that need a
-  // real filesystem path (ImportPage) already only operate inside the desktop
-  // app to begin with.
+  // Resolves each File to { name, size, ext, path }. The path comes from the
+  // preload (webUtils) and is null outside the desktop app.
   const resolveFiles = (rawFiles) => {
     const hasPathResolver = typeof window !== "undefined" && window.astra3Native?.getPathForFile;
     return rawFiles.map((f) => ({
@@ -2683,12 +2220,8 @@ function HomePage({ setPage, openQuickAnalyze }) {
   const recent = history.slice(0, 5);
 
   const handleFiles = (files) => {
-    // Home's own drop zone does not itself import anything (this doesn't
-    // carry the actual File references across the page navigation below) --
-    // it's a shortcut to the real Import page, where the files need to be
-    // dropped again to actually register them. The toast is worded to reflect
-    // that honestly rather than implying the files themselves were already
-    // handed off anywhere.
+    // Home's drop zone only opens the Import page; the files have to be dropped
+    // there, and the toast says so.
     toast.push({ tone: "neutral", title: "Opening Import page", message: `Drop ${files.length} file(s) there to import ${files.length === 1 ? "it" : "them"}.` });
     setPage("import");
   };
@@ -2739,14 +2272,10 @@ function HomePage({ setPage, openQuickAnalyze }) {
   );
 }
 
-// Shared citation block -- exact same wording as the one already embedded in
-// every generated HTML report (see astra3_render_report.py's own citation
-// text), so the GUI and the reports it produces never disagree about how to
-// cite the software. Used both at the bottom of Home and on the Citation &
-// Docs page.
+// Same wording as the citation in every HTML report (astra3_render_report.py).
 function CitationBlock() {
   const [copied, setCopied] = useState(false);
-  const citationText = 'Aguirre, A. (2026). Astra3: Structural Analysis Toolkit for PDB Rendering Automation [Computer software]. Version 2.0.1. https://github.com/andre-aguirre/Astra3, https://doi.org/10.5281/zenodo.22928159';
+  const citationText = 'Aguirre, A. (2026). Astra3: Structural Analysis Toolkit for PDB Rendering Automation [Computer software]. Version 2.0.3. https://github.com/andre-aguirre/Astra3, https://doi.org/10.5281/zenodo.22928159';
   const copyCitation = () => {
     const write = window.astra3Native?.copyText
       ? window.astra3Native.copyText(citationText)
@@ -2761,7 +2290,7 @@ function CitationBlock() {
     <div style={{ display: "flex", alignItems: "center", gap: 10, background: "var(--bg-1)", border: "1px solid var(--line-0)", borderRadius: "var(--radius-md)", padding: "10px 12px" }}>
       <Icon name="citation" size={16} style={{ color: "var(--text-2)", flexShrink: 0 }} />
       <span className="mono" style={{ flex: 1, fontSize: 11.5, color: "var(--text-1)", wordBreak: "break-word" }}>
-        Aguirre, A. (2026). Astra3: Structural Analysis Toolkit for PDB Rendering Automation [Computer software]. Version 2.0.1.{" "}
+        Aguirre, A. (2026). Astra3: Structural Analysis Toolkit for PDB Rendering Automation [Computer software]. Version 2.0.3.{" "}
         <a href="https://github.com/andre-aguirre/Astra3" target="_blank" rel="noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>github.com/andre-aguirre/Astra3</a>,{" "}
         <a href="https://doi.org/10.5281/zenodo.22928159" target="_blank" rel="noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>doi.org/10.5281/zenodo.22928159</a>
       </span>
@@ -2775,20 +2304,14 @@ function CitationBlock() {
   );
 }
 
-// Minimal, dependency-free markdown renderer for the README viewer below --
-// covers exactly the markdown constructs README.md actually uses (headers,
-// **bold**, `inline code`, fenced code blocks, tables, horizontal rules,
-// plain paragraphs and lists), not a general-purpose markdown engine. No npm
-// package pulled in for this; the alternative (a raw, unrendered text dump of
-// a file full of "##"/"**"/"|" syntax) would be considerably harder to
-// actually read.
+// Markdown renderer for the README viewer, covering only what README.md uses:
+// headings, bold, inline and fenced code, tables, rules, paragraphs, lists.
 function renderMarkdownLite(md) {
   const lines = md.split("\n");
   const blocks = [];
   let i = 0;
   const renderInline = (text) => {
-    // Bold, inline code, and links -- split on all three patterns at once so
-    // they can appear in any order within one line.
+    // Bold, inline code and links, in any order within a line.
     const parts = [];
     let rest = text;
     const re = /(\*\*(.+?)\*\*|`(.+?)`|\[(.+?)\]\((.+?)\))/;
@@ -2873,9 +2396,7 @@ function renderMarkdownLite(md) {
       continue;
     }
     if (/^\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1])) {
-      // Header row, then the "|---|---|" separator (skipped, only used to
-      // confirm this is really a table), then data rows until a blank line or
-      // the next non-table line.
+      // Header row, the |---| separator (skipped), then rows until a non-table line.
       const splitRow = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
       const headerCells = splitRow(line);
       i += 2; // header + separator
@@ -2902,7 +2423,7 @@ function renderMarkdownLite(md) {
       continue;
     }
     if (line.trim() === "") { i++; continue; }
-    // Plain paragraph -- collect contiguous non-blank, non-special lines together
+    // Paragraph: contiguous non-blank, non-special lines.
     const paraLines = [];
     while (i < lines.length && lines[i].trim() !== "" && !/^#{1,3}\s/.test(lines[i]) && !lines[i].startsWith("```") && !/^\s*([-*]|\d+\.)\s/.test(lines[i]) && !/^>/.test(lines[i]) && !/^---+$/.test(lines[i].trim())) {
       paraLines.push(lines[i]); i++;
@@ -2915,24 +2436,13 @@ function renderMarkdownLite(md) {
 /* ============================================================
    CITATION & DOCS PAGE
    ============================================================
-   Ties together the citation block (also shown on Home), a rendered
-   view of README.md, and quick access to the license files -- all
-   read from disk via app:getDocPath + fs:readFile (see main.js's own
-   resolveDocPath, which already handles the dev-vs-packaged path
-   difference for these specific files).
+   The citation block (also on Home), README.md rendered, and the license
+   files, read through app:getDocPath and fs:readFile (main.js's
+   resolveDocPath handles development and packaged paths).
    ============================================================ */
-// Find-in-page for the rendered README.
-//
-// Built on the DOM rather than window.find(). The browser's own find selects
-// a match but says nothing about where the others are, and its selection is
-// easy to lose in a long document -- so matches are wrapped in <mark> here,
-// which makes them countable, addressable, scrollable-to, and markable in the
-// gutter. It also removes window.find()'s own trap: the search box is part of
-// the page being searched, so it always "found" whatever had just been typed
-// into it, whether or not the README contained it.
-//
-// Electron exposes no native find bar of its own, which is why this exists
-// rather than just documenting Cmd/Ctrl+F.
+// Find-in-page for the README, built on the DOM: matches are wrapped in <mark>
+// so they can be counted, scrolled to and marked in the gutter. window.find()
+// also matches the search box itself. Electron has no find bar.
 const FIND_HIT_CLASS = "astra-find-hit";
 const FIND_CURRENT_CLASS = "astra-find-hit-current";
 
@@ -2999,13 +2509,8 @@ function drawFindArrows(root, hits, currentIndex) {
   overlay.className = "astra-find-arrows";
   root.appendChild(overlay);
 
-  // One arrow per LINE, not per match. A line holding several matches -- a
-  // file path with the search term in it twice, say -- would otherwise stack
-  // identical arrows at the same offset, which reads as one smudged arrow, or
-  // as a purple one with a grey one behind it when only one of them is
-  // current. The arrow points at the line either way, so the line is the
-  // right unit; which match on it is current is already clear from the
-  // highlight itself.
+  // One arrow per line, not per match, so several matches on a line do not
+  // stack arrows; the highlight shows which match is current.
   const lines = new Map();
   hits.forEach((hit, i) => {
     const key = Math.round(hit.offsetTop);
@@ -3029,11 +2534,9 @@ function drawFindArrows(root, hits, currentIndex) {
   }
 }
 
-// Also the Advanced Console's find bar: there it opens on Cmd/Ctrl+F, closes
-// on Esc (onClose), leaves out the gutter arrows, and finds again as new
-// output arrives (contentVersion).
-// Every page stays mounted, so a page's own keyboard shortcuts check this
-// before acting: true only for the page on screen.
+// Also the Advanced Console's find bar: opens on Cmd/Ctrl+F, closes on Esc
+// (onClose), has no gutter arrows, and re-finds as output arrives
+// (contentVersion). Every page stays mounted, so shortcuts check `active`.
 const PageActiveContext = createContext(true);
 
 // Cmd+F (Ctrl+F on Windows) on the page on screen.
@@ -3068,9 +2571,7 @@ function ReadmeFindBar({ query, setQuery, status, setStatus, contentRef, placeho
     if (input) { input.focus(); input.select(); }
   };
 
-  // Cmd+F on macOS, Ctrl+F on Windows -- what anyone reading a document
-  // reaches for first. Electron gives the renderer no find bar of its own, so
-  // without this the shortcut does nothing at all.
+  // Cmd/Ctrl+F; Electron has no find bar of its own.
   useFindShortcut(focusInput);
   useEffect(() => {
     if (autoFocus) focusInput();
@@ -3318,13 +2819,8 @@ function PageScroll({ children, style }) {
   return <div style={{ flex: 1, overflowY: "auto", ...style }}>{children}</div>;
 }
 
-// Greys out and blocks pointer interaction with its contents whenever
-// something ELSE in the app is running a command -- PyMOL only runs one
-// command at a time (see AppProvider's isBusy/isBusyRef), so only one page's
-// controls should ever be interactive at once. A page's OWN in-flight run is
-// not blocked by this (that page manages its own busy/disabled states for its
-// own controls, e.g. showing a spinner on its own "Analyze" button) -- this
-// only locks out OTHER pages.
+// Greys out a page's controls while another page's command runs (one command
+// at a time). A page's own run is not blocked by this.
 function BusyLock({ active, children }) {
   return (
     <div style={{ position: "relative" }}>
@@ -3359,9 +2855,8 @@ const STATUS_META = {
   complete: { tone: "success", label: "Complete" },
   failed: { tone: "error", label: "Failed" },
   running: { tone: "warning", label: "Running" },
-  // Only a BATCH ever records one: a queue stopped part-way still
-  // finished some of its structures, and those are real results worth
-  // keeping. Amber rather than red -- it did not fail, it was stopped.
+  // Only a BATCH: a queue stopped part-way kept the structures it finished.
+  // Amber, since it was stopped rather than failed.
   cancelled: { tone: "warning", label: "Cancelled" },
 };
 
@@ -3403,10 +2898,8 @@ function HistoryRow({ entry, onToggleFavorite, onDelete, setPage, compact, sizeB
       hover
       style={{
         padding: compact ? "10px 14px" : "13px 16px", display: "flex", alignItems: "center", gap: 12,
-        // Only set when selected. Card spreads this object AFTER its own
-        // defaults, so an explicit `undefined` here does not fall back to the
-        // default -- it overwrites it, which is what silently removed the
-        // border and surface from every unselected history entry.
+        // Only set when selected: Card spreads this after its defaults, so an explicit
+        // undefined would remove the border and surface.
         ...(selected ? { border: "1px solid var(--accent)", background: "var(--bg-2)" } : {}),
       }}
       onClick={onRowClick}
@@ -3437,9 +2930,8 @@ function HistoryRow({ entry, onToggleFavorite, onDelete, setPage, compact, sizeB
         </div>
         <div style={{ fontSize: 11.5, color: "var(--text-1)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {k.label} · {historyMetaText(entry.meta)} · {timeAgo(entry.timestamp)}
-          {/* Only shown once the folder has actually been measured --
-              a run whose files were deleted, or one still being
-              measured, shows nothing rather than a misleading "0 B". */}
+          {/* Only once measured: a deleted or unmeasured run shows nothing rather than
+              "0 B". */}
           {sizeBytes > 0 ? ` · ${formatBytes(sizeBytes)}` : ""}
         </div>
       </div>
@@ -3467,22 +2959,8 @@ function HistoryRow({ entry, onToggleFavorite, onDelete, setPage, compact, sizeB
    HISTORY DONUT CHART
    ============================================================ */
 
-// A small animated donut showing the run-kind breakdown of history.
-//
-// that package pulls in @visx/shape, @visx/group, @visx/responsive,
-// @visx/pattern, @visx/gradient, d3-shape and motion, and is installed
-// through the shadcn CLI, which expects a Tailwind + components.json project
-// layout. This renderer is a single esbuild-bundled .jsx file with inline
-// styles and CSS variables -- no Tailwind, no shadcn registry, no component
-// directory -- so adopting it would mean restructuring the whole renderer and
-// adding seven runtime dependencies to draw one chart. An SVG arc is about
-// thirty lines of path maths, so this draws it directly: same look, same
-// spring-ish entry animation and hover behaviour, no new dependencies, and
-// nothing extra to keep updated or re-audit.
-//
-// Colors come from the existing theme tokens rather than the --chart-1..5
-// palette in that package's docs, so the chart matches the rest of the app in
-// both light and dark mode automatically.
+// A small animated donut of run kinds, drawn as SVG arcs to avoid a chart
+// library. Colours are theme tokens, so it follows light and dark mode.
 
 function polarPoint(cx, cy, r, angle) {
   return [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
@@ -3506,10 +2984,7 @@ function donutSlicePath(cx, cy, rOuter, rInner, startAngle, endAngle) {
 }
 
 const KIND_LABELS = { single: "Single", overlay: "Overlay", termini: "Termini", batch: "Batch" };
-// Real theme tokens only (all four are defined for both the light and dark
-// blocks in index.html), so the chart follows the app's theme automatically
-// instead of carrying its own palette that would drift out of step -- and so
-// it stays legible in both modes without a second set of colors.
+// Theme tokens defined for both themes in index.html.
 const KIND_COLORS = {
   single: "var(--accent)",
   overlay: "var(--violet)",
@@ -3537,7 +3012,7 @@ function HistoryDonut({ history, totalBytes, folderBytesByKind }) {
   const total = history.length;
   if (total === 0) return null;
 
-  const size = 132; // deliberately small -- this is a glance-level summary beside the list, not the subject of the page
+  const size = 132;
   const cx = size / 2;
   const cy = size / 2;
   const rOuter = 58;
@@ -3630,39 +3105,98 @@ function HistoryDonut({ history, totalBytes, folderBytesByKind }) {
   );
 }
 
+// The output folder History's figures describe, and earlier folders that still
+// hold listed runs. Opened from a small folder button beside the size.
+function OutputFolderInfo({ current, others }) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointer = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  if (!current) return null;
+  const row = (dir, detail) => (
+    <div key={dir} style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="mono" style={{ fontSize: 11, color: "var(--text-0)" }}>
+          {dir.split(/(?<=[/\\])/).map((part, i) => <React.Fragment key={i}>{part}<wbr /></React.Fragment>)}
+        </div>
+        {detail && <div style={{ fontSize: 11, color: "var(--text-2)", marginTop: 2 }}>{detail}</div>}
+      </div>
+      <Button variant="secondary" size="sm" onClick={() => window.astra3Native?.openPath(dir)}>Open</Button>
+    </div>
+  );
+  return (
+    <span ref={boxRef} style={{ position: "relative", display: "inline-flex", verticalAlign: "middle" }}>
+      <button
+        type="button"
+        title={current}
+        aria-label="Output folder details"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        style={{ display: "inline-flex", marginLeft: 4, padding: 2, border: 0, background: "none", cursor: "pointer", color: open || others.length ? "var(--text-1)" : "var(--text-2)" }}
+      >
+        <Icon name="folder" size={12} />
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-label="Output folders"
+          style={{
+            position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 30, width: 380, maxWidth: "70vw", padding: "10px 12px 12px",
+            background: "var(--bg-1)", border: "1px solid var(--line-1)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-md)", textAlign: "left",
+          }}
+        >
+          <div style={{ fontSize: 11, color: "var(--text-2)", letterSpacing: 0.3 }}>Sizes are for this output folder</div>
+          {row(current)}
+          {others.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, color: "var(--text-2)", letterSpacing: 0.3, marginTop: 12 }}>Runs in History saved in other folders</div>
+              {others.map((o) => row(o.dir, `${o.runs} ${o.runs === 1 ? "run" : "runs"}${o.bytes ? ` · ${formatBytes(o.bytes)}` : ""}`))}
+            </>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function HistoryPage({ setPage }) {
   const { history, toggleFavorite, deleteHistoryEntry, clearHistory, settings, isElectron, isBusy } = useApp();
   const toast = useToast();
   const [query, setQuery] = useState("");
   const [filterKind, setFilterKind] = useState("all");
   const [favOnly, setFavOnly] = useState(false);
-  // { total, folders: { <folderName>: bytes } } from the main process.
+  // The output folder in use: { outputDir, total, byPath }.
   const [usage, setUsage] = useState(null);
+  // Each listed run's folder size, wherever it was saved.
+  const [runSizes, setRunSizes] = useState({});
   const [confirming, setConfirming] = useState(null); // "history" | "everything" | "selected" | "selectedFiles" | null
   const [working, setWorking] = useState(false);
-  // Selection mode. Off by default so the ordinary case -- click a run, open
-  // its report -- keeps working exactly as before; turning it on changes what
-  // a row click means, which is why it is explicit rather than implied by
-  // holding a modifier key.
+  // Selection mode changes what a row click does, so it is an explicit toggle.
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
 
-  // Measured on mount and after a clear, rather than continuously: walking
-  // the outputs tree touches real disk, and these figures only change when a
-  // run finishes or files are removed.
+  const entryFolders = useMemo(() => [...new Set(history.map(runFolderForEntry).filter(Boolean))], [history]);
+  // Measured on demand rather than continuously, since it walks the disk.
   const refreshUsage = useCallback(() => {
-    if (!isElectron || !settings.outputDir) return;
-    window.astra3Native.outputUsage(settings.outputDir)
+    if (!isElectron) return;
+    window.astra3Native.outputUsage()
       .then(setUsage)
-      .catch(() => setUsage(null)); // a failed measurement just means no size figures, never a broken page
-  }, [isElectron, settings.outputDir]);
-  // the measurement ran only when the page first mounted. If the History page
-  // was already mounted when a run finished -- or when the output folder was
-  // changed and then used -- the figure it captured never updated, so it kept
-  // reporting a folder that "doesn't exist yet" long after the first run had
-  // created it and filled it. Re-measuring when the history count changes
-  // covers a run finishing; the focus listener covers files being added or
-  // deleted outside the app.
+      .catch(() => setUsage(null));
+    window.astra3Native.runSizes(entryFolders)
+      .then((sizes) => setRunSizes(sizes || {}))
+      .catch(() => setRunSizes({}));
+  }, [isElectron, settings.outputDir, entryFolders]);
+  // Re-measured when a run is added and when the window regains focus, since
+  // files may change outside the app.
   useEffect(() => { refreshUsage(); }, [refreshUsage, history.length]);
   // A run starting while the confirmation is open would otherwise let it be
   // accepted mid-analysis, which is the exact situation the guard above
@@ -3674,20 +3208,11 @@ function HistoryPage({ setPage }) {
     return () => window.removeEventListener("focus", onFocus);
   }, [refreshUsage]);
 
-  // Maps a history entry to its folder's measured size. The output folder
-  // name is derived from the path Astra3 itself printed (see
-  // resolveRealOutputFolder), so this matches on the real folder name rather
-  // than guessing it from the run's display label.
   const sizeForEntry = useCallback((entry) => {
-    if (!usage || !usage.folders) return 0;
-    const source = entry.reportPath || entry.sessionPath;
-    if (!source) return 0;
-    // reportPath sits directly in the run folder; sessionPath is one level
-    // deeper (inside Session/).
-    const runFolder = entry.reportPath ? dirnameOf(source) : dirnameOf(dirnameOf(source));
-    const name = runFolder.slice(Math.max(runFolder.lastIndexOf("/"), runFolder.lastIndexOf("\\")) + 1);
-    return usage.folders[name] || 0;
-  }, [usage]);
+    const folder = runFolderForEntry(entry);
+    if (!folder) return 0;
+    return runSizes[folder] ?? usage?.byPath?.[folder] ?? 0;
+  }, [usage, runSizes]);
 
   const bytesByKind = {};
   for (const h of history) {
@@ -3710,11 +3235,8 @@ function HistoryPage({ setPage }) {
     });
   }, []);
 
-  // Entries currently selected, and the figures that describe them. The
-  // summary above the list switches to these while a selection exists, so the
-  // wheel, the size and the delete buttons all describe the same set of runs
-  // the buttons would act on -- rather than the buttons applying to a subset
-  // while the numbers still describe everything.
+  // While a selection exists, the summary describes it, matching what the
+  // delete buttons act on.
   const selectedEntries = history.filter((h) => selectedIds.has(h.id));
   const hasSelection = selectMode && selectedEntries.length > 0;
   const selectedBytes = selectedEntries.reduce((sum, h) => sum + sizeForEntry(h), 0);
@@ -3724,38 +3246,20 @@ function HistoryPage({ setPage }) {
     if (size) selectedBytesByKind[h.kind] = (selectedBytesByKind[h.kind] || 0) + size;
   }
 
-  // The on-disk folder name for an entry, derived exactly the way sizeForEntry
-  // derives it, so what gets deleted is what was measured.
-  const folderNameForEntry = useCallback((entry) => {
-    const source = entry.reportPath || entry.sessionPath;
-    if (!source) return null;
-    const runFolder = entry.reportPath ? dirnameOf(source) : dirnameOf(dirnameOf(source));
-    return runFolder.slice(Math.max(runFolder.lastIndexOf("/"), runFolder.lastIndexOf("\\")) + 1) || null;
-  }, []);
-
-  // Why a size figure can't be trusted, if it can't. Kept separate from the
-  // measurement itself so the reason can be shown to the person rather than
-  // collapsing every failure into a meaningless "0 B". Only ONE situation is
-  // worth interrupting the page for: results are being written somewhere the
-  // app isn't looking, which silently breaks opening reports, sizes and
-  // clearing. Everything else -- an empty folder, a folder not created yet, a
-  // history whose files were deleted -- is an ordinary state that speaks for
-  // itself, and the size simply reads blank rather than showing a useless "0
-  // B" or a paragraph of explanation where a number should be.
-  let storageProblem = null;
-  if (usage && usage.exists && usage.total === 0 && history.length > 0) {
-    // History says runs happened, but nothing is on disk where the app is
-    // looking. Either the files were deleted, or -- the case that actually
-    // bit -- the app is pointed at a different folder than the one Astra3
-    // wrote to. The most recent entry knows where its own report really went,
-    // so the mismatch can be named exactly instead of guessed at.
-    const recent = history.find((h) => h.reportPath || h.sessionPath);
-    const realFolder = recent ? dirnameOf(recent.reportPath || dirnameOf(recent.sessionPath)) : null;
-    const settingRoot = (settings.outputDir || "").toLowerCase();
-    if (realFolder && !realFolder.toLowerCase().startsWith(settingRoot)) {
-      storageProblem = `Astra3 is writing to a different folder than the one configured here.\n\nConfigured: ${settings.outputDir}\nActually used: ${dirnameOf(realFolder)}\n\nUpdate the output folder in Settings to match, then restart Astra3.`;
+  // Folders other than the one in use that still hold listed runs.
+  const currentOutputDir = usage?.outputDir || settings.outputDir || "";
+  const otherFolders = useMemo(() => {
+    const byDir = new Map();
+    for (const folder of entryFolders) {
+      const dir = dirnameOf(folder);
+      if (!dir || dir.toLowerCase() === currentOutputDir.toLowerCase()) continue;
+      const o = byDir.get(dir) || { dir, runs: 0, bytes: 0 };
+      o.runs += 1;
+      o.bytes += runSizes[folder] || 0;
+      byDir.set(dir, o);
     }
-  }
+    return [...byDir.values()];
+  }, [entryFolders, runSizes, currentOutputDir]);
 
   const filtered = history.filter((h) => {
     if (favOnly && !h.favorite) return false;
@@ -3782,30 +3286,44 @@ function HistoryPage({ setPage }) {
     });
   };
 
+  // Entries leave History only when their folder was deleted; the rest stay
+  // and the toast gives the reason.
+  const deleteWithFiles = async (entries, everything) => {
+    const plan = planDeletion(entries, history);
+    const result = everything
+      ? await window.astra3Native.clearOutputs(plan.folders)
+      : await window.astra3Native.deleteRuns(plan.folders);
+    if (result && result.error) {
+      toast.push({ tone: "error", title: "Could not delete files", message: result.error });
+      return;
+    }
+    const { removedIds, problems } = settleDeletion(plan, (result && result.results) || []);
+    for (const id of removedIds) deleteHistoryEntry(id);
+    const freed = formatBytes((result && result.freed) || 0);
+    const removed = removedIds.length;
+    if (problems.length === 0) {
+      toast.push({
+        tone: "success",
+        title: everything ? "History and files cleared" : `${removed} ${removed === 1 ? "run" : "runs"} deleted`,
+        message: `${freed} freed from disk.`,
+      });
+      return;
+    }
+    const kept = new Set(problems.flatMap((p) => p.ids)).size;
+    toast.push({
+      tone: removed > 0 ? "warning" : "error",
+      title: removed > 0
+        ? `Deleted ${removed} ${removed === 1 ? "run" : "runs"} (${freed} freed); ${kept} kept`
+        : `Nothing was deleted; ${kept} ${kept === 1 ? "run" : "runs"} kept`,
+      message: `${describeProblems(problems, history)}\n\n${kept === 1 ? "It stays" : "They stay"} in History. Delete from list removes ${kept === 1 ? "it" : "them"} without touching any files.`,
+      duration: 12000,
+    });
+  };
+
   const doDeleteSelectedWithFiles = async () => {
     setWorking(true);
     try {
-      const folders = selectedEntries.map(folderNameForEntry).filter(Boolean);
-      const result = await window.astra3Native.deleteRunFolders(settings.outputDir, folders);
-      if (!result.ok && result.error) {
-        // History is deliberately left intact when the delete was refused
-        // outright: dropping the entries would leave folders on disk with
-        // nothing in the app pointing at them.
-        toast.push({ tone: "error", title: "Could not delete files", message: result.error });
-        return;
-      }
-      const count = selectedEntries.length;
-      for (const h of selectedEntries) deleteHistoryEntry(h.id);
-      const freed = formatBytes(result.freed || 0);
-      if (result.failures && result.failures.length > 0) {
-        toast.push({
-          tone: "warning",
-          title: `Removed ${count} ${count === 1 ? "entry" : "entries"} (${freed} freed)`,
-          message: `${result.failures.length} item(s) could not be deleted, usually because a file is still open in another program:\n${result.failures.slice(0, 3).join("\n")}`,
-        });
-      } else {
-        toast.push({ tone: "success", title: `${count} ${count === 1 ? "run" : "runs"} deleted`, message: `${freed} freed from disk.` });
-      }
+      await deleteWithFiles(selectedEntries, false);
       exitSelectMode();
     } catch (e) {
       toast.push({ tone: "error", title: "Could not delete files", message: e?.message || "Something went wrong while deleting the selected run folders." });
@@ -3824,27 +3342,7 @@ function HistoryPage({ setPage }) {
     }
     setWorking(true);
     try {
-      const result = await window.astra3Native.clearOutputs(settings.outputDir);
-      if (!result.ok && result.error) {
-        // A refusal from the main process's safety checks, or an unreadable
-        // folder. History is deliberately NOT cleared in this case --
-        // removing the list of runs while their files are still on disk would
-        // leave orphaned folders with nothing left in the app pointing at
-        // them.
-        toast.push({ tone: "error", title: "Could not delete files", message: result.error });
-        return;
-      }
-      clearHistory();
-      const freed = formatBytes(result.freed || 0);
-      if (result.failures && result.failures.length > 0) {
-        toast.push({
-          tone: "warning",
-          title: `Cleared ${result.deleted} folder${result.deleted === 1 ? "" : "s"} (${freed} freed)`,
-          message: `${result.failures.length} item(s) could not be deleted, usually because a file is still open in another program:\n${result.failures.slice(0, 3).join("\n")}`,
-        });
-      } else {
-        toast.push({ tone: "success", title: "History and files cleared", message: `${freed} freed from disk.` });
-      }
+      await deleteWithFiles(history, true);
     } catch (e) {
       toast.push({ tone: "error", title: "Could not delete files", message: e?.message || "Something went wrong while deleting the output folders." });
     } finally {
@@ -3870,29 +3368,17 @@ function HistoryPage({ setPage }) {
                   {hasSelection
                     ? `${selectedEntries.length} of ${history.length} selected`
                     : "Output folder"}
+                  <OutputFolderInfo current={currentOutputDir} others={otherFolders} />
                 </div>
-                {/* A bare "0 B" is shown ONLY when that is actually true
-                    and believable. Each of those cases now says what is
-                    wrong instead of showing a number that isn't meaningful.
-                  */}
                 <div style={{ fontSize: 17, fontWeight: 600, color: "var(--text-0)", fontVariantNumeric: "tabular-nums" }}>
                   {hasSelection
                     ? (selectedBytes > 0 ? formatBytes(selectedBytes) : "")
                     : (usage && usage.total > 0 ? formatBytes(usage.total) : "")}
                 </div>
               </div>
-              {storageProblem && (
-                <div style={{ fontSize: 11, color: "var(--amber)", maxWidth: 340, textAlign: "right", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
-                  {storageProblem}
-                </div>
-              )}
-              {/* Both actions are unavailable while an analysis is running.
-                  Deleting the run folders out from under PyMOL leaves it
-                  writing into directories that no longer exist, and clearing
-                  the list mid-run discards the entry the in-flight run is
-                  about to complete -- so the run appears to vanish and its
-                  output is orphaned. The reason is stated rather than the
-                  buttons simply being dead. */}
+              {/* Both are unavailable while an analysis runs: deleting folders under the
+                  engine leaves it writing into missing directories, and clearing the list
+                  drops the entry the run is about to complete. The reason is shown. */}
               {isBusy && (
                 <div style={{ fontSize: 11, color: "var(--amber)", textAlign: "right", maxWidth: 300, lineHeight: 1.5 }}>
                   An analysis is running. Clearing is unavailable until it finishes, so its output isn't deleted mid-write.
@@ -3969,10 +3455,9 @@ function HistoryPage({ setPage }) {
                 all be gone. Every other run is left untouched. This cannot be undone.</>
               ) : (
                 <>This permanently deletes every run folder inside{" "}
-                <span className="mono" style={{ color: "var(--text-0)" }}>{settings.outputDir}</span>
-                <span className="mono" style={{ color: "var(--text-0)" }}>{settings.outputDir}</span>
-                {usage ? `, freeing ${formatBytes(usage.total)}` : ""}. Images, reports, JSON exports and sessions
-                will all be gone. This cannot be undone.</>
+                <span className="mono" style={{ color: "var(--text-0)" }}>{settings.outputDir}</span>, and the
+                folder of every run listed here{usage ? `, freeing at least ${formatBytes(usage.total)}` : ""}. Images,
+                reports, JSON exports and sessions will all be gone. This cannot be undone.</>
               )}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
@@ -4011,11 +3496,7 @@ function HistoryPage({ setPage }) {
         </div>
 
         {filtered.length === 0 ? (
-          // Distinguishes an empty history from one that is merely filtered.
-          // "No matching analyses" was shown for both, so a stray active
-          // filter looked identical to having no history at all -- with the
-          // summary above simultaneously reporting a non-zero count, which
-          // reads as the page contradicting itself.
+          // An empty history, or one hidden by the filters.
           history.length === 0 ? (
             <EmptyState icon="history" title="No analyses yet" description="Runs you complete will be listed here." />
           ) : (
@@ -4023,7 +3504,7 @@ function HistoryPage({ setPage }) {
               <EmptyState
                 icon="history"
                 title={`All ${history.length} ${history.length === 1 ? "analysis is" : "analyses are"} hidden by the filters above`}
-                description="Your history is intact -- the search box, kind filter, or Favorites toggle is excluding everything."
+                description="Your history is intact; the search box, kind filter or Favorites toggle is hiding every entry."
               />
               <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
                 <Button variant="secondary" icon="refresh" onClick={() => { setQuery(""); setFilterKind("all"); setFavOnly(false); }}>
@@ -4058,32 +3539,12 @@ function HistoryPage({ setPage }) {
    SUMMARY: 3D carousel of recent structures
    ============================================================ */
 
-// Built with CSS 3D transforms rather than a second WebGL context.
-//
-// Three.js is vendored with this project, so a WebGL implementation was
-// available. Two reasons this does not use it:
-//
-//   1. The 3D Viewer already owns a live WebGL context via 3Dmol.js, and
-//      every page stays permanently mounted (pages toggle with display:none
-//      rather than unmounting). A second context created and destroyed as
-//      the user moves between tabs is a GPU-memory leak risk over a long
-//      session. CSS transforms have no context to leak.
-//   2. The layout is flat panels rotated in 3D: perspective, rotateY, scale,
-//      depth and opacity. CSS provides all of these natively and is
-//      GPU-composited, giving the same motion at far less complexity.
-//
-// The panels are the ray-traced renders Astra3 has already produced
-// (Images/view_front.png), so the gallery shows real output rather than a
-// re-render of it.
+// CSS 3D transforms rather than a second WebGL context: the 3D Viewer already
+// holds one, pages stay mounted, and a context created per visit risks leaking
+// GPU memory. The panels are the run's own renders (Images/view_front.png).
 
-// A sparse starfield for the Summary backdrop, reusing the same twinkle
-// animation as the PyMOL setup screen so it reads as the same app.
-//
-// Positions are deliberately kept to the outer edges and the upper band:
-// the centre is where the carousel sits and the lower-left is the info
-// block, and stars behind either would compete with the thing you're
-// actually meant to be reading. Fixed positions rather than random ones so
-// the layout is stable across renders and can be checked by eye once.
+// A sparse starfield, the same twinkle as the setup screen. Fixed positions
+// around the edges and top, clear of the carousel and the info block.
 const SUMMARY_STARS = [
   { top: "12%", left: "7%", size: 3, duration: 3.4, delay: 0.2 },
   { top: "22%", left: "17%", size: 2, duration: 2.8, delay: 1.1 },
@@ -4116,22 +3577,10 @@ function SummaryStars() {
   );
 }
 
-// Chooses the two images a Summary card shows, from whatever a run actually
-// produced.
-//
-// Runs do not all render the same set: a single-structure run writes six
-// named orientations, a TERMINI run writes terminus close-ups whose names
-// follow a different scheme entirely, and a -skipimage run writes none. Any
-// rule that names specific files works for one of those and silently
-// misbehaves for the others -- asking for "view_back" when it does not exist
-// falls back to the same file as the front, which is why flipping a TERMINI
-// card showed the identical photo on both faces.
-//
-// Instead: prefer a recognisable front view if one exists, otherwise take the
-// first image; then take the best DISTINCT second image, preferring an
-// opposing view. The two are compared by filename, so a card can never end up
-// showing one image twice, and a run with a single image simply has no flip.
-// This holds for one image or a hundred.
+// The two images a Summary card shows. Runs render different sets (six named
+// views, TERMINI close-ups, or none), so: a front view if present, else the
+// first image, then a distinct second (an opposing view if possible). One
+// image means no flip.
 const PREFERRED_FRONT = [/view_front\.png$/i, /front/i];
 const PREFERRED_BACK = [/view_back\.png$/i, /back/i, /view_right\.png$/i, /view_left\.png$/i];
 
@@ -4163,7 +3612,7 @@ function describeView(filename) {
 }
 
 const SUMMARY_SPACING = 300; // px between neighbouring items along X
-const SUMMARY_MAX_VISIBLE = 4; // items rendered either side of centre -- beyond this they're invisible anyway
+const SUMMARY_MAX_VISIBLE = 4; // either side of centre
 // The card's real layout size. Deliberately the size the ACTIVE card is shown
 // at, because of the blur fix below.
 const SUMMARY_CARD_W = 340;
@@ -4180,21 +3629,14 @@ function summaryItemTransform(offset) {
   // rotating past a sensible angle.
   const z = -Math.min(abs, 3) * 130;
   const rotateY = Math.max(-52, Math.min(52, -offset * 34));
-  // A CSS transform scales the card's already-rasterised compositing layer,
-  // so everything in it -- the image AND the text -- gets magnified from a
-  // smaller bitmap and comes out soft.
-  //
-  // The card is now LAID OUT at its full focal size and the centre sits at
-  // exactly scale 1, so it's rasterised at its true resolution and stays
-  // pixel-crisp. Only the neighbours scale down, and downscaling doesn't blur
-  // the way upscaling does.
+  // The centre card is laid out at full size (scale 1) so it rasterises
+  // sharply; only neighbours scale down. Scaling up a layer blurs it.
   const scale = Math.max(0.5, 1 - abs * 0.2);
   const opacity = abs > SUMMARY_MAX_VISIBLE ? 0 : Math.max(0.18, 1 - abs * 0.34);
   return { x, z, rotateY, scale, opacity };
 }
 
-// Joins a list of codes for display, capping the length and marking that more
-// exist rather than silently stopping at five.
+// Unique codes for display, up to max, with an ellipsis when there are more.
 function summarizeCodes(codes, max = 4) {
   const unique = [...new Set(codes.filter(Boolean))];
   if (unique.length === 0) return "";
@@ -4206,8 +3648,8 @@ function summarizeCodes(codes, max = 4) {
 const SUMMARY_MAX_FACTS = 4;
 
 // What kind of run an entry was, as the Summary panel's headline. Batch
-// membership is read from the batch's own record of the entries it created,
-// with the older "via Batch" note as a fallback for runs recorded before that.
+// membership comes from the batch's record of the entries it created, with
+// the "via Batch" note as a fallback for entries recorded without one.
 function summaryMethodLabel(run, batchChildIds) {
   if (run.kind === "overlay") return "Overlay";
   if (run.kind === "termini") return "Termini";
@@ -4255,11 +3697,8 @@ function SummaryPage({ setPage }) {
   useEffect(() => {
     if (!isElectron || runs.length === 0) return;
     let cancelled = false;
-    // Only the visible neighbourhood, and only the front face. Each render is
-    // a full-resolution ray trace; loading a wide window of them at once
-    // exhausts the renderer process. Thumbnails plus a narrow window keep the
-    // gallery's memory cost roughly constant no matter how long the history
-    // gets. The back face is fetched on demand when a card is flipped.
+    // Thumbnails for the visible neighbourhood only, front faces only; full
+    // renders exhaust the renderer. Back faces load when a card is flipped.
     const wanted = runs.slice(Math.max(0, index - 1), index + 2).filter((r) => !assets[r.id]);
     if (wanted.length === 0) return;
     (async () => {
@@ -4281,16 +3720,13 @@ function SummaryPage({ setPage }) {
             image = await window.astra3Native.readImageThumbnail(joinPath(folder, "Images", views.front), 520);
             frontLabel = describeView(views.front);
           }
-          // Recorded but not loaded: knowing a second view exists is what
-          // enables the flip affordance, and the image itself is only worth
-          // fetching if the card is actually turned over.
+          // Known but not loaded until the card is flipped.
           if (views.back) {
             backPath = joinPath(folder, "Images", views.back);
             backLabel = describeView(views.back);
           }
         } catch {
-          // No Images folder (a -skipimage run) -- the card falls back to a
-          // placeholder rather than failing.
+          // No Images folder (-skipimage): placeholder.
         }
         // TERMINI runs write their export under a different name.
         for (const jsonName of ["Astra3_Report.json", "Termini_Analysis.json"]) {
@@ -4299,7 +3735,7 @@ function SummaryPage({ setPage }) {
             meta = JSON.parse(raw);
             break;
           } catch {
-            // Missing or unreadable -- try the next name, else show less.
+            // Missing or unreadable; try the next name.
           }
         }
         if (!cancelled) {
@@ -4346,12 +3782,8 @@ function SummaryPage({ setPage }) {
   const onPointerDown = (e) => {
     if (runs.length === 0) return;
     cancelAnimationFrame(rafRef.current);
-    // moved=false until the pointer actually travels. this used to call
-    // setPointerCapture immediately on pointerdown, which redirects every
-    // subsequent pointer event to the carousel container -- so the browser
-    // never dispatched a `click` to the card underneath, and clicking the
-    // centre card to flip it did nothing at all. Capture is now taken only
-    // once a real drag starts, so a plain click is left alone.
+    // Pointer capture starts only once a drag starts; capturing on pointerdown
+    // would swallow the click that flips the centre card.
     dragRef.current = { startX: e.clientX, startOffset: offset, lastX: e.clientX, lastT: performance.now(), moved: false, pointerId: e.pointerId, node: e.currentTarget };
     setDragging(true);
   };
@@ -4379,9 +3811,7 @@ function SummaryPage({ setPage }) {
     const wasDrag = dragRef.current.moved;
     dragRef.current = null;
     setDragging(false);
-    // A click that never became a drag needs no snap -- and running the
-    // settle animation on it would fight the flip that the click is about to
-    // trigger.
+    // A click needs no snap, which would fight the flip it triggers.
     if (!wasDrag) { velocityRef.current = 0; return; }
     // Flick momentum: a fast release carries past the nearest item, a slow
     // one just snaps back to the closest.
@@ -4476,9 +3906,7 @@ function SummaryPage({ setPage }) {
       const ref = meta?.reference_structure;
       return [ref ? `Reference ${ref}` : null, count > 1 ? `${count} structures` : null].filter(Boolean).join("  ·  ");
     }
-    // One structure: resolution and method, when the header supplied them.
-    // Nothing is substituted when it did not -- image quality and file format
-    // described how the run was made, not the structure.
+    // Resolution and method when the header supplied them; nothing substituted.
     const st = structures[0];
     if (!st) return "";
     const bits = [];
@@ -4536,13 +3964,12 @@ function SummaryPage({ setPage }) {
         if (ligs.length) bound.push(`${ligs.length} ligand${ligs.length === 1 ? "" : "s"} (${summarizeCodes(ligs.map((l) => l.code), 3)})`);
         if (ions.length) bound.push(`${ions.length} ion${ions.length === 1 ? "" : "s"} (${summarizeCodes(ions.map((i) => i.code), 3)})`);
         if (bound.length) out.push(bound.join("  ·  "));
-        // Only when the header reported it: null means not checked, which is
-        // not the same as none missing.
+        // null means not checked, not none missing.
         if (st.missing_residues_available && st.missing_residues_by_chain) {
           const total = Object.values(st.missing_residues_by_chain).reduce((n, v) => n + (Array.isArray(v) ? v.length : 0), 0);
           if (total > 0) out.push(`${total} missing residue${total === 1 ? "" : "s"}`);
         }
-        if (typeof st.mean_ca_bfactor === "number") out.push(`Mean Cα B-factor ${st.mean_ca_bfactor.toFixed(1)}`);
+        if (typeof st.mean_ca_bfactor === "number") out.push(`Mean Cα B-factor ${st.mean_ca_bfactor.toFixed(1)} Å²`);
         if (st.reduction_used) out.push("Reduced to a single chain");
       }
     }
@@ -4622,10 +4049,8 @@ function SummaryPage({ setPage }) {
                 onMouseEnter={() => setHovered(run.id)}
                 onMouseLeave={() => setHovered(null)}
                 onClick={() => {
-                  // A neighbour brings itself forward; the centre card flips
-                  // to its back view. Only offered when a back render exists
-                  // -- a -skipimage run has nothing to flip to, and a card
-                  // that flips to a blank face would just look broken.
+                  // A neighbour comes forward on click; the centre card flips, but only when
+                  // a back render exists (a -skipimage run has none).
                   if (!isActive) { go(i - index); return; }
                   if (!asset?.backPath) return;
                   setFlipped((f) => ({ ...f, [run.id]: !f[run.id] }));
@@ -4643,21 +4068,12 @@ function SummaryPage({ setPage }) {
                   position: "absolute", left: 0, top: 0,
                   width: SUMMARY_CARD_W, height: SUMMARY_CARD_H,
                   marginLeft: -SUMMARY_CARD_W / 2, marginTop: -SUMMARY_CARD_H / 2,
-                  // The hover lift is a small extra scale on the ACTIVE card
-                  // only, and it is applied to the outer transform so the
-                  // flip below can own rotateY without the two fighting.
-                  // NOTE: no hover scale here. Scaling the card is exactly
-                  // what made everything blurry before -- a CSS transform
-                  // magnifies the card's already-rasterised layer, text and
-                  // all. The hover "zoom" is done by shrinking the image's
-                  // padding instead (see the img below), which is a LAYOUT
-                  // change, so the protein is re-rasterised at its new size
-                  // and stays sharp.
+                  // No hover scale on the card: scaling magnifies its rasterised layer and
+                  // blurs it. The hover zoom shrinks the image's padding instead (see the img
+                  // below), which re-rasterises it at the new size.
                   transform: `translate3d(${t.x}px, 0, ${t.z}px) rotateY(${t.rotateY}deg) scale(${t.scale})`,
                   opacity: t.opacity,
-                  // No transition while dragging -- the transform is already
-                  // being driven frame by frame, and a CSS transition on top
-                  // of that fights the gesture and feels laggy.
+                  // No transition while dragging; the transform already follows the pointer.
                   transition: dragging ? "none" : "transform 420ms cubic-bezier(0.22, 1, 0.36, 1), opacity 300ms ease",
                   transformStyle: "preserve-3d",
                   cursor: isActive && asset?.backPath ? "pointer" : undefined,
@@ -4673,8 +4089,8 @@ function SummaryPage({ setPage }) {
                       <img src={asset.image} alt={run.label} draggable={false}
                         style={{
                           width: "100%", height: "100%", objectFit: "contain",
-                          // Less padding = a bigger protein, without scaling
-                          // anything. See the transform note above.
+                          // Less padding gives a bigger protein without scaling; see the transform note
+                          // above.
                           padding: isHovered ? 4 : 18,
                           transition: "padding 260ms cubic-bezier(0.22, 1, 0.36, 1)",
                         }} />
@@ -4775,8 +4191,7 @@ function SummaryPage({ setPage }) {
         </div>
       )}
 
-      {/* Arrows -- keyboard and drag both work, but a visible control is what
-          tells someone the gallery is navigable at all. */}
+      {/* Keyboard and drag both work; the arrows show the gallery can be navigated. */}
       <button onClick={() => go(-1)} disabled={index === 0} style={summaryArrowStyle("left", index === 0)} aria-label="Previous structure">
         <Icon name="chevronRight" size={16} style={{ transform: "rotate(180deg)" }} />
       </button>
@@ -4822,16 +4237,10 @@ function summaryArrowStyle(side, disabled) {
    LIVE CONSOLE OUTPUT (shared: Single/Overlay/Termini/Batch/Console)
    ============================================================ */
 
-// Maps Astra3's own ANSI SGR color codes (astra3_core.py's
-// RED/GREEN/YELLOW/BLUE/VIOLET/CYAN/WHITE/RESET, plus the 256-color
-// STAR_*/ASTRA_PURPLE banner colors) to this app's existing theme-aware color
-// tokens, so real console output renders in matching colors instead of raw
-// escape-code text leaking through as literal characters. Deliberately reuses
-// tokens already defined for both dark and light themes (see index.html's
-// :root blocks) rather than introducing new fixed hex colors that wouldn't
-// adapt with a theme switch -- there's no dedicated cyan/blue token in this
-// palette, so those map to the closest already-theme-aware options (--violet
-// is documented in index.html itself as "blue-leaning").
+// Astra3's ANSI colours (astra3_core.py's RED, GREEN and so on, and the
+// 256-colour banner colours) mapped to theme tokens, so console output follows
+// light and dark mode. There is no cyan or blue token; --violet is the
+// closest.
 const ANSI_COLOR_MAP = {
   "91": "var(--coral)",         // RED
   "92": "var(--sage)",          // GREEN
@@ -4846,13 +4255,9 @@ const ANSI_COLOR_MAP = {
   "1;38;5;135": "var(--accent-bright)", // ASTRA_PURPLE (banner only)
 };
 
-// Splits a raw console line (which may contain real ANSI escape sequences,
-// e.g. from Astra3's own colored print statements) into {text, color}
-// segments. color is null for text with no active color code (RESET, or
-// before the first code) -- callers fall back to their own default color for
-// those segments. Unknown/unmapped codes are ignored rather than breaking
-// parsing (keeps whatever color was already active), so a future Astra3 color
-// this map doesn't yet know about degrades gracefully instead of erroring.
+// Splits a console line into {text, color} segments. color is null where no
+// code is active, and callers use their own default. Unknown codes keep the
+// current colour.
 function parseAnsiSegments(text) {
   const segments = [];
   let currentColor = null;
@@ -4877,26 +4282,17 @@ function parseAnsiSegments(text) {
   return segments;
 }
 
-// Memoized per-line row -- with a long-running session, LiveConsole can hold
-// hundreds of lines; without memoizing each row, every new line forces React
-// to re-diff every EARLIER line too on each render, which gets visibly slow
-// well before a real terminal session would. React.memo keeps each already-
-// rendered line a no-op on subsequent renders.
+// Memoised so a long session does not re-render every earlier line on each
+// new one.
 const ConsoleLine = React.memo(function ConsoleLine({ text, tone, plain = false }) {
   const toneColor = {
     command: "var(--accent-bright)", info: "var(--text-0)", success: "var(--sage)",
     error: "var(--coral)", warning: "var(--amber)", muted: "var(--text-1)", prompt: "var(--violet)", highlight: "var(--gold)",
   };
   const fallbackColor = toneColor[tone] || "var(--text-0)";
-  // Real per-segment ANSI colors take priority over the whole-line tone
-  // fallback -- tone still decides the color for any part of the line that
-  // never had an explicit color code (or for GUI-only synthetic lines with no
-  // ANSI in them at all). plain=true skips per-segment coloring entirely
-  // (still strips the escape codes from what's shown, just doesn't apply
-  // their colors) -- used by the standalone prompt box, which repeats the
-  // same text the console already shows in full color, but wants its own copy
-  // in one neutral, readable color; the answer buttons right below it carry
-  // the y/n coloring instead (green/red), not the repeated text.
+  // Per-segment ANSI colours win over the line's tone, which covers uncoloured
+  // text and the interface's own lines. plain strips the codes without
+  // colouring: the prompt box repeats the console text in one neutral colour.
   const segments = plain ? [{ text: stripAnsi(text), color: null }] : parseAnsiSegments(text);
   return (
     <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
@@ -4908,11 +4304,8 @@ const ConsoleLine = React.memo(function ConsoleLine({ text, tone, plain = false 
   );
 });
 
-// Console lines rarely exceed a few hundred in a normal session, but a very
-// long BATCH run or a session left open for hours could grow unbounded --
-// capping what's actually mounted in the DOM (not what's tracked in state,
-// which AppProvider already caps at 400) keeps scrolling and new-line
-// rendering fast regardless of session length.
+// Caps what is mounted, not what is kept (AppProvider keeps 400 lines), so a
+// long batch stays responsive.
 const CONSOLE_MAX_RENDERED_LINES = 300;
 // The session log behind the Advanced Console. Large enough to hold many
 // analyses (each prints roughly 50-150 lines), including the startup banner.
@@ -4935,40 +4328,10 @@ function LiveConsole({ lines, height = 260, title = "Console output", showCursor
     if (trimmed) answerPrompt(trimmed);
   };
 
-  // fillHeight: the console genuinely stretches to match its sidebar's real
-  // height (a CSS grid row is already exactly as tall as its tallest column
-  // -- the sidebar -- by default; this just lets the console actually FILL
-  // that instead of using its own fixed pixel height independent of it).
-  // Fixes a real, reported layout problem: Single Structure's sidebar is one
-  // card, so a fixed 480px console happened to roughly match it, but
-  // Overlay/Termini's sidebars are 4 cards tall, so the same fixed height
-  // left the console's bottom edge well above the sidebar's actual bottom
-  // (the launch button), with a mismatched gap and unnecessary scrolling
-  // below it. Default stays the old fixed-height behavior for the standalone
-  // Advanced Console page, which isn't inside a two-column grid at all.
-  // fillHeight: the console genuinely stretches to match its sidebar's real
-  // height, WITHOUT ever growing the page itself -- a CSS grid row with no
-  // explicit height sizes itself to fit its own content, and height:100% on a
-  // child has nothing definite to resolve against in that situation, so the
-  // console (and the whole page around it, via PageScroll) just kept growing
-  // as lines accumulated instead of scrolling internally. maxHeight below
-  // gives the grid row (and this console) something concrete to actually be
-  // bounded by: viewport height minus the fixed 52px top bar and this page's
-  // own 28px+60px top/bottom padding (see the maxWidth:1040 grid container's
-  // own padding on every page that passes fillHeight), so the console's OWN
-  // scrollbar takes over past that point instead of the page continuing to
-  // grow. minHeight:0 on the body itself (below) is equally required --
-  // without it a flex child refuses to shrink below its content size at all,
-  // which would silently negate this fix even with maxHeight correctly set.
-  // Explicit target: roughly 19 lines of content (middle of the requested
-  // 18-21 line range) at this console's own font-size:12/ line-height:1.7 --
-  // 12*1.7=20.4px per line, so 19 lines is ~388px, plus this block's own 20px
-  // vertical padding and the ~37px header bar above it. A previous version
-  // used a pure viewport-relative calc(), which produced a console noticeably
-  // taller than this on most normal window sizes. A fixed pixel target is
-  // what actually pins this to a specific line count; maxHeight (still
-  // viewport-relative) is kept only as a safety net so this never overflows a
-  // genuinely short window.
+  // fillHeight: sized for about 19 lines (12px at line-height 1.7, plus padding
+  // and the header) and capped by the window height, so the console scrolls
+  // inside itself rather than growing the page. minHeight 0 on the body lets
+  // the flex child shrink below its content.
   const fillHeightStyle = fillHeight ? { height: 445, maxHeight: "calc(100vh - 140px)" } : {};
   const bodyStyle = fillHeight
     ? { flex: 1, minHeight: 0, overflowY: "auto", padding: "10px 12px", fontSize: 12, lineHeight: 1.7 }
@@ -5008,9 +4371,6 @@ function LiveConsole({ lines, height = 260, title = "Console output", showCursor
       )}
     </div>
       {prompt && (
-        // A genuinely SEPARATE box now, rendered as a sibling AFTER the
-        // console's own bordered/rounded wrapper closes above -- not nested
-        // inside it.
         <div className="mono" style={{ marginTop: 12, padding: 14, border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", background: "var(--bg-2)", boxShadow: "var(--shadow-md)" }}>
           <div style={{ fontSize: 11, color: "var(--amber)", fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
             <Icon name="alertTriangle" size={12} /> Astra3 needs your input
@@ -5059,8 +4419,7 @@ function SingleStructurePage({ setPage }) {
   const toast = useToast();
   const [pdbId, setPdbId] = useState("");
   useEffect(() => {
-    // Depending on pendingStructureSeed itself (not []) makes this genuinely
-    // reactive to every later seed, not just the very first one.
+    // Runs for every seed, not only the first.
     if (pendingStructureSeed?.kind === "single" && pendingStructureSeed.items?.length) {
       setPdbId(pendingStructureSeed.items[0].id);
       setPendingStructureSeed(null); // consume once per seed
@@ -5082,30 +4441,24 @@ function SingleStructurePage({ setPage }) {
   const [cancelling, setCancelling] = useState(false);
   // What the last run ended as: null while idle or running, then "complete",
   // "cancelled" or "failed". Kept separate from `busy` so the bar can stay on
-  // screen after the run with an honest final state instead of vanishing.
+  // screen after the run with its final state instead of vanishing.
   const [runOutcome, setRunOutcome] = useState(null);
   const [runPrefix, setRunPrefix] = useState("");
   const [lines, setLines] = useState([]);
   // A single-structure run is one six-view render (render_views renders a
   // fixed six), so the image count is known before the run starts.
   const renderPlan = useMemo(() => ({ images: opts.images ? VIEWS_PER_RENDER : 0 }), [opts.images]);
-  const otherPageBusy = isBusy && !busy; // another page/console is running something -- grey out this page's controls, but don't grey out our own in-flight run's own UI
+  const otherPageBusy = isBusy && !busy; // another page's run; this page's own run keeps its controls
 
   const buildCommand = () => {
     const flags = [];
-    // Quality only matters when images are actually being rendered --
-    // emitting "-low -skipimage" together was meaningless (there's nothing
-    // for -low to apply to) and looked like a bug in the generated command
-    // even though it didn't break anything.
+    // Quality only applies when images are rendered.
     if (opts.images) {
       if (quality === "low") flags.push("-low");
       if (quality === "medium") flags.push("-medium");
       if (quality === "excellent") flags.push("-excellent");
     }
-    // Only meaningful when Astra3 is fetching. An imported structure is
-    // read from the file that was registered, whose format is already
-    // fixed -- asking for mmCIF alongside an AST id described a fetch
-    // that never happens.
+    // Only when fetching: an imported structure's format is fixed by its file.
     if (format === "cif" && !AST_ID_RE.test(pdbId.trim())) flags.push("-mmCIF");
     if (!opts.images) flags.push("-skipimage");
     if (!opts.report) flags.push("-skipreport");
@@ -5127,23 +4480,18 @@ function SingleStructurePage({ setPage }) {
     try {
       const result = await runAstraCommand(cmd, {
         originPage: "single",
-        onLog: (entry) => setLines((l) => [...l, entry]), // this run's own output only, streamed live -- not a slice of the shared cross-page log
+        onLog: (entry) => setLines((l) => [...l, entry]), // this run's output only
       });
-      // A cancelled run comes back through here like any other -- Astra3
-      // returns to its prompt the same way whether it finished or was
-      // stopped, which is why the bridge now says which of the two happened.
-      // Nothing is kept from a cancelled run: no history entry (a
-      // half-rendered structure is not a result), and its output goes too.
+      // A cancelled run returns like a finished one; the bridge says which. Nothing
+      // is kept from it: no History entry, and its output is removed.
       if (result?.cancelled || cancelRequestedRef.current) {
         await discardRunOutput(result?.lines, pdbId.trim(), settings.outputDir, startedAt);
         setRunOutcome("cancelled");
         toast.push({ tone: "neutral", title: "Analysis cancelled", message: `${pdbId.trim().toUpperCase()} was not finished, and nothing was saved.` });
         return;
       }
-      // An ID Astra3 could not fetch or resolve comes back through here the
-      // same way a finished run does. Nothing was written for it, so there is
-      // nothing to record, open or celebrate -- just the reason, in the
-      // console above, and an invitation to correct the ID and run again.
+      // An ID that could not be fetched or resolved also returns normally. Nothing
+      // was written, so there is nothing to record; the console says why.
       if (!result?.produced) {
         setRunOutcome("failed");
         toast.push({
@@ -5156,18 +4504,11 @@ function SingleStructurePage({ setPage }) {
       // Recorded before anything below can throw, or the `finally` falls
       // through to its own default and files a run that succeeded as failed.
       setRunOutcome("complete");
-      // sessionPath is the real ".pse" path Astra3 itself printed (see pymol-
-      // bridge.js's "Session saved:" capture) -- stored on the history entry
-      // so the Viewer/History pages can load the exact file that was written,
-      // instead of guessing a folder name from the label (which only happens
-      // to work for a single plain ID; OVERLAY/TERMINI use a different naming
-      // scheme entirely).
+      // The paths Astra3 printed, so the Viewer and History open the files that
+      // were written rather than a folder guessed from the label.
       const entryId = addHistoryEntry({ kind: "single", label: pdbId.trim().toUpperCase(), status: "complete", meta: `${quality[0].toUpperCase()}${quality.slice(1)} · ${structureSourceLabel(pdbId, format)}`, sessionPath: result?.sessionPath || null, reportPath: result?.reportPath || null });
       toast.push({ tone: "success", title: "Analysis complete", message: `${pdbId.trim().toUpperCase()}: report and session saved.` });
-      // Now genuinely opens it via the same openPath IPC call every other
-      // "open X externally" action in this app already uses, derived from the
-      // real session path (report always lives one level up from
-      // Session/<name>.pse, alongside it) rather than a guessed folder name.
+      // The report sits beside Session/, one level above the .pse.
       if (settings.autoOpenReport && isElectron && result?.sessionPath) {
         const outputFolder = dirnameOf(dirnameOf(result.sessionPath));
         if (outputFolder) {
@@ -5176,11 +4517,8 @@ function SingleStructurePage({ setPage }) {
           });
         }
       }
-      // autoOpenSession was the second dead setting found by the audit: a
-      // toggle in Settings that saved, persisted, and was never read
-      // anywhere, so turning it on did nothing at all. Opened through
-      // openInPymol rather than the OS handler because .pse usually has no
-      // file association on Windows -- see fs:openInPymol.
+      // Through openInPymol rather than the OS handler: .pse usually has no file
+      // association on Windows (see fs:openInPymol).
       if (settings.autoOpenSession && isElectron && result?.sessionPath && engineInfo?.engine === "astra3") {
         setSelectedViewerId(entryId);
         setPage("viewer");
@@ -5188,9 +4526,7 @@ function SingleStructurePage({ setPage }) {
         window.astra3Native.openInPymol(result.sessionPath).then((err) => {
           if (err) toast.push({ tone: "error", title: "Could not open session", message: err });
         }).catch((e) => {
-          // The analysis itself already succeeded -- auto-opening is a
-          // convenience on top of it, so a failure here is reported and
-          // nothing more. An unhandled rejection would be silent.
+          // The analysis succeeded; report the failure and nothing more.
           toast.push({ tone: "error", title: "Could not open session", message: e?.message || "The session could not be opened." });
         });
       }
@@ -5222,10 +4558,7 @@ function SingleStructurePage({ setPage }) {
       toast.push({ tone: "error", title: "Could not cancel", message: result.error });
       setCancelling(false);
     }
-    // on success, runAnalysis's own catch block (triggered once PyMOL
-    // actually finishes cancelling and the pending command rejects) is what
-    // clears busy/cancelling and shows the "cancelled" toast -- this just
-    // sends the interrupt and waits.
+    // On success the run's own catch clears busy and reports the cancel.
   };
 
   return (
@@ -5291,11 +4624,9 @@ function SingleStructurePage({ setPage }) {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {/* Line count is not progress: the stages that print the most
-              output are the fast ones, and rendering -- by far the slowest --
-              prints a single line per image. Same stage/image model as
-              Overlay and Termini, and it stays on screen afterwards to say
-              how the run ended. */}
+          {/* Line count is not progress: the stages that print most are fast, and
+              rendering prints one line per image. Same stage and image model as Overlay
+              and Termini; stays on screen afterwards to say how the run ended. */}
           {(busy || runOutcome) && (
             <RunProgressBar lines={lines} plan={renderPlan} outcome={runOutcome} prefix={runPrefix} />
           )}
@@ -5337,12 +4668,8 @@ function RunOptionsPanel({ quality, setQuality, opts, setOpts, showTerminiOption
       />
     </div>
   );
-  // Quality applies to close-up renders too (render_termini_closeups takes
-  // the same image_quality param as the core wide-shot render in astra3.py),
-  // so it should stay selectable whenever EITHER core images or close-ups are
-  // wanted, not just core images -- otherwise a close-ups-only Termini run
-  // (core images off) would have no way to pick a quality for the close-ups
-  // it's still actually rendering.
+  // Close-ups use the same quality setting, so it stays selectable when only
+  // close-ups are rendered.
   const closeupsWanted = showTerminiOptions && opts.termini_closeups !== false;
   return (
     <>
@@ -5359,12 +4686,9 @@ function RunOptionsPanel({ quality, setQuality, opts, setOpts, showTerminiOption
         <Checkbox checked={opts.csv} onChange={(v) => setOpts({ ...opts, csv: v })} label="CSV export" description="Off by default, opt-in" />
         <Checkbox checked={opts.renderOnly} onChange={(v) => setOpts({ ...opts, renderOnly: v })} label="Session only" description="Skip report + whole-structure images, save the session only" />
         {showTerminiOptions && (
-          // Independent of "Render images" -- , a Termini run can render
-          // close-up terminus views with or without the 6 core whole-
-          // structure views, in any combination of the two, rather than
-          // close-ups requiring core images to be on first. See astra3.py's
-          // own do_core_images/do_closeups comment for the matching backend
-          // change this depends on.
+          // Independent of Render images: close-ups and the six whole-structure views
+          // can be rendered in any combination (do_core_images and do_closeups in
+          // astra3.py).
           <Checkbox
             checked={opts.termini_closeups !== false}
             onChange={(v) => setOpts({ ...opts, termini_closeups: v })}
@@ -5413,41 +4737,19 @@ function RunOptionsPanel({ quality, setQuality, opts, setOpts, showTerminiOption
   );
 }
 
-// Turns the shared { report, images, csv, renderOnly } opts + quality into
-// the plain global flags astra3.py's own flag parser looks for anywhere in
-// the command line for p in parts[1:]], checked with `in`, not by position)
-// -- shared so OVERLAY/TERMINI/BATCH build these identically to Single
-// Structure instead of each hand-rolling a slightly different subset.
-// termini_closeups is only ever read for TERMINI (astra3.py ignores
-// -skipcloseup for every other command), so it's harmless to always include
-// the flag when explicitly turned off, regardless of which page called this.
-// Keeps one or more local "settings.defaultX"-seeded fields in sync with
-// LATER changes to those same settings, without ever overwriting a value the
-// person has since changed on purpose for this specific run, and never while
-// a run is actively in progress.
+// Follows later changes to settings.defaultX for fields seeded from them.
+// Pages stay mounted, so useState(settings.defaultX) only ran once. A field
+// the person changed for this run is left alone, and nothing changes while a
+// run is in progress.
 //
-// Every run page seeds its own quality/format/outputDir state from
-// settings.defaultX via a plain useState(settings.defaultX) -- but since
-// every page stays permanently mounted for the app's whole session
-// (display:none toggling, not real mount/unmount), that useState call only
-// ever runs once, the very first time the page is visited.
-//
-// fields: array of { key, current, setCurrent } where `current` is this
-// page's own live state value and `key` is the matching settings.defaultX
-// field name (e.g. "defaultQuality"). busy: when true, syncing is skipped
-// entirely -- changing a default mid-run must never retroactively alter
-// what's displayed (or, worse, what gets sent) for a run already in flight.
+// fields: [{ key, current, setCurrent }], key being the settings field name.
 function useDefaultSync(settings, fields, busy) {
   const prevRef = useRef(Object.fromEntries(fields.map((f) => [f.key, settings[f.key]])));
   useEffect(() => {
-    if (busy) return; // never sync mid-run -- see this hook's own comment
+    if (busy) return;
     fields.forEach(({ key, current, setCurrent }) => {
       if (settings[key] !== prevRef.current[key] && current === prevRef.current[key]) {
-        // The field still holds whatever the OLD default was (the person
-        // never manually changed it away for this run) -- safe to carry it
-        // forward to the NEW default. If it no longer matches
-        // prevRef.current[key], the person picked something else on purpose,
-        // and that choice is left alone.
+        // Still the old default, so the person did not change it: follow the new one.
         setCurrent(settings[key]);
       }
     });
@@ -5455,19 +4757,12 @@ function useDefaultSync(settings, fields, busy) {
   }, [busy, ...fields.map((f) => settings[f.key]), ...fields.map((f) => f.current)]);
 }
 
+// The global flags astra3.py accepts anywhere on the command line, shared by
+// every run page.
 function runOptionFlags(quality, opts, isTermini = false) {
   const flags = [];
-  // Quality applies to close-up renders too now that they're independent of
-  // core images (see RunOptionsPanel's own closeupsWanted comment) -- emit
-  // the quality flag whenever EITHER is actually happening, not just when
-  // core images are on, so a closeups-only run still honors whatever quality
-  // was selected rather than silently falling back to astra3.py's own
-  // default. isTermini gates whether opts.termini_closeups even applies at
-  // all: that field is left undefined by default on EVERY page (Overlay and
-  // Batch never set it, since they have no close-ups checkbox to begin with),
-  // so checking it without this guard would incorrectly treat Overlay/Batch's
-  // always-undefined value as "closeups wanted" too, forcing quality flags to
-  // emit there regardless of opts.images.
+  // Close-ups use the same quality, so the flag applies when either is wanted.
+  // Only TERMINI has close-ups; other pages leave termini_closeups undefined.
   const anyImagesWanted = opts.images || (isTermini && opts.termini_closeups !== false);
   if (anyImagesWanted) {
     if (quality === "low") flags.push("-low");
@@ -5479,13 +4774,10 @@ function runOptionFlags(quality, opts, isTermini = false) {
   if (opts.renderOnly) flags.push("-ro");
   if (opts.csv) flags.push("-csv");
   if (opts.termini_closeups === false) flags.push("-skipcloseup");
-  // homomerMode: "ask" (default -- no flag, matches astra3.py's own default
-  // interactive behavior), "assembly" (-keepassembly, the chains of the
-  // depositor's preferred biological assembly, with -assemblyfallback:<mode>
-  // for entries whose assembly records cannot decide), "reduce"
-  // (-alwaysreduce) or "keep" (-keephomomers). Wherever Always reduce
-  // applies, -reducepriority:<order> is built from homomerPriority. See
-  // HomomerPriorityPicker below for where homomerPriority comes from.
+  // homomerMode: "ask" (no flag), "assembly" (-keepassembly, with
+  // -assemblyfallback:<mode> for entries whose assembly records cannot decide),
+  // "reduce" (-alwaysreduce) or "keep" (-keephomomers). Wherever reduction
+  // applies, -reducepriority:<order> comes from homomerPriority.
   const reducePriority = () => {
     if (opts.homomerPriority && opts.homomerPriority.length) {
       flags.push(`-reducepriority:${opts.homomerPriority.join(",")}`);
@@ -5504,10 +4796,7 @@ function runOptionFlags(quality, opts, isTermini = false) {
   return flags;
 }
 
-// Default priority order shown when "Always reduce" is first turned on --
-// matches rank_homomer_chain_by_priority's own Python-side default, so the
-// GUI's starting point and the backend's own fallback (if this were ever
-// omitted) agree.
+// Matches the default in rank_homomer_chain_by_priority.
 const DEFAULT_HOMOMER_PRIORITY = ["missing", "leastligands", "chainA"];
 
 const HOMOMER_CRITERION_LABELS = {
@@ -5517,31 +4806,19 @@ const HOMOMER_CRITERION_LABELS = {
   chainA: "Chain A",
 };
 
-// Drag-to-reorder priority list for -alwaysreduce's tiebreak cascade (see
-// rank_homomer_chain_by_priority in astra3_structure.py for the exact
-// semantics this configures: each criterion narrows the candidate set to
-// whatever's tied for best on it before the NEXT criterion in the list gets a
-// say, and anything still tied after every criterion falls back to the
-// alphabetically-first chain). The ligands criterion is a single draggable
-// row whose OWN direction (fewest vs most) is chosen with a small inline
-// toggle, rather than two separate always-both-present rows for "fewest
-// ligands" and "most ligands" -- having both in the list at once would be
-// contradictory (a structure can't be ranked by both at the same time) and
-// confusing to drag past each other. Chain A has no real "direction" to
-// toggle, so it's just a plain draggable row.
+// Drag-to-reorder priority list for -alwaysreduce (rank_homomer_chain_by_priority
+// in astra3_structure.py): each criterion narrows the chains tied for best
+// before the next one applies, and a remaining tie goes to the alphabetically
+// first chain. The ligand row toggles between fewest and most rather than
+// listing both.
 function HomomerPriorityPicker({ priority, setPriority }) {
   const dragIndex = useRef(null);
   const [dragOverIdx, setDragOverIdx] = useState(null);
   const [draggingIdx, setDraggingIdx] = useState(null);
   const ligandsDirection = priority.includes("mostligands") ? "mostligands" : "leastligands";
 
-  // dataTransfer.setData is REQUIRED for drag-and-drop to reliably start at
-  // all in some Chromium/Electron builds (and is a hard requirement in
-  // Firefox) -- without it, dragstart can fire but the subsequent
-  // dragover/drop sequence silently never completes, which looks exactly like
-  // "dragging does nothing." The actual reorder logic still reads from
-  // dragIndex.current (a plain index, not real structure data), so the string
-  // value here is unused except to satisfy that browser requirement.
+  // setData is required for the drag to complete in some Chromium builds and
+  // in Firefox. The reorder reads dragIndex, not this value.
   const onDragStart = (idx) => (e) => {
     dragIndex.current = idx;
     setDraggingIdx(idx);
@@ -5639,9 +4916,7 @@ function StructureListEditor({ items, setItems, allowFormatToggle = true, refere
     setItems(next);
   };
 
-  // See HomomerPriorityPicker's own comment on why setData is required here
-  // -- without it, drag-and-drop can silently fail to complete on some
-  // Chromium/Electron builds even though dragstart fires.
+  // setData is required; see HomomerPriorityPicker.
   const onDragStart = (idx) => (e) => {
     dragIndex.current = idx;
     setDraggingIdx(idx);
@@ -5709,34 +4984,17 @@ function StructureListEditor({ items, setItems, allowFormatToggle = true, refere
                   <Badge tone={item.format === "cif" ? "violet" : "neutral"}>
                     <button onClick={() => toggleFormat(item.id)} style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", padding: 0, font: "inherit", display: "flex", alignItems: "center", gap: 3 }}>
                       {item.format === "cif" ? "mmCIF" : "PDB"}
-                      {/* A small swap icon plus a tooltip spelling out
-                          exactly what the click does now makes this
-                          unambiguous, matching the same explicit clarity
-                          Single Structure's own format picker already had
-                          via a real labeled SegmentedControl -- a full
-                          segmented control would be too wide for this
-                          compact per-row list item, so this keeps the
-                          badge's own compact footprint while fixing the
-                          actual ambiguity.
-                        */}
+                      {/* A swap icon and a tooltip saying what the click does; a segmented control
+                          is too wide for this row. */}
                       <Icon name="refresh" size={10} />
                     </button>
                   </Badge>
                 </Tooltip>
               )}
               {(referenceMode || positionalReference) && (() => {
-                // Unified radio-circle UI for BOTH reference models, matching
-                // Overlay's own purple-filled circle exactly. The two modes
-                // differ only in what a click actually DOES underneath, not
-                // in how the control looks or behaves to click: referenceMode
-                // (Overlay) sets an independent referenceId, since any
-                // structure can be the reference regardless of list order;
-                // positionalReference (TERMINI) has no such independent
-                // concept at all, its reference is always whichever structure
-                // is literally first in the list, so a click there reorders
-                // the array instead (moving the clicked item to position 0)
-                // via the same makeReference already used for drag-to-
-                // reorder.
+                // The same radio control for both models. referenceMode (OVERLAY) sets
+                // referenceId; positionalReference (TERMINI) moves the clicked structure to
+                // the top with makeReference, as dragging does.
                 const isChecked = referenceMode ? referenceId === item.id : idx === 0;
                 const handleClick = referenceMode ? () => setReferenceId(item.id) : () => makeReference(item.id);
                 return (
@@ -5789,7 +5047,7 @@ function OverlayPage({ setPage }) {
   const [cancelling, setCancelling] = useState(false);
   // What the last run ended as: null while idle or running, then "complete",
   // "cancelled" or "failed". Kept separate from `busy` so the bar can stay on
-  // screen after the run with an honest final state instead of vanishing.
+  // screen after the run with its final state instead of vanishing.
   const [runOutcome, setRunOutcome] = useState(null);
   const [runPrefix, setRunPrefix] = useState("");
   const [lines, setLines] = useState([]);
@@ -5828,14 +5086,8 @@ function OverlayPage({ setPage }) {
         originPage: "overlay",
         onLog: (entry) => setLines((l) => [...l, entry]),
       });
-      // sessionPath is the real path Astra3 printed -- OVERLAY's output
-      // folder naming ("Overlay_<id>_<id>..._Output") doesn't match what a
-      // GUI-side guess from the history label would produce, so this captured
-      // path (not a reconstruction) is what the Viewer/History pages need to
-      // actually find the file.
-      // An overlay stopped part-way is not a smaller overlay -- every
-      // structure in it is measured against the others, so a comparison
-      // missing one of them says nothing. The whole output folder goes.
+      // Every structure in an overlay is measured against the others, so a
+      // cancelled one is not a smaller overlay. Its whole output folder goes.
       if (result?.cancelled || cancelRequestedRef.current) {
         await discardRunOutput(result?.lines, null, null, startedAt);
         setRunOutcome("cancelled");
@@ -5852,9 +5104,8 @@ function OverlayPage({ setPage }) {
         return;
       }
       setRunOutcome("complete");
-      // Same shape as TERMINI: reference first, then what it was compared
-      // against. "A + B + C" read as a set of equals, which is not what
-      // either run does -- both measure everything against one reference.
+      // Reference first, then what it was compared against: both OVERLAY and
+      // TERMINI measure everything against one reference.
       addHistoryEntry({ kind: "overlay", label: `${items[0].id} vs ${items.slice(1).map((i) => i.id).join(", ")}`, status: "complete", meta: `${items.length} structures${refMode === "auto" ? "" : ` · ref: ${referenceId}`}`, sessionPath: result?.sessionPath || null, reportPath: result?.reportPath || null });
       toast.push({ tone: "success", title: "Overlay complete", message: `${items.length} structures aligned.` });
     } catch (e) {
@@ -5898,14 +5149,8 @@ function OverlayPage({ setPage }) {
             <FieldHint>{refMode === "auto" ? "Astra3 selects the structure with the fewest bound ligands as reference." : "Choose the reference structure from the list above."}</FieldHint>
           </Card>
           <Card style={{ padding: 20 }}>
-            {/* showHomomerOptions removed here on purpose -- the
-                "always reduce / keep all" and terminus-match
-                auto-decide shortcuts exist for Batch, which runs
-                unattended and genuinely needs to skip interactive
-                prompts. Overlay is an interactive, one-structure-set-
-                at-a-time run, so it always asks (Astra3's own default
-                behavior) rather than exposing an auto-skip control
-                that doesn't fit how this page is actually used. */}
+            {/* No homomer shortcuts: those are for Batch, which runs unattended. Overlay
+                asks, as Astra3 does by default. */}
             <RunOptionsPanel quality={quality} setQuality={setQuality} opts={opts} setOpts={setOpts} />
           </Card>
           <Card style={{ padding: 20 }}>
@@ -5928,16 +5173,8 @@ function OverlayPage({ setPage }) {
           {(busy || runOutcome) && (
             <RunProgressBar lines={lines} plan={renderPlan} outcome={runOutcome} prefix={runPrefix} />
           )}
-          {/* LiveConsole renders a Fragment (console box + prompt box as
-              siblings, when a prompt is active) -- without this wrapper,
-              both pieces become independent DIRECT children of the 2-column
-              grid above, and CSS grid's own auto-placement pushes that 3rd
-              item onto a new row starting back at column 1 (under the
-              SIDEBAR, not under the console) since there are only 2
-              explicit columns. This wrapper absorbs both pieces into one
-              single grid item, exactly like Single Structure's own console
-              wrapper already did correctly.
-            */}
+          {/* LiveConsole returns a fragment (console and prompt box); this keeps both
+              in one grid cell, or the prompt box would wrap under the sidebar. */}
           <LiveConsole lines={busy || lines.length ? lines : [{ text: "Add 2+ structures and run overlay to see live output.", tone: "muted" }]} fillHeight onRespond={() => setPage("console")} />
         </div>
       </div>
@@ -5963,7 +5200,7 @@ function TerminiPage({ setPage }) {
   const [cancelling, setCancelling] = useState(false);
   // What the last run ended as: null while idle or running, then "complete",
   // "cancelled" or "failed". Kept separate from `busy` so the bar can stay on
-  // screen after the run with an honest final state instead of vanishing.
+  // screen after the run with its final state instead of vanishing.
   const [runOutcome, setRunOutcome] = useState(null);
   const [runPrefix, setRunPrefix] = useState("");
   const [lines, setLines] = useState([]);
@@ -5971,22 +5208,13 @@ function TerminiPage({ setPage }) {
   const [opts, setOpts] = useState({ report: true, images: true, csv: false, renderOnly: false });
   useDefaultSync(settings, [{ key: "defaultQuality", current: quality, setCurrent: setQuality }], busy);
   const [refMode, setRefMode] = useState("auto");
-  // "Automatic" reference for TERMINI has no real heuristic behind it the way
-  // Overlay's fewest-bound-ligands pick does -- TERMINI's own backend model
-  // is simply "the first structure listed is always the reference" (see
-  // buildCommand below, unchanged). This just decides whether the drag-to-
-  // reorder/"Make reference" controls are shown at all: Automatic keeps the
-  // list in whatever order structures were added (no manual reordering UI
-  // cluttering the list), Manual reveals the same drag/"Make reference"
-  // controls that already existed, matching Overlay's own Automatic/Manual
-  // card so the two pages read consistently.
+  // Automatic keeps the order structures were added in and hides the
+  // reordering controls; Manual shows them, as on the Overlay page.
   const otherPageBusy = isBusy && !busy;
 
-  // One render pass per comparison structure: six whole-structure views
-  // plus the close-ups. The close-up count depends on how many chains
-  // matched and which termini exist, neither of which is known up front,
-  // so this is a starting figure that the run's own per-comparison image
-  // totals correct as they arrive.
+  // One render pass per comparison: six views plus the close-ups. The close-up
+  // count depends on matched chains and termini, so this is a starting figure
+  // that the run's own totals correct.
   const renderPlan = useMemo(() => {
     const comparisons = Math.max(1, items.length - 1);
     const perComparison = (opts.images ? VIEWS_PER_RENDER : 0)
@@ -6000,10 +5228,8 @@ function TerminiPage({ setPage }) {
   const buildCommand = () => {
     const tokens = ["TERMINI"];
     items.forEach((it) => { tokens.push(it.id); if (it.format === "cif" && !AST_ID_RE.test(it.id)) tokens.push("-mmCIF"); });
-    // Manual mode has to name the reference explicitly. TERMINI used to take
-    // the first structure listed, so reordering the list was enough; it now
-    // selects by fewest bound ligands like OVERLAY, and that rule would
-    // silently override whatever the person dragged to the top.
+    // Manual mode names the reference explicitly: the automatic pick (fewest
+    // bound ligands) would override the order the person chose.
     if (refMode === "manual" && items.length > 0) tokens.push(`-reference${items[0].id}`);
     tokens.push(...runOptionFlags(quality, opts, true));
     return tokens.join(" ");
@@ -6021,13 +5247,8 @@ function TerminiPage({ setPage }) {
         originPage: "termini",
         onLog: (entry) => setLines((l) => [...l, entry]),
       });
-      // sessionPath is the real path Astra3 printed -- see the same note on
-      // the Overlay page's run(); TERMINI's own folder naming scheme
-      // ("Termini_<id>_<id>..._Output") doesn't match a GUI-reconstructed
-      // name from the "X vs Y, Z" history label either.
-      // Same as OVERLAY: every comparison here is against the reference
-      // structure, so a run that stopped before it had them all is not a
-      // partial answer, it is no answer. Nothing is kept.
+      // As with OVERLAY, every comparison is against the reference, so a run that
+      // stopped early has no result. Nothing is kept.
       if (result?.cancelled || cancelRequestedRef.current) {
         await discardRunOutput(result?.lines, null, null, startedAt);
         setRunOutcome("cancelled");
@@ -6087,12 +5308,8 @@ function TerminiPage({ setPage }) {
             <FieldHint>{refMode === "auto" ? "Astra3 selects the structure with the fewest bound ligands as reference." : "Drag to reorder the list above, or use \"Make reference\" on any entry to move it to the top. The structure at the top is used as the reference."}</FieldHint>
           </Card>
           <Card style={{ padding: 20 }}>
-            {/* showHomomerOptions removed here on purpose -- see the
-                matching comment on Overlay's own RunOptionsPanel.
-                showTerminiOptions is kept (that's the close-up-views
-                checkbox, a genuinely Termini-specific rendering
-                option, unrelated to the redundant-chain auto-decide
-                controls being removed). */}
+            {/* No homomer shortcuts, as on Overlay. showTerminiOptions is the close-up
+                views checkbox. */}
             <RunOptionsPanel quality={quality} setQuality={setQuality} opts={opts} setOpts={setOpts} showTerminiOptions />
           </Card>
           <Card style={{ padding: 20 }}>
@@ -6164,18 +5381,11 @@ function BatchPage({ setPage }) {
     const entry = files[0];
     const reader = new FileReader();
     reader.onload = () => { setPasteText(reader.result); setShowFileImport(false); toast.push({ tone: "success", title: "File loaded", message: entry.name }); };
-    reader.readAsText(entry.file); // DropZone now hands back {name, size, ext, path, file} objects, not the raw File itself -- see DropZone's own comment
+    reader.readAsText(entry.file); // entry is DropZone's {name, size, ext, path, file}
   };
 
-  // cancelling during a batch killed only the CURRENT structure.
-  // runAstraCommand threw, the catch below marked that one item failed, and
-  // the for-loop went straight on to the next structure -- so cancelling a
-  // five-structure batch cancelled one structure five times while the queue
-  // kept running to completion.
-  //
-  // The flag itself lives in AppProvider (see sequenceCancelRef there) so
-  // that any cancel path -- this page's own button, the Advanced Console,
-  // anywhere else -- stops the queue, not just one local control.
+  // Lives in AppProvider (sequenceCancelRef) so any cancel, from this page or
+  // the Advanced Console, stops the whole queue rather than one structure.
   const cancelRequestedRef = sequenceCancelRef;
   const [batchCancelling, setBatchCancelling] = useState(false);
   // Just the structure currently running, kept apart from the page console
@@ -6183,16 +5393,12 @@ function BatchPage({ setPage }) {
   // into THIS structure the queue is rather than only counting whole ones.
   const [itemLines, setItemLines] = useState([]);
   const [queueStartedAt, setQueueStartedAt] = useState(0);
-  const [pendingConfirm, setPendingConfirm] = useState(null); // see runQueue -- the large-batch confirmation
+  const [pendingConfirm, setPendingConfirm] = useState(null); // the large-batch confirmation
 
-  // A structure stopped part-way has produced a partial output folder: some
-  // images rendered, no report, an incomplete session. Keeping it is worse
-  // than having nothing, because it looks like a finished run until someone
-  // opens it.
-  //
-  // Both cancellation paths reach here. A cancel that PyMOL takes at one of
-  // its own checkpoints returns normally with a cancelled result; a cancel
-  // that kills the process makes runAstraCommand throw instead.
+  // A structure stopped part-way leaves a partial folder that looks finished
+  // until opened, so it is removed. A cancel taken at a checkpoint returns a
+  // cancelled result; one that kills the process makes runAstraCommand throw.
+  // Both reach here.
   const discardPartialOutput = async (job, lines, startedAt) => {
     // Located from the paths this structure's own run printed, falling back
     // to the single-structure folder name for a cancel that landed before
@@ -6209,43 +5415,31 @@ function BatchPage({ setPage }) {
 
   const runQueue = async (resumeFailedOnly = false) => {
     if (isBusy) return;
-    // The "Confirm before large batch runs" setting existed in Settings but
-    // nothing ever read it -- the toggle moved, saved, and changed nothing. A
-    // setting that silently does nothing is worse than no setting: it says a
-    // safeguard is on when it isn't. The threshold matches the setting's own
-    // description ("10+ structures").
+    // "Confirm before large batch runs" asks first at 10 or more structures.
     const targetCount = (resumeFailedOnly ? queue.filter((q) => q.status === "failed") : queue).length;
     if (settings.confirmBeforeBatch !== false && targetCount >= 10 && !pendingConfirm) {
       setPendingConfirm({ resumeFailedOnly, count: targetCount });
       return;
     }
     setPendingConfirm(null);
-    cancelRequestedRef.current = false; // fresh run -- never inherit a previous queue's cancellation
-    sequenceActiveRef.current = true; // see cancelRun -- makes a cancel during the queue report honestly
+    cancelRequestedRef.current = false;
+    sequenceActiveRef.current = true; // see cancelRun
     setBatchCancelling(false);
-    // Acquire the lock ONCE, up front, for the whole queue -- and keep the
-    // returned token to prove ownership on every subsequent runAstraCommand
-    // call inside the loop below.
+    // Hold the lock for the whole queue; the token proves ownership.
     const lockToken = acquireLock();
-    if (lockToken === null) return; // something else holds the lock -- shouldn't normally happen given the isBusy check above, but never proceed without real ownership
+    if (lockToken === null) return;
     setRunning(true);
     setQueueStartedAt(Date.now()); // the queue-level time estimate measures from here
-    setLines([]); // clear any output from a previous queue run -- don't let it bleed into this one
+    setLines([]);
     setItemLines([]);
-    // a full re-run left every item's status from the PREVIOUS run in place.
-    // The progress bar counts completed and failed items, so re-running a
-    // queue that had already finished 10 of 11 started at "10 of 11
-    // processed" while it was actually working on the first structure, and
-    // then sat stuck there. A full run starts from nothing by definition, so
-    // its statuses have to be cleared with it. "Resume failed only"
-    // deliberately does NOT reset -- the completed items it skips must stay
-    // counted.
+    // A full run starts from scratch; "Resume failed only" keeps completed
+    // items counted.
     if (!resumeFailedOnly) {
       setQueue((q) => q.map((j) => ({ ...j, status: "queued" })));
     }
     const targets = resumeFailedOnly ? queue.filter((q) => q.status === "failed") : queue;
     let cancelled = false;
-    const createdEntryIds = []; // see batchEntryIds below -- the exact runs this batch produced
+    const createdEntryIds = []; // see batchEntryIds
     for (const job of targets) {
       if (cancelRequestedRef.current) { cancelled = true; break; }
       const idx = queue.findIndex((q) => q.id === job.id);
@@ -6256,24 +5450,8 @@ function BatchPage({ setPage }) {
       setItemLines([]); // this structure's own feed starts here
       setLines((l) => [...l, { text: `> ${cmd}`, tone: "command" }]);
       try {
-        // holdLock: true keeps the app-wide lock held across the ENTIRE queue
-        // (see AppProvider's runAstraCommand), not just this one command --
-        // otherwise the lock would release between queue items and let
-        // another page's BusyLock flicker unlocked mid-batch, which is
-        // exactly the kind of "both things interactable at once" state this
-        // is meant to prevent. lockToken proves to the busy guard that THIS
-        // call is a continuation of the SAME sequence that already
-        // legitimately holds the lock (see acquireLock above), not a new,
-        // unrelated caller.
-        //
-        // originPage (not the old onPrompt: async () => "y") -- that option
-        // stopped doing anything the moment prompt-handling became global
-        // (see runAstraCommand's own onPrompt, set once internally rather
-        // than per-caller), so it was silently dead: every prompt during a
-        // batch run, including a homomer- reduction question, was being auto-
-        // answered "y" with no actual user decision at all. Now it surfaces
-        // through the same global prompt dialog as every other page,
-        // correctly pausing the queue until answered.
+        // holdLock with lockToken keeps the lock for the whole queue. Prompts
+        // go through the global dialog and pause the queue.
         const result = await runAstraCommand(cmd, {
           silent: true,
           holdLock: true,
@@ -6281,10 +5459,8 @@ function BatchPage({ setPage }) {
           originPage: "batch",
           onLog: (entry) => { setLines((l) => [...l, entry]); setItemLines((l) => [...l, entry]); },
         });
-        // A cancelled run still returns from runAstraCommand, so the result
-        // has to be inspected rather than assumed. Marking it complete meant a
-        // structure interrupted halfway -- part-rendered, no report -- showed
-        // as finished, and the progress bar counted it toward the total.
+        // A cancel can return normally, so check the result: a half-rendered
+        // structure must not count as complete.
         const wasCancelled = result?.cancelled === true || result?.status === "cancelled";
         // A structure whose ID could not be fetched returns normally and
         // produces nothing. Marking it complete gave it a check mark, a
@@ -6296,16 +5472,11 @@ function BatchPage({ setPage }) {
           : j)));
         if (wasCancelled) {
           await discardPartialOutput(job, result?.lines, itemStartedAt);
-          // Set here as well as in the catch below: a cancel Astra3 takes at
-          // one of its own checkpoints RETURNS rather than throwing, and that
-          // is the ordinary path. The whole queue reads this flag -- the sweep
-          // that marks the structures still waiting, the run's history status,
-          // and the guard that withholds an entry for a queue that finished
-          // nothing.
+          // Set here as well as in the catch: a cancel taken at a checkpoint returns
+          // rather than throws. The rest of the queue, its History status and the
+          // empty-queue guard all read this flag.
           cancelled = true;
-          // No history entry for this structure either -- the entry is added
-          // further down, which this break skips. Stop the queue too:
-          // continuing to the next structure ignores what the cancel was for.
+          // No History entry for this structure, and the queue stops.
           break;
         }
         // Each completed item now also gets its own "single" history entry
@@ -6314,7 +5485,7 @@ function BatchPage({ setPage }) {
         if (!producedOutput) {
           // The queue carries on: one unusable ID is not a reason to abandon
           // the structures after it.
-          setLines((l) => [...l, { text: `${job.id}: nothing was produced -- skipped.`, tone: "error" }]);
+          setLines((l) => [...l, { text: `${job.id}: nothing was produced; skipped.`, tone: "error" }]);
           continue;
         }
         const createdId = addHistoryEntry({
@@ -6325,19 +5496,13 @@ function BatchPage({ setPage }) {
         });
         if (createdId) createdEntryIds.push(createdId);
       } catch (e) {
-        // A cancellation lands here too: cancelRun() kills the running
-        // command, which surfaces as a thrown error. Telling the two apart
-        // matters -- a cancelled item is not a failed one, and "Resume failed
-        // only" should not later re-run something the person deliberately
-        // stopped.
+        // A cancel that kills the command lands here as a thrown error. A cancelled
+        // item is not a failed one, and Resume failed only must not re-run it.
         if (cancelRequestedRef.current) {
           setLines((l) => [...l, { text: "Cancelled.", tone: "warning" }]);
-          // Marked cancelled outright rather than dropped back to "queued"
-          // for the sweep below to pick up. This is the one structure that
-          // was actually interrupted, and it is the one whose half-written
-          // output has to go -- which the sweep, which cannot tell it apart
-          // from the structures that never started, could not do.
-          // "Resume failed only" still skips it: that only re-runs failures.
+          // Marked cancelled here rather than left for the sweep below, which cannot
+          // tell it from structures that never started: this is the one whose partial
+          // output has to go.
           setQueue((q) => q.map((j, i) => (i === idx ? { ...j, status: "cancelled" } : j)));
           await discardPartialOutput(job, e?.lines, itemStartedAt);
           cancelled = true;
@@ -6370,16 +5535,11 @@ function BatchPage({ setPage }) {
         // results, and this entry is how they are reached.
         status: cancelled ? "cancelled" : allDone ? "complete" : "failed",
         meta: cancelled ? `Cancelled at ${succeeded}/${finalQueue.length}` : `${succeeded}/${finalQueue.length} succeeded`,
-        // Ids of the structures this batch actually completed, so the Reports
-        // page can offer them in a dropdown -- a batch has no single report of
-        // its own, but the runs inside it each do.
+        // Structures this batch completed, for the Reports page's dropdown; a batch
+        // has no report of its own.
         batchIds: finalQueue.filter((j) => j.status === "complete").map((j) => j.id),
-        // The exact history entries this batch created. Matching on IDs alone
-        // was ambiguous: re-running an overlapping queue inside the same
-        // 24-hour window let one batch claim another's runs, which is how a
-        // "Batch: 11 structures" group ended up listing 26 children. Entry ids
-        // are unique per run, so this can only ever match what this batch
-        // actually produced.
+        // The exact History entries this batch created. Matching on structure IDs
+        // let an overlapping re-run claim another batch's runs.
         batchEntryIds: createdEntryIds.slice(),
       });
     }
@@ -6390,12 +5550,8 @@ function BatchPage({ setPage }) {
         ? `Stopped after ${succeeded} of ${finalQueue.length}. The rest were not started.`
         : `${succeeded}/${finalQueue.length} succeeded.`,
     });
-    // Whole-queue completion pulse -- individual items run silent:true (see
-    // the runAstraCommand call above), so the per-item completion trigger in
-    // AppProvider never fires for them; this is the deliberate, single
-    // trigger for the batch case, fired only once the whole queue is actually
-    // done, and only when everything in it genuinely succeeded (same bar as
-    // the success-toned toast above, not just "the queue stopped").
+    // Items run silent, so AppProvider's per-run completion pulse never fires for
+    // them. This fires once, when the whole queue succeeded.
     if (allDone && finalQueue.length > 0) {
       setCompletionPulse(Math.random());
     }
@@ -6403,12 +5559,9 @@ function BatchPage({ setPage }) {
 
   const failedCount = queue.filter((q) => q.status === "failed").length;
   const completeCount = queue.filter((q) => q.status === "complete").length;
-  // A cancelled structure is neither done nor pending: it is finished with,
-  // so it counts toward how far the queue got, but it is not a success and
-  // must not turn the bar green.
-  // Only the structures that actually finished, either way. A cancelled one
-  // produced nothing -- its partial output was deleted -- so it is not
-  // progress through the queue. See BatchProgressBar.
+  // Only structures that finished, either way. A cancelled one produced
+  // nothing (its partial output was deleted), so it is not progress. See
+  // BatchProgressBar.
   const settledCount = completeCount + failedCount;
   // Every BATCH item is a single-structure run: one six-view render.
   const itemPlan = useMemo(() => ({ images: opts.images ? VIEWS_PER_RENDER : 0 }), [opts.images]);
@@ -6464,16 +5617,9 @@ function BatchPage({ setPage }) {
           </Card>
           {queue.length > 0 && (
             <Card style={{ padding: 20 }}>
-              {/* Deliberately identical in shape and wording to the
-                  homomer-reduction and termini prompts (see the prompt block
-                  in LiveConsole): same amber-bordered panel, same "Astra3
-                  needs your input" header, same green/red y/n buttons. This
-                  is the same KIND of moment -- Astra3 is waiting on a yes/no
-                  answer before it proceeds -- so it should look and behave
-                  the same rather than being a differently-styled dialog the
-                  person has to learn separately. No free-text field: unlike
-                  a chain letter or "skip", there is no third valid answer
-                  here. */}
+              {/* The same panel as the other prompts in LiveConsole: amber border, "Astra3
+                  needs your input" and green and red y/n buttons. No free-text field: there
+                  is no third answer. */}
               {pendingConfirm && (
                 <div className="mono" style={{ marginBottom: 10, padding: 14, border: "1px solid var(--amber)", borderRadius: "var(--radius-sm)", background: "var(--bg-2)", boxShadow: "var(--shadow-md)" }}>
                   <div style={{ fontSize: 11, color: "var(--amber)", fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
@@ -6494,10 +5640,8 @@ function BatchPage({ setPage }) {
               <Button variant="primary" size="lg" icon={running ? undefined : "play"} onClick={() => runQueue(false)} disabled={isBusy} style={{ width: "100%" }}>
                 {running ? <><Spinner size={14} />Running {settledCount}/{queue.length}…</> : `Run Batch (${queue.length})`}
               </Button>
-              {/* Batch had no cancel control of its own at all -- the only
-                  way to stop one was a cancel elsewhere in the app, which
-                  (before sequenceCancelRef) stopped a single structure and
-                  let the queue carry on. */}
+              {/* Cancels the whole queue (sequenceCancelRef), not just the current
+                  structure. */}
               {running && (
                 <Button variant="danger" size="md" icon={batchCancelling ? undefined : "x"} disabled={batchCancelling}
                   onClick={async () => {
@@ -6980,12 +6124,9 @@ function ImportPage({ setPage }) {
     return bridge.on("state", (state) => { if (state.imports) show(state.imports); });
   }, [isElectron, bridge]);
 
-  // Real import, end to end. Files are processed one at a time (PyMOL only
-  // ever runs one command at a time) via the same runAstraCommand machinery
-  // every other run uses (lock, live console, global prompt handling), just
-  // pointed at bridgeCall: bridge.runImportCommand instead of the normal
-  // bridge.runCommand -- see runAstraCommand's own comment on bridgeCall for
-  // why this reuses that machinery rather than duplicating it.
+  // Files are imported one at a time through runAstraCommand, pointed at
+  // bridge.runImportCommand (see bridgeCall), so imports get the same lock,
+  // live console and prompt handling as runs.
   const handleFiles = async (files) => {
     if (!isElectron) {
       toast.push({ tone: "neutral", title: "Available in the desktop app", message: "Importing local files requires real filesystem access." });
@@ -7001,10 +6142,8 @@ function ImportPage({ setPage }) {
     for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
       const entry = files[fileIndex];
       setImportProgress({ done: fileIndex, total: files.length });
-      // DropZone already resolved the real filesystem path for every
-      // dropped/selected file (see its own comment) -- entry here is {name,
-      // size, ext, path, file}, not a raw browser File object, so there's no
-      // need (and no correct way) to call getPathForFile again on it here.
+      // DropZone already resolved each file's path: entry is {name, size, ext,
+      // path, file}, not a browser File.
       const filePath = entry.path;
       if (!filePath) {
         toast.push({ tone: "error", title: "Could not resolve file path", message: entry.name });
@@ -7034,12 +6173,8 @@ function ImportPage({ setPage }) {
   };
 
   const analyze = (item) => {
-    // Hands the AST-XXXX ID to Single Structure Analysis -- pre-filled, ready to review settings and
-    // press run there -- NOT actually launch anything from this page.
-    // item.astId is the id astra3.py itself registered (see
-    // handleFiles above), so the backend
-    // recognizes it as a currently-registered AST ID rather than rejecting it
-    // as unknown.
+    // Pre-fills Single Structure Analysis with the AST ID astra3.py registered,
+    // for the person to review and run there.
     setPendingStructureSeed({ kind: "single", items: [{ id: item.astId, format: "pdb" }] });
     setPage("single");
   };
@@ -7064,11 +6199,7 @@ function ImportPage({ setPage }) {
       <div style={{ maxWidth: 900, margin: "0 auto", padding: "28px 32px 100px" }}>
         <SectionLabel>Import local structure files</SectionLabel>
         <BusyLock active={importing}>
-          {/* Matches validate_input_file's own allowed_extensions in the
-              IMPORT command. The picker was scoped narrower than the
-              backend, so .cif and .mmcif -- which IMPORT has always
-              accepted, and which is the format the app fetches by ID --
-              could not be chosen at all. */}
+          {/* The extensions IMPORT accepts (validate_input_file). */}
           <DropZone onFiles={handleFiles} accept=".pdb,.ent,.pse,.cif,.mmcif,.gz" />
         </BusyLock>
         {importing && (
@@ -7154,18 +6285,15 @@ function ImportPage({ setPage }) {
 }
 
 /* ============================================================
-   REPORTS PAGE: embedded HTML viewer + real rendered images
+   REPORTS PAGE: embedded HTML viewer and rendered images
    ============================================================
-   Reads the actual Astra3_Report.html and Images/*.png files a run
-   produced (via readFile/listDir/readFileAsDataUri over IPC -- the
-   renderer has no direct filesystem access by design, see the
-   security hardening pass) for whichever history entry is selected.
+   Reads the Astra3_Report.html and Images/*.png a run produced for the
+   selected history entry, through readFile, listDir and readFileAsDataUri
+   over IPC (the renderer has no filesystem access).
    ============================================================ */
 
-// Which structure IDs a history entry's own label represents, based on how
-// each page actually builds that label (see each page's own addHistoryEntry
-// call) -- used only as input to resolveRealOutputFolder's on-disk SEARCH
-// below, not to construct a path directly.
+// The structure IDs an entry's label names, as each page builds it. Only used
+// to search the disk in resolveRealOutputFolder, never to build a path.
 function idsFromHistoryEntry(entry) {
   if (entry.kind === "overlay" && entry.label.includes(" + ")) return entry.label.split(" + ").map((s) => s.trim()).filter(Boolean);
   if (entry.kind === "overlay" || entry.kind === "termini") {
@@ -7176,16 +6304,11 @@ function idsFromHistoryEntry(entry) {
   return [entry.label.trim()].filter(Boolean); // "single" (including imported AST-XXXX runs)
 }
 
-// Finds a run's real output folder. Prefers entry.sessionPath (the exact path
-// Astra3 itself printed -- see pymol-bridge.js's "Session saved:" capture)
-// when available; that's the fast, exact path for the overwhelming majority
-// of entries. Searching what actually exists on disk sidesteps needing to
-// know or replicate that scheme at all.
+// A run's output folder: from the report or session path it printed, else the
+// run folder naming all of its IDs whose time is closest to the entry's (a
+// re-run of the same structures has its own numbered folder).
 async function resolveRealOutputFolder(entry, settings) {
-  // The report path Astra3 itself printed ("HTML report saved: ...") is
-  // captured verbatim by pymol-bridge.js and is the most authoritative thing
-  // available: the report sits directly in the output folder, so its parent
-  // IS that folder, with nothing derived or guessed.
+  // The report sits directly in the run folder.
   if (entry.reportPath) {
     const dir = dirnameOf(entry.reportPath);
     if (dir) return dir;
@@ -7197,28 +6320,20 @@ async function resolveRealOutputFolder(entry, settings) {
   const ids = idsFromHistoryEntry(entry);
   if (ids.length === 0 || !window.astra3Native) return null;
   try {
-    const subdirs = await window.astra3Native.listSubdirs(settings.outputDir);
+    const folders = await window.astra3Native.listRunFolders(settings.outputDir);
     const upperIds = ids.map((id) => id.toUpperCase());
-    const match = subdirs.find((name) => {
-      const upperName = name.toUpperCase();
-      return upperIds.every((id) => upperName.includes(id));
-    });
-    return match ? joinPath(settings.outputDir, match) : null;
+    const when = entry.timestamp || Date.now();
+    const match = folders
+      .filter((f) => upperIds.every((id) => f.name.toUpperCase().includes(id)))
+      .sort((a, b) => Math.abs(a.mtimeMs - when) - Math.abs(b.mtimeMs - when))[0];
+    return match ? joinPath(settings.outputDir, match.name) : null;
   } catch {
     return null;
   }
 }
 
-// Produces the right "couldn't find it" message for a history entry whose
-// output folder resolveRealOutputFolder() failed to locate -- distinguishing
-// a run from a PREVIOUS app session (its files may simply have been moved,
-// renamed, or cleaned up sometime since -- expected, not a bug) from one
-// started in the CURRENT session (genuinely worth investigating, since its
-// files should still be exactly where they were written moments ago). History
-// itself persists across restarts either way (see AppProvider's own
-// localStorage read/write) -- this only changes how a failed OPEN attempt on
-// an old entry is explained, not whether the entry is still visible in
-// History at all.
+// The message for an entry whose folder cannot be found. A run from an earlier
+// session may have been moved since; one from this session should be in place.
 function outputFolderNotFoundMessage(entry, sessionStartTime) {
   if (entry.timestamp && entry.timestamp < sessionStartTime) {
     return "This run is from a previous session and its files are no longer available in this location. They may have been moved, renamed, or deleted since the run finished.";
@@ -7226,27 +6341,9 @@ function outputFolderNotFoundMessage(entry, sessionStartTime) {
   return "Could not locate this run's output folder. It may have been moved or deleted since the run finished.";
 }
 
-// Removes the "Image Gallery" section from the report HTML before it's embedded via <iframe
-// srcDoc=...> in ReportsPage below. This is deliberately an in-app-display-only fix: the actual
-// report FILE generated by astra3_render_report.py is never touched, and still shows real working
-// images when opened for real (a real file:// load has an actual base URL to resolve
-// "Images/view_front.png" against). Switching the iframe from srcDoc to a real file:// src was
-// considered instead, but isn't guaranteed to behave the same way across Electron's
-// contextIsolation/security settings, and there's already a fully-working, real-image "Images" tab
-// covering the identical need (see the images-loading effect below), so removing the specific
-// section that can't currently render here is the lower-risk fix,. Matches
-// astra3_render_report.py's own exact, fixed HTML structure in both places it generates this
-// section (single-structure and OVERLAY/TERMINI comparison reports use identical markup). If a
-// future report-generator change alters that structure and these markers stop matching, this safely
-// no-ops and leaves the HTML completely untouched rather than risking a bad cut. Groups a run's
-// images for the Images tab. Files at the top level are the combined view of every structure and
-// come first. Each comparison's folder follows in the order its first image appears (the report's
-// best-match order), split into its terminus close-ups and then its whole-structure views, each
-// under its own divider. reference is the run's actual reference structure, read from the run's own
-// JSON export. The history label lists IDs in the order they were typed, and Astra3 can pick a
-// different reference (1AKE vs 6S36, 6RZE was aligned to 6S36), so the label cannot say which
-// structure each folder was aligned to. The structures a run compared against its reference, from
-// its exported JSON: TERMINI lists comparisons, OVERLAY lists every structure.
+// The structures a run compared against its reference, from its JSON export:
+// TERMINI lists comparisons, OVERLAY every structure. Astra3 can choose a
+// reference other than the first ID typed, so the export is the source.
 function comparedStructureIds(exported, reference) {
   const ids = new Set();
   for (const c of exported?.comparisons || []) if (c?.comparison_structure) ids.add(String(c.comparison_structure));
@@ -7286,6 +6383,8 @@ function structureDisplayName(id, names) {
   return (names && names[key]) || key.replace(IMPORT_EXT_RE, "");
 }
 
+// Groups a run's images for the Images tab: combined views first, then each
+// comparison's folder in report order, close-ups before whole views.
 function groupRunImages(files, reference, compared = [], names = {}) {
   const folderRank = new Map();
   const groups = new Map();
@@ -7352,13 +6451,10 @@ function historyMetaText(meta) {
   return String(meta || "").replace(/\s*·\s*auto reference\b/g, "");
 }
 
-// Report images cannot load inside the srcDoc iframe, which has no base URL
-// for their relative paths; the Images tab shows the same files. Each image's
-// frame is removed and its caption kept, so every report's image sections --
-// OVERLAY and single-structure galleries, TERMINI close-ups and
-// visualizations -- keep their headings, colour keys and captions. The image
-// path and alt text stay behind as a hidden reference, from which the images
-// are shown (showReportImages) and copied (Copy figure).
+// The report frame cannot read files, so the report's own image tags would
+// load nothing. Each image frame is removed and its caption kept, so
+// headings, colour keys and captions stay; the path and alt text stay as a
+// hidden reference from which the frame asks the app for the image.
 function stripImageFramesKeepCaptions(html) {
   if (!html) return html;
   return html.replace(/<div class='image-frame'><img([^>]*)><\/div>/g, (_whole, attrs) => {
@@ -7370,17 +6466,10 @@ function stripImageFramesKeepCaptions(html) {
   });
 }
 
-// Groups completed runs under the batch that produced them.
-//
-// Shared by the Reports and 3D Viewer sidebars rather than written twice:
-// they present the same history and must group it identically, and a second
-// copy of this logic is a second place for it to go subtly out of step.
-//
-// Children are matched on the IDs the batch queue recorded, not guessed from
-// a label, so re-running the same structure on its own later is not absorbed
-// into an old batch. The timestamp window is a second guard on that. A batch
-// whose children have all been deleted drops out entirely rather than showing
-// an empty expander.
+// Groups completed runs under the batch that produced them, for the Reports
+// and 3D Viewer sidebars. Children are matched on the entry IDs the batch
+// recorded, so a later solo run of the same structure is not absorbed; a
+// batch with no children left is dropped.
 function groupCompletedByBatch(history, completed) {
   const batchGroups = history
     .filter((h) => h.kind === "batch" && (
@@ -7388,17 +6477,14 @@ function groupCompletedByBatch(history, completed) {
       (Array.isArray(h.batchIds) && h.batchIds.length > 0)
     ))
     .map((batch) => {
-      // Exact entry ids when the batch recorded them -- unambiguous, and the
-      // only thing that cannot pick up another batch's runs.
+      // Exact entry IDs, when the batch recorded them.
       if (Array.isArray(batch.batchEntryIds) && batch.batchEntryIds.length > 0) {
         const wanted = new Set(batch.batchEntryIds);
         return { batch, children: completed.filter((c) => wanted.has(c.id)) };
       }
-      // Fallback for batches recorded before entry ids existed. Matching on
-      // structure ID plus a time window can over-match when two batches
-      // overlap, so each ID contributes at most ONE child -- the closest run
-      // before the batch finished. Without that cap an 11-structure batch
-      // listed 26 children.
+      // Batches recorded before entry IDs: structure ID plus a time window, which
+      // can over-match when batches overlap, so each ID contributes at most one
+      // child (the closest run before the batch finished).
       const byLabel = new Map();
       for (const c of completed) {
         if (!batch.batchIds.includes(c.label)) continue;
@@ -7420,30 +6506,10 @@ function groupCompletedByBatch(history, completed) {
   return { batchGroups, ungrouped, ordered };
 }
 
-// Makes the links inside an embedded HTML report behave like app actions
-// instead of navigations.
-//
-// the report's own "Open PyMOL session" button is an ordinary <a
-// href="...pse">. Inside the app the report is rendered in an iframe, so
-// clicking it navigated the frame -- and since Electron has no handler for
-// .pse, that came out as a file DOWNLOAD of a session the person already has
-// on disk. Clicking it downloaded a copy rather than opening it, which is
-// close to the opposite of what the button says it does.
-//
-// The same anchor is left alone in a browser (opening the report file
-// directly), where a web page genuinely cannot launch a desktop application
-// and downloading is the only thing it could do.
-//
-// Applied on every iframe load rather than by rewriting the report HTML, so
-// the report file on disk stays exactly as Astra3 wrote it -- it must keep
-// working when opened straight from Explorer.
-// Copy figure, in the in-app report. Each image group gets one small button
-// that copies its images and colour key as a single picture. The clipboard
-// holds only that picture: no text, links, commands or file paths.
-//
-// The images are read from the run's own Images folder through the same file
-// access the Images tab uses. A report opened from disk in a browser cannot
-// read its images back, which is why the button exists only here.
+// Copy figure, in the in-app report: one button per image group copies its
+// images and colour key as a single picture, and nothing else. The images
+// are read from the run's Images folder; a report opened in a browser cannot
+// read them back, so the button only exists here.
 const FIGURE_MAX_CELL_WIDTH = 1200;
 // Figures are copied with a transparent background on macOS, where the
 // clipboard carries transparency into PowerPoint and Keynote. On Windows,
@@ -7459,56 +6525,6 @@ function safeReportImagePath(src) {
   return parts.length >= 2 && parts[0] === "Images" && parts.every((part) => part && part !== "." && part !== "..");
 }
 
-// Image groups in a report: each .images block, with the heading and colour
-// key that precede it (up to the previous block).
-function reportImageGroups(doc) {
-  const groups = [];
-  doc.querySelectorAll("div.images").forEach((imagesEl) => {
-    const panels = Array.from(imagesEl.querySelectorAll(".image-card")).map((card) => {
-      const ref = card.querySelector(".astra3-image-ref");
-      const caption = card.querySelector(".image-caption");
-      return {
-        src: ref ? ref.getAttribute("data-src") : null,
-        label: caption ? caption.textContent.replace(/\s+/g, " ").trim() : "",
-      };
-    });
-    if (!panels.length || !panels.every((panel) => safeReportImagePath(panel.src))) return;
-    let head = null;
-    let key = null;
-    for (let el = imagesEl.previousElementSibling; el && !el.classList.contains("images"); el = el.previousElementSibling) {
-      if (!key && el.classList.contains("color-key")) key = el;
-      if (el.classList.contains("img-group-head")) { head = el; break; }
-    }
-    const parts = head
-      ? Array.from(head.children).map((c) => c.textContent.replace(/^\s*\u00b7\s*/, "").trim()).filter(Boolean)
-      : [];
-    groups.push({ imagesEl, head, key, panels, title: parts[0] || "", kind: parts[1] || "" });
-  });
-  return groups;
-}
-
-// Colour key entries as drawn in the report: a name, an optional note
-// ("reference"), and swatch/label pairs.
-function colorKeyEntries(keyEl) {
-  if (!keyEl) return [];
-  return Array.from(keyEl.querySelectorAll(".key-item")).map((item) => {
-    const entry = { name: "", note: "", swatches: [] };
-    let last = null;
-    item.childNodes.forEach((node) => {
-      if (node.nodeType === 1 && node.tagName === "STRONG") entry.name = node.textContent.trim();
-      else if (node.nodeType === 1 && node.classList.contains("key-note")) entry.note = node.textContent.trim();
-      else if (node.nodeType === 1 && node.classList.contains("key-swatch")) {
-        const colour = /background(?:-color)?:\s*([^;]+)/i.exec(node.getAttribute("style") || "");
-        last = { color: colour ? colour[1].trim() : "#999999", label: "" };
-        entry.swatches.push(last);
-      } else if (node.nodeType === 3 && last && !last.label) {
-        last.label = node.textContent.trim();
-      }
-    });
-    return entry;
-  });
-}
-
 // A panel label for the figure: the report caption, with a bare file name
 // (view_back.png, as single-structure reports caption their views) shown as
 // the view it names.
@@ -7518,13 +6534,11 @@ function figurePanelLabel(label) {
   return name ? name.charAt(0).toUpperCase() + name.slice(1) : label;
 }
 
-// The empty margin every panel shares, as one crop rectangle. A single crop
-// for all panels keeps them at the same scale and alignment, so they stay
-// comparable. Panels of different sizes, or with no white or transparent
-// margin, are left uncropped. The margin is found on a small copy of each
-// panel: it only needs to be right to within a few pixels, and the crop keeps
-// a clear border around the content anyway.
-function sharedContentBox(doc, images) {
+// One crop rectangle for every panel's shared empty margin, so the panels
+// keep the same scale and alignment. Panels of different sizes, or with no
+// white or transparent margin, are left uncropped. Found on a small copy of
+// each panel; a few pixels out does not matter.
+function sharedContentBox(images) {
   const w = images[0].naturalWidth || images[0].width;
   const h = images[0].naturalHeight || images[0].height;
   const full = { x: 0, y: 0, w, h };
@@ -7532,7 +6546,7 @@ function sharedContentBox(doc, images) {
   const scale = Math.min(1, 480 / Math.max(w, h));
   const pw = Math.max(1, Math.round(w * scale));
   const ph = Math.max(1, Math.round(h * scale));
-  const probe = doc.createElement("canvas");
+  const probe = document.createElement("canvas");
   probe.width = pw;
   probe.height = ph;
   const ctx = probe.getContext("2d", { willReadFrequently: true });
@@ -7565,12 +6579,12 @@ function sharedContentBox(doc, images) {
 // Draws a group's images in a grid, each with its report caption beneath it,
 // and the colour key below the grid, on a white background. Every image must
 // load: a figure with a panel missing is not copied.
-async function composeFigure(doc, group, loadDataUri, options = {}) {
+async function composeFigure(group, loadDataUri, options = {}) {
   const images = await Promise.all(group.panels.map(async (panel) => {
     try {
       const uri = await loadDataUri(panel.src);
       if (!uri) return null;
-      const img = doc.createElement("img");
+      const img = document.createElement("img");
       await new Promise((resolve, reject) => {
         img.onload = resolve;
         img.onerror = reject;
@@ -7587,7 +6601,7 @@ async function composeFigure(doc, group, loadDataUri, options = {}) {
 
   const n = images.length;
   const cols = n <= 2 ? n : n === 4 ? 2 : 3;
-  const crop = sharedContentBox(doc, images);
+  const crop = sharedContentBox(images);
   const cellW = Math.min(FIGURE_MAX_CELL_WIDTH, crop.w);
   const unit = cellW / 40;
   const pad = Math.round(unit * 1.2);
@@ -7604,7 +6618,7 @@ async function composeFigure(doc, group, loadDataUri, options = {}) {
   for (let i = 0; i < n; i += cols) rows.push(cells.slice(i, i + cols));
   const rowHeights = rows.map((row) => Math.max(...row.map((c) => c.h)) + labelH);
 
-  const canvas = doc.createElement("canvas");
+  const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   // Key layout, wrapped to the figure width.
   const swatch = Math.round(keySize * 0.9);
@@ -7612,7 +6626,7 @@ async function composeFigure(doc, group, loadDataUri, options = {}) {
   const keyLines = [];
   let line = [];
   let lineW = 0;
-  colorKeyEntries(group.key).forEach((entry) => {
+  group.keyEntries.forEach((entry) => {
     const name = entry.note ? `${entry.name} (${entry.note})` : entry.name;
     ctx.font = fontOf(600, keySize);
     const parts = [{ type: "name", text: name, w: ctx.measureText(name).width + keySize * 0.6 }];
@@ -7684,80 +6698,17 @@ async function composeFigure(doc, group, loadDataUri, options = {}) {
   });
 }
 
-// Report images in the in-app report. Each image is read through the same
-// thumbnail reader the Images tab uses, all of them when the report opens,
-// a few at a time. Full-size files are not used for display: a full-quality run's
-// ray traces are large enough that decoding a whole report of them at once
-// can exhaust the renderer. Copy figure still reads the full-size files.
+// The in-app report is shown in a sandboxed frame (report-frame.html) that
+// cannot reach the app. The frame asks for what a report needs by message,
+// and every request is checked here: a report can read only images in its
+// own run's Images folder and open only its own session and output folder.
+//
+// Images are sent as reduced copies; decoding a whole report of full-quality
+// ray traces can exhaust the renderer. Copy figure reads the full-size files.
 const REPORT_IMAGE_DISPLAY_WIDTH = 1024;
-const REPORT_IMAGE_LOADS_AT_ONCE = 3;
-
-function showReportImages(doc, folderPromise) {
-  if (!doc || !doc.body || !window.astra3Native || !window.astra3Native.readImageThumbnail) return;
-  const refs = Array.from(doc.querySelectorAll(".image-card .astra3-image-ref"))
-    .filter((ref) => safeReportImagePath(ref.getAttribute("data-src")));
-  if (!refs.length) return;
-  const style = doc.createElement("style");
-  style.textContent = [
-    ".astra3-image-missing{display:flex;align-items:center;justify-content:center;min-height:120px;",
-    "padding:12px;font-size:12px;color:#8e8e93;text-align:center}",
-  ].join("");
-  doc.head.appendChild(style);
-
-  let active = 0;
-  const queue = [];
-  const pump = () => {
-    while (active < REPORT_IMAGE_LOADS_AT_ONCE && queue.length) {
-      const job = queue.shift();
-      active += 1;
-      job().finally(() => { active -= 1; pump(); });
-    }
-  };
-
-  const pending = new Map();
-  refs.forEach((ref) => {
-    const frame = doc.createElement("div");
-    frame.className = "image-frame";
-    // Holds the card's shape until its image arrives (renders are 4:3).
-    frame.style.aspectRatio = "4 / 3";
-    ref.parentNode.insertBefore(frame, ref);
-    pending.set(frame, ref);
-  });
-
-  const fill = (frame) => {
-    const ref = pending.get(frame);
-    if (!ref) return;
-    pending.delete(frame);
-    queue.push(async () => {
-      let uri = null;
-      try {
-        const folder = await folderPromise;
-        const src = ref.getAttribute("data-src");
-        uri = folder
-          ? await window.astra3Native.readImageThumbnail(joinPath(folder, ...src.split("/")), REPORT_IMAGE_DISPLAY_WIDTH)
-          : null;
-      } catch {
-        uri = null;
-      }
-      if (uri) {
-        const img = doc.createElement("img");
-        img.alt = ref.getAttribute("data-alt") || "";
-        img.onload = () => { frame.style.aspectRatio = ""; };
-        img.src = uri;
-        frame.appendChild(img);
-      } else {
-        const note = doc.createElement("div");
-        note.className = "astra3-image-missing";
-        note.textContent = "Image not found in the run folder";
-        frame.appendChild(note);
-      }
-    });
-    pump();
-  };
-
-  // Every image loads once, when the report opens, and stays.
-  Array.from(pending.keys()).forEach(fill);
-}
+const REPORT_THEME_KEY = "astra3-report-theme";
+const REPORT_COPY_TEXT_LIMIT = 200000;
+const REPORT_FIGURE_PANEL_LIMIT = 48;
 
 function blobToDataUri(blob) {
   return new Promise((resolve, reject) => {
@@ -7768,205 +6719,160 @@ function blobToDataUri(blob) {
   });
 }
 
-// The report's own Copy buttons (the citation, and the Methods text) run
-// inline scripts that use the web Clipboard API, which the report frame
-// refuses. Their clicks are taken here first and written through the app's
-// clipboard instead. The report file itself is unchanged, so its buttons still
-// work when it is opened in a browser.
-function wireReportCopyButtons(doc) {
-  if (!doc || !window.astra3Native || !window.astra3Native.copyText) return;
-  doc.addEventListener("click", (ev) => {
-    const button = ev.target && ev.target.closest && ev.target.closest("#astra3-citation-copy-btn, button[data-methods-text]");
-    if (!button) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    let text = button.getAttribute("data-methods-text");
-    if (text === null) {
-      const el = doc.getElementById("astra3-citation-text");
-      text = el ? (el.innerText || el.textContent || "") : "";
-    }
-    if (!button.dataset.label) button.dataset.label = button.textContent;
-    const label = button.dataset.label;
-    const flash = (message) => {
-      button.textContent = message;
-      clearTimeout(button._astra3Reset);
-      button._astra3Reset = setTimeout(() => { button.textContent = label; }, 1600);
-    };
-    window.astra3Native.copyText(text.trim())
-      .then((ok) => flash(ok ? "Copied" : "Could not copy"))
-      .catch(() => flash("Could not copy"));
-  }, true);
+// A figure request from the frame as plain, bounded data, or null when it
+// names anything but images of the run.
+function reportFigureSpec(message) {
+  const panels = Array.isArray(message.panels) ? message.panels : [];
+  if (!panels.length || panels.length > REPORT_FIGURE_PANEL_LIMIT) return null;
+  if (!panels.every((panel) => panel && safeReportImagePath(panel.src))) return null;
+  const text = (value) => String(value || "").slice(0, 200);
+  const list = (value, limit) => (Array.isArray(value) ? value.slice(0, limit) : []);
+  return {
+    panels: panels.map((panel) => ({ src: panel.src, label: text(panel.label) })),
+    keyEntries: list(message.key, 64).map((entry) => ({
+      name: text(entry && entry.name),
+      note: text(entry && entry.note),
+      swatches: list(entry && entry.swatches, 16).map((swatch) => ({ color: text(swatch && swatch.color), label: text(swatch && swatch.label) })),
+    })),
+  };
 }
 
-function addFigureCopyButtons(doc, folderPromise) {
-  if (!doc || !doc.body || !window.astra3Native || !window.astra3Native.readFileAsDataUri) return;
-  const groups = reportImageGroups(doc);
-  if (!groups.length) return;
-  // Grey at rest, purple while pressed and once the figure is on the
-  // clipboard, then back to grey.
-  const style = doc.createElement("style");
-  style.textContent = [
-    ".astra3-copy-btn{margin-left:auto;float:right;font:inherit;font-size:11.5px;font-weight:500;letter-spacing:normal;text-transform:none;",
-    "color:#8e8e93;background:transparent;border:1px solid #c7c7cc;border-radius:6px;padding:3px 10px;cursor:pointer;",
-    "transition:color .15s,border-color .15s,background-color .15s}",
-    ".astra3-copy-btn:hover{color:#5f5f64;border-color:#a1a1a6}",
-    ".astra3-copy-btn:active,.astra3-copy-btn.is-copied{color:#8d66c2;border-color:#8d66c2;background:#f4f0fa}",
-    ".astra3-copy-btn:disabled{cursor:default}",
-    ".astra3-copy-bar{display:flex;justify-content:flex-end;margin:6px 0}",
-    "@media print{.astra3-copy-btn,.astra3-copy-bar{display:none}}",
-  ].join("\n");
-  doc.head.appendChild(style);
+// Answers one report frame until the returned function is called.
+function serveReportFrame(frame, html, entry, settings, toast, openInViewer) {
+  const native = window.astra3Native;
+  // The run's folder is looked up once, as the report opens.
+  const folder = resolveRealOutputFolder(entry, settings).catch(() => null);
+  const inFolder = async (parts) => {
+    const dir = await folder;
+    return dir ? joinPath(dir, ...parts) : null;
+  };
+  // Copying and opening follow a click in the report, never a script alone.
+  const clicked = () => !navigator.userActivation || navigator.userActivation.isActive;
 
-  const loadDataUri = async (src) => {
-    const folder = await folderPromise;
-    return folder ? window.astra3Native.readFileAsDataUri(joinPath(folder, ...src.split("/"))) : null;
+  // A finished picture is kept for repeat copies; a failed one is not.
+  const figures = new Map();
+  const figure = (message) => {
+    const spec = reportFigureSpec(message);
+    if (!spec) return Promise.reject(new Error("This figure cannot be copied"));
+    const key = JSON.stringify(spec);
+    if (!figures.has(key)) {
+      const loadDataUri = async (src) => {
+        const file = await inFolder(src.split("/"));
+        return file ? native.readFileAsDataUri(file) : null;
+      };
+      const made = composeFigure(spec, loadDataUri);
+      made.catch(() => figures.delete(key));
+      figures.set(key, made);
+    }
+    return figures.get(key);
   };
 
-  groups.forEach((group) => {
-    const button = doc.createElement("button");
-    button.type = "button";
-    button.className = "astra3-copy-btn";
-    const idleTitle = "Copy these images and their colour key as one picture";
-    if (group.head) {
-      group.head.appendChild(button);
-    } else {
-      const bar = doc.createElement("div");
-      bar.className = "astra3-copy-bar";
-      bar.appendChild(button);
-      group.imagesEl.parentNode.insertBefore(bar, group.imagesEl);
-    }
-
-    // The picture is prepared as soon as the pointer or keyboard focus reaches
-    // the button, so a click usually only has to place it on the clipboard.
-    // A finished picture is kept for repeat copies; a failed one is not.
-    let figure = null;
-    const prepare = () => {
-      if (!figure) {
-        figure = composeFigure(doc, group, loadDataUri);
-        figure.catch(() => { figure = null; });
+  const requests = {
+    ready: () => {
+      let theme = null;
+      try {
+        theme = localStorage.getItem(REPORT_THEME_KEY);
+      } catch {
+        theme = null;
       }
-      return figure;
-    };
-    button.addEventListener("pointerenter", prepare);
-    button.addEventListener("focus", prepare);
-
-    let resetTimer = null;
-    const show = (text, state, title, resetAfter) => {
-      button.textContent = text;
-      button.title = title;
-      button.disabled = state === "busy";
-      button.classList.toggle("is-copied", state === "copied");
-      clearTimeout(resetTimer);
-      if (resetAfter) resetTimer = setTimeout(() => show("Copy figure", "idle", idleTitle, 0), resetAfter);
-    };
-    show("Copy figure", "idle", idleTitle, 0);
-
-    button.addEventListener("click", () => {
-      const win = doc.defaultView;
-      show("Copying\u2026", "busy", idleTitle, 0);
-      let composeError = null;
-      // The picture is passed as a pending blob so the copy stays tied to the
-      // click if it is still being prepared.
-      const blob = prepare().catch((err) => { composeError = err; throw err; });
-      let write;
-      if (window.astra3Native.copyImage) {
-        write = blob.then(blobToDataUri).then((uri) => window.astra3Native.copyImage(uri)).then((ok) => {
-          if (!ok) throw new Error("The clipboard did not accept the picture");
-        });
-      } else {
-        try {
-          write = win.navigator.clipboard.write([new win.ClipboardItem({ "image/png": blob })]);
-        } catch (err) {
-          write = Promise.reject(err);
-        }
+      frame.contentWindow.postMessage({ astra3Report: true, type: "show", html, theme }, "*");
+    },
+    theme: ({ dark }) => {
+      try {
+        localStorage.setItem(REPORT_THEME_KEY, dark ? "dark" : "light");
+      } catch {
+        // Storage is unavailable; the theme lasts until the report closes.
       }
-      write.then(
-        () => show("Copied", "copied", idleTitle, 1500),
-        (err) => show("Could not copy", "idle", ((composeError || err || {}).message) || idleTitle, 5000),
-      );
-    });
-  });
-}
-
-function wireReportLinks(iframe, entry, settings, toast, openInViewer) {
-  let doc;
-  try {
-    doc = iframe.contentDocument;
-  } catch {
-    return; // cross-origin -- nothing to wire, and nothing broken by not wiring it
-  }
-  if (!doc) return;
-  doc.addEventListener("click", async (ev) => {
-    const anchor = ev.target && ev.target.closest && ev.target.closest("a[href]");
-    if (!anchor) return;
-    const href = anchor.getAttribute("href") || "";
-    const lower = href.toLowerCase();
-    const isSession = /\.(pse|cxs)$/.test(lower);
-    const isFolder = anchor.hasAttribute("data-astra-folder");
-    if (!isSession && !isFolder) return; // ordinary link (external docs etc.) -- leave it alone
-    ev.preventDefault();
-    ev.stopPropagation();
-    if (!window.astra3Native) return;
-    if (isSession && entry.engine === "astra3" && openInViewer) { openInViewer(entry); return; }
-    // The report's href is relative to the report file, which lives in the
-    // run's output folder -- resolve it against the folder we already know
-    // rather than trusting the iframe's own (about:srcdoc) base URL, which
-    // has no useful location to resolve against at all.
-    const folder = await resolveRealOutputFolder(entry, settings);
-    if (!folder) {
-      toast.push({ tone: "error", title: "Could not open", message: "This run's output folder could not be located on disk. It may have been moved or deleted." });
-      return;
-    }
-    if (isFolder) {
-      const err = await window.astra3Native.openPath(folder);
+    },
+    image: async ({ src }) => {
+      if (!safeReportImagePath(src)) return null;
+      const file = await inFolder(src.split("/"));
+      return file ? native.readImageThumbnail(file, REPORT_IMAGE_DISPLAY_WIDTH) : null;
+    },
+    prepareFigure: (message) => {
+      figure(message).catch(() => {});
+    },
+    copyFigure: async (message) => {
+      if (!clicked()) return { ok: false };
+      try {
+        const uri = await blobToDataUri(await figure(message));
+        if (!(await native.copyImage(uri))) throw new Error("The clipboard did not accept the picture");
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: (err && err.message) || "" };
+      }
+    },
+    copyText: async ({ text }) => {
+      if (!clicked() || typeof text !== "string" || text.length > REPORT_COPY_TEXT_LIMIT) return false;
+      return !!(await native.copyText(text));
+    },
+    openFolder: async () => {
+      if (!clicked()) return;
+      const dir = await folder;
+      if (!dir) {
+        toast.push({ tone: "error", title: "Could not open", message: "This run's output folder could not be located on disk. It may have been moved or deleted." });
+        return;
+      }
+      const err = await native.openPath(dir);
       if (err) toast.push({ tone: "error", title: "Could not open output folder", message: err });
-      return;
+    },
+    openSession: async ({ href }) => {
+      if (!clicked() || typeof href !== "string" || !/\.(pse|cxs)$/i.test(href)) return;
+      if (entry.engine === "astra3" && openInViewer) { openInViewer(entry); return; }
+      // Relative to the run's output folder, and never outside it.
+      const parts = href.replace(/^\.?[/\\]/, "").split(/[/\\]/).filter(Boolean);
+      if (!parts.length || parts.some((part) => part === ".." || part === "." || part.includes(":"))) return;
+      const file = await inFolder(parts);
+      if (!file) {
+        toast.push({ tone: "error", title: "Could not open", message: "This run's output folder could not be located on disk. It may have been moved or deleted." });
+        return;
+      }
+      const err = await native.openInPymol(file);
+      if (err) toast.push({ tone: "error", title: "Could not open session", message: err });
+    },
+    shown: () => {
+      frame.dataset.report = "shown";
+    },
+  };
+
+  const onMessage = async (event) => {
+    if (!frame.contentWindow || event.source !== frame.contentWindow) return;
+    const message = event.data;
+    if (!message || message.astra3Report !== true || !Object.hasOwn(requests, message.type)) return;
+    let result = null;
+    try {
+      result = await requests[message.type](message);
+    } catch {
+      result = null;
     }
-    const rel = href.replace(/^\.?[/\\]/, "").split(/[/\\]/).filter(Boolean);
-    const err = await window.astra3Native.openInPymol(joinPath(folder, ...rel));
-    if (err) toast.push({ tone: "error", title: "Could not open session", message: err });
-  });
-  // The run's folder is looked up once, as the report opens, and shared by
-  // the images and the Copy figure buttons.
-  const reportFolder = resolveRealOutputFolder(entry, settings).catch(() => null);
-  showReportImages(doc, reportFolder);
-  addFigureCopyButtons(doc, reportFolder);
-  wireReportCopyButtons(doc);
+    if (typeof message.id === "number" && frame.contentWindow) {
+      frame.contentWindow.postMessage({ astra3Report: true, id: message.id, result: result === undefined ? null : result }, "*");
+    }
+  };
+  window.addEventListener("message", onMessage);
+  return () => window.removeEventListener("message", onMessage);
 }
 
 function ReportsPage({ setPage }) {
   const { history, settings, isElectron, sessionStartTime, setSelectedViewerId } = useApp();
   const toast = useToast();
-  // "batch" entries represent multiple separate runs, each with its own
-  // output folder -- there's no single report/session for a batch entry
-  // itself to open, so it's excluded here rather than letting it resolve to a
-  // nonsensical guessed path built from its "Batch: N structures" label.
-  // Reports/sessions for the individual structures a batch ran are still
-  // reachable as their own entries if that batch was also configured to add
-  // per-structure history (this only affects the one summary entry the batch
-  // queue itself creates).
+  // A batch entry has no single report or session; its structures have their
+  // own entries.
   const completed = history.filter((h) => h.status === "complete" && h.kind !== "batch");
   const [expandedBatches, setExpandedBatches] = useState({});
-  // Pairs each batch entry with the individual runs it produced.
-  //
-  // Matched on batchIds (recorded by the batch queue itself) rather than
-  // guessed from the "via Batch" meta string, so this stays correct if the
-  // same structure is later run again on its own. The timestamp window keeps
-  // a re-run of the same ID from being pulled into an older batch. A batch
-  // whose children have all been deleted drops out rather than showing an
-  // empty expander.
+  // Pairs each batch entry with its runs, matched on the batchIds it recorded
+  // rather than the "via Batch" meta text, with a time window so a later
+  // re-run is not pulled in. A batch with no children left is dropped.
   const { batchGroups, ordered } = groupCompletedByBatch(history, completed);
   const [selected, setSelected] = useState(completed[0] || null);
   // Honour a specific entry requested from elsewhere (clicking a row on the
-  // History page or the dashboard). Without this the page kept whatever was
-  // already selected and silently showed the wrong structure.
+  // History page or the dashboard).
   const { selectedReportId, setSelectedReportId } = useApp();
   useEffect(() => {
     if (!selectedReportId) return;
     const wanted = history.find((h) => h.id === selectedReportId);
     if (wanted) {
-      // A batch entry has no report of its own; open its first completed
-      // structure instead, which is what someone clicking it actually wants.
+      // Opens the batch's first completed structure.
       if (wanted.kind === "batch") {
         setExpandedBatches((e) => ({ ...e, [wanted.id]: true }));
         const group = batchGroups.find((g) => g.batch.id === wanted.id);
@@ -7981,6 +6887,7 @@ function ReportsPage({ setPage }) {
   }, [selectedReportId]);
   const [tab, setTab] = useState("report");
   const [reportHtml, setReportHtml] = useState(null);
+  const reportFrame = useRef(null);
   const [reportLoadError, setReportLoadError] = useState(null);
   const [imageFiles, setImageFiles] = useState([]); // [{ name, dataUri }]
   // The same grouping the HTML report uses. A name like "6F7R/view_front.png"
@@ -7992,12 +6899,8 @@ function ReportsPage({ setPage }) {
   const imageGroups = useMemo(() => groupRunImages(imageFiles, imageReference, imageCompared, imageNames), [imageFiles, imageReference, imageCompared, imageNames]);
   const [imagesLoading, setImagesLoading] = useState(false);
 
-  // entry.sessionPath is the real ".pse" path Astra3 itself printed during
-  // the run (see pymol-bridge.js's "Session saved:" capture, threaded through
-  // runAstraCommand's result on each page's run()). Falls back to
-  // resolveRealOutputFolder's on-disk search for entries that predate this
-  // (loaded from a previous session's saved history) or where the session
-  // genuinely failed to save.
+  // The .pse path Astra3 printed during the run. Older entries, or runs whose
+  // session failed to save, fall back to resolveRealOutputFolder.
   const openReportExternally = async (entry) => {
     if (!isElectron) { toast.push({ tone: "neutral", title: "Opening in browser", message: "Astra3_Report.html" }); return; }
     const folder = await resolveRealOutputFolder(entry, settings);
@@ -8022,9 +6925,8 @@ function ReportsPage({ setPage }) {
     }
     const folder = await resolveRealOutputFolder(entry, settings);
     if (!folder) { toast.push({ tone: "error", title: "Could not open session", message: "Could not locate this run's output folder." }); return; }
-    // No exact .pse filename known (object names vary by run) -- find it by
-    // listing the Session/ folder rather than guessing, same reasoning as
-    // resolveRealOutputFolder itself.
+    // Object names vary by run, so the Session folder is listed rather than a
+    // name guessed.
     const files = await window.astra3Native.listDir(joinPath(folder, "Session"));
     const pseFile = files.find((f) => /\.(pse|cxs)$/i.test(f));
     if (!pseFile) { toast.push({ tone: "error", title: "Could not open session", message: "No session file found in this run's Session folder." }); return; }
@@ -8043,14 +6945,9 @@ function ReportsPage({ setPage }) {
       return next;
     });
   }, []);
-  // Individual image "open externally" (see the Images tab below) -- images
-  // live at <output folder>/Images/<filename>.png.
+  // Images are at <output folder>/Images/<filename>.png.
   const openImageExternally = async (entry, filename) => {
-    // filename may be a bare name (single-structure/OVERLAY) or
-    // "<comparison>/name.png" (TERMINI's per-comparison subfolder shape --
-    // see the image-loading effect below) -- string concatenation handles
-    // both correctly without needing to know which shape this particular
-    // entry is.
+    // filename is a bare name, or "<comparison>/name.png" for TERMINI.
     if (!isElectron) { toast.push({ tone: "neutral", title: "Opening image", message: filename }); return; }
     const folder = await resolveRealOutputFolder(entry, settings);
     if (!folder) { toast.push({ tone: "error", title: "Could not open image", message: "Could not locate this run's output folder." }); return; }
@@ -8073,9 +6970,8 @@ function ReportsPage({ setPage }) {
     if (result.failures && result.failures.length > 0) {
       toast.push({ tone: "warning", title: `Opened ${result.opened} image(s)`, message: result.failures.slice(0, 3).join("\n") });
     } else if (result.mode === "windows-individual" && result.opened > 1) {
-      // Windows has no equivalent of Preview's single browsable window, so
-      // each image opens in its own. Said plainly so it does not look like a
-      // bug when several windows appear.
+      // Windows has no equivalent of Preview's single browsable window, so each
+      // image opens in its own; the toast says so when several open.
       toast.push({ tone: "neutral", title: `Opened ${result.opened} images`, message: "Windows opens each image in its own viewer window." });
     }
   };
@@ -8085,15 +6981,7 @@ function ReportsPage({ setPage }) {
     let cancelled = false;
     setReportHtml(null);
     setReportLoadError(null);
-    // An earlier version referenced an undefined `entry` on the next line,
-    // which threw a ReferenceError INSIDE this .then() -- and because the
-    // only .catch() was attached to the inner readFile promise (which was
-    // never created, since the throw happened while evaluating its argument),
-    // the rejection went unhandled and neither setReportHtml nor
-    // setReportLoadError ever ran. The tab sat on "Loading report" forever
-    // with no error shown. The outer .catch() below now guarantees this
-    // effect always resolves to either content or a visible message, whatever
-    // goes wrong.
+    // The outer catch makes sure the tab always ends with content or a message.
     resolveRealOutputFolder(selected, settings).then((folder) => {
       if (cancelled) return;
       if (!folder) { setReportLoadError("Could not locate this run's output folder. It may have been moved or deleted."); return; }
@@ -8106,20 +6994,14 @@ function ReportsPage({ setPage }) {
     return () => { cancelled = true; };
   }, [selected, isElectron]);
 
-  // A SECOND, separate bug lived here too, specific to TERMINI: its own
-  // images are written one directory level deeper than OVERLAY/single-
-  // structure -- Images/<comparison_id>/*.png, one subfolder per comparison
-  // (see astra3.py's TERMINI handler, cmp_images_dir = Path(images_dir) /
-  // cmp_obj) -- rather than directly in Images/ itself. listDir(imagesDir)
-  // alone only sees that per-comparison subfolder NAME, never the .png files
-  // one level inside it, so this correctly found the real output folder (once
-  // the first bug above was fixed) but still reported zero images for every
-  // TERMINI run specifically. Handles both shapes now: files directly in
-  // Images/ (single-structure, OVERLAY) AND files one level down inside any
-  // subfolder Images/ contains (TERMINI) -- rather than hardcoding which
-  // shape to expect for which run kind, which would just be the same kind of
-  // implementation-detail assumption that caused the original wrong-folder
-  // bug in the first place.
+  // The frame exists only while the Report tab shows a loaded report.
+  useEffect(() => {
+    if (reportHtml === null || !selected || !reportFrame.current) return undefined;
+    return serveReportFrame(reportFrame.current, reportHtml, selected, settings, toast, openInViewer);
+  }, [reportHtml, tab]);
+
+  // TERMINI writes Images/<comparison>/*.png, one folder per comparison; other
+  // runs write Images/*.png. Both are listed.
   useEffect(() => {
     if (!selected || !isElectron || tab !== "images") return;
     let cancelled = false;
@@ -8175,11 +7057,8 @@ function ReportsPage({ setPage }) {
         }
         if (!cancelled) { setImageReference(reference); setImageCompared(compared); setImageNames(names); }
         pngRefs.sort((a, b) => compareImageRefs(a.name, b.name, reportOrder));
-        // Thumbnails, not the originals. These are only ever used as an
-        // <img src> in the gallery grid; the full-resolution files stay on
-        // disk and are what the Open and Output Folder actions reach. A
-        // full-quality run writes six ray traces at 3000x2250, and holding
-        // those decoded at once is enough to exhaust the renderer process.
+        // Thumbnails for the grid; Open and Output Folder reach the originals. Six
+        // full-quality 3000x2250 ray traces decoded at once can exhaust the renderer.
         const withData = await Promise.all(pngRefs.map(async (ref) => ({
           name: ref.name, dataUri: await window.astra3Native.readImageThumbnail(ref.path, 640),
         })));
@@ -8200,7 +7079,7 @@ function ReportsPage({ setPage }) {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {/* Batches are listed as expandable groups. A batch has no
-                report of its own -- it's several separate runs -- so it
+                report of its own (it is several separate runs), so it
                 can't be "selected" the way a single run can. Expanding it
                 reveals the structures it produced, each of which does have
                 a report.
@@ -8284,10 +7163,10 @@ function ReportsPage({ setPage }) {
                     </div>
                   ) : (
                     <iframe
+                      ref={reportFrame}
                       title="report"
-                      allow="clipboard-write"
-                      srcDoc={reportHtml}
-                      onLoad={(e) => wireReportLinks(e.currentTarget, selected, settings, toast, openInViewer)}
+                      sandbox="allow-scripts allow-popups"
+                      src="report-frame.html"
                       style={{ width: "100%", height: "100%", border: "none", display: "block" }}
                     />
                   )}
@@ -8420,35 +7299,23 @@ function ReportsPage({ setPage }) {
   );
 }
 
-/* ============================================================ 3D VIEWER
-   PAGE ============================================================ Real
-   molecular renderer via 3Dmol.js (BSD-3-Clause, Rego & Koes,
-   Bioinformatics 2015). Renders the ACTUAL .pdb file Astra3's own backend
-   now writes for every completed run (see save_session() in
-   astra3_render_report.py, which exports a plain-coordinate .pdb alongside
-   the .pse specifically so this viewer has real atoms to load.pse session
-   format is PyMOL-proprietary binary with no JS parser, and Astra3's
-   downloaded source file is deliberately deleted after processing, so
-   nothing with real coordinates survived a run before this). HONEST
-   BOUNDARY: this is not a reimplementation of PyMOL's own renderer. It's a
-   genuine, separate molecular graphics engine (3Dmol.js) rendering the same
-   underlying atom data PyMOL analyzed -- representations, colors, and
-   camera behavior will look similar in spirit (real cartoon/stick/sphere
-   geometry from real coordinates, not a procedural stand-in) but will not
-   be pixel-identical to a PyMOL render. The ray-traced .png images Astra3
-   also generates via the real PyMOL subprocess remain the source of truth
-   for publication-quality static figures; this viewer is for interactive
-   inspection. Opening the actual .pse in PyMOL itself remains one click
-   away via "Open session" below.
+/* ============================================================
+   3D VIEWER PAGE
    ============================================================
- */
+   Molecular viewer built on 3Dmol.js (BSD-3-Clause; Rego & Koes,
+   Bioinformatics 2015). Loads the plain-coordinate .pdb Astra3 writes beside
+   the .pse for every run (save_session() in astra3_render_report.py): .pse is
+   PyMOL's binary format with no JavaScript parser, and the downloaded source
+   file is deleted after processing.
 
-// Distinct color palettes for chains vs. ligands vs. ions, so the three
-// categories are visually distinguishable at a glance rather than drawing
-// from one shared list -- matches how the previous procedural version
-// organized its "more colors, organized" palette, now applied to real per-
-// chain/per-hetero-residue selections instead of arbitrary generated
-// geometry.
+   This is a separate renderer drawing the same atoms PyMOL analysed, so
+   representations, colours and camera are similar but not pixel-identical to
+   a PyMOL render. The ray-traced .png images remain the figures for
+   publication; this view is for interactive inspection, and "Open session"
+   opens the .pse in PyMOL.
+   ============================================================ */
+
+// Separate palettes for chains, ligands and ions, so the three read apart.
 const VIEWER_CHAIN_COLORS = ["#AB7ADF", "#6E8EE8", "#F0C361", "#7FBF8A", "#E8614F", "#5FD1C4", "#E888C9", "#8A9BA8"];
 const VIEWER_LIGAND_COLORS = ["#F0C361", "#E8614F", "#6E8EE8", "#7FBF8A", "#AB7ADF", "#5FD1C4"];
 const CHAIN_COLOR_GROUPS = [
@@ -8456,16 +7323,13 @@ const CHAIN_COLOR_GROUPS = [
   { label: "Accent", colors: ["#F0C361", "#E8614F", "#E888C9", "#7FBF8A"] },
   { label: "Neutral", colors: ["#8A9BA8", "#C9C4D8", "#5B5470"] },
 ];
-const CHAIN_COLOR_PRESETS = CHAIN_COLOR_GROUPS.flatMap((g) => g.colors);
 
 // 3Dmol.js style keys for each representation choice in the sidebar. Kept as
 // a lookup table rather than a big if/else chain in the render effect below.
 const REP_STYLE_KEY = { cartoon: "cartoon", surface: "cartoon", sticks: "stick", spheres: "sphere", lines: "line" };
 
-// Turns a 3Dmol atom record into the small, stable shape the UI needs. Kept
-// separate so the hover readout and the click selection describe an atom
-// identically -- if these drifted apart, clicking would select something
-// other than what the readout said was under the cursor.
+// One shape for an atom, shared by the hover readout and click selection so
+// they always describe the same atom.
 function atomDescriptor(atom) {
   return {
     chain: atom.chain,
@@ -8474,8 +7338,8 @@ function atomDescriptor(atom) {
     atomName: atom.atom,
     elem: atom.elem,
     hetflag: !!atom.hetflag,
-    // A stable label for the residue as a whole, which is the unit a person
-    // actually means when they click part of a side chain.
+    // The residue as a whole: what a person means by clicking part of a side
+    // chain.
     key: `${atom.chain}|${atom.resi}|${atom.resn}`,
     serial: atom.serial,
   };
@@ -8545,10 +7409,9 @@ function residueSelector(item) {
   return item.serials && item.serials.length ? { serial: item.serials } : { chain: item.chain, resi: item.resi };
 }
 
-// Recolours a residue while keeping every representation it already has, atom
-// by atom -- a residue shown as cartoon stays cartoon, one shown as sticks
-// stays sticks, and a mixed selection keeps its mix. `color` null means the
-// contrasting black or white for each atom's current colour.
+// Recolours a residue atom by atom, keeping each atom's representation.
+// color null means black or white, whichever contrasts with the atom's
+// current colour.
 function recolorInPlace(glviewer, selector, color, backgroundColor) {
   const groups = new Map();
   for (const atom of glviewer.selectedAtoms(selector)) {
@@ -8591,9 +7454,8 @@ function residueStyleFor(rep, color) {
     case "cartoon":
       return { cartoon: { color } };
     case "ribbon":
-      // 3Dmol has no "ribbon" cartoon style -- passing one falls back to the
-      // default, which is why Ribbon and Cartoon looked identical. "trace"
-      // is the thin backbone tube that "ribbon" means in PyMOL.
+      // 3Dmol has no "ribbon" cartoon style and would fall back to the default;
+      // "trace" is the thin backbone tube PyMOL calls ribbon.
       return { cartoon: { color, style: "trace" } };
     case "line":
       return { line: { color } };
@@ -8681,25 +7543,9 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
   // Exposed so ViewerPage can show a real, specific error instead.
   const [libraryMissing, setLibraryMissing] = useState(false);
 
-  // Create the $3Dmol viewer whenever the mount DOM node actually becomes
-  // available, not just once on this hook's first call. THIS IS THE REAL FIX
-  // for "3D viewer still does not work": the previous version depended on a
-  // plain useRef, whose object identity never changes across renders, so an
-  // effect keyed on it only ever ran ONCE, on this component's first render.
-  // ViewerPage only renders the mount <div> at all when a history entry is
-  // selected (see its own `{!selected ? <EmptyState/> : ...}` branch) -- so
-  // on a fresh session with no completed analysis yet, `selected` starts
-  // null, the mount div doesn't exist on that first render, the ref's current
-  // value is still null when this effect's first (and, with the old
-  // ref-identity dependency, ONLY EVER) pass ran, and it just returned early
-  // forever. Selecting an analysis afterward re-renders the div into
-  // existence, but nothing was left to notice and retry, so the viewer was
-  // silently never created for the rest of the session.js and three.min.js
-  // both load and initialize correctly on their own, verified directly).
-  // mountNode is real React state (see ViewerPage's own callback-ref
-  // comment), so it DOES change identity every time the DOM node itself
-  // attaches or detaches, making this effect genuinely re-run exactly when it
-  // needs to.
+  // Keyed on mountNode, which is state set by a callback ref, so the viewer is
+  // created whenever the mount node appears. The node only exists once an entry
+  // is selected, so it is often null on the first render.
   useEffect(() => {
     if (!mountNode) return;
     if (!window.$3Dmol) {
@@ -8716,15 +7562,13 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
       // $3Dmol.GLViewer has no explicit destroy(); clearing models and
       // letting the DOM node get removed by React is what the library itself
       // does between page navigations in its own examples.
-      try { glviewer.clear(); } catch { /* already torn down by 3Dmol or the DOM node is gone -- nothing to clean up */ }
+      try { glviewer.clear(); } catch { /* already torn down */ }
       viewerRef.current = null;
     };
   }, [mountNode]);
 
-  // Live background-color updates -- separate from the create-viewer effect
-  // above (which only runs once per mount) so changing the color later
-  // doesn't require tearing down and recreating the whole viewer/model.
-  // 3Dmol.js's own setBackgroundColor takes a hex string directly.
+  // Separate from creation, so a background change does not rebuild the
+  // viewer. setBackgroundColor takes a hex string.
   useEffect(() => {
     const glviewer = viewerRef.current;
     if (!glviewer || !backgroundColor) return;
@@ -8734,16 +7578,9 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
     }
   }, [backgroundColor, mountNode]);
 
-  // Load/re-load the structure whenever the underlying PDB text changes (i.e.
-  // a different completed analysis was selected). "Show waters" is a pure
-  // DISPLAY toggle here, not a real removal -- the viewer is a temporary,
-  // exploratory view of what was already produced; hiding waters via style
-  // (see the style-application effect below) rather than deleting atoms from
-  // the loaded model means toggling it back on needs no reload, doesn't touch
-  // the underlying .pse/report/images (which already never included waters in
-  // the first place, per Astra3's own always-strip-water backend behavior),
-  // and can never be confused with actually modifying analysis output through
-  // the viewer.
+  // Reloads when the structure text changes. Show waters is display only: they
+  // are hidden by style, never removed, so toggling needs no reload and the
+  // loaded model is never modified.
   useEffect(() => {
     const glviewer = viewerRef.current;
     if (!glviewer || !pdbText) return;
@@ -8766,24 +7603,20 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
   pickBackgroundRef.current = onPickBackground;
   pickCbRef.current = onPickAtom;
 
-  // without re-loading the model itself (fast -- setStyle only touches the
-  // existing model's atoms, no re-parse).
+  // Restyles without reloading; setStyle only touches the existing atoms.
   useEffect(() => {
     const glviewer = viewerRef.current;
     if (!glviewer || !pdbText) return;
 
     glviewer.setStyle({}, {}); // clear all prior styles first, so switching representation doesn't leave the old one's geometry behind
-    // Every run of this effect supersedes the one before it. addSurface
-    // resolves asynchronously, so a run that starts before the previous
-    // surface has finished building would clear a handle that is still
-    // null, and the late handle would then be stored for a surface nobody
-    // tracks -- left on screen with no way to remove it. Pressing Reset
-    // while in surface mode did exactly that, which is why the surface
-    // stayed on until the viewer was rebuilt from scratch.
+    // Each run supersedes the last. addSurface resolves asynchronously, so a run
+    // that starts before the previous surface is built would clear a handle that
+    // is still null and leave the late surface on screen with no way to remove
+    // it.
     surfaceGenRef.current += 1;
     const surfaceGen = surfaceGenRef.current;
     if (surfaceHandleRef.current) {
-      try { glviewer.removeSurface(surfaceHandleRef.current); } catch { /* surface already removed with the previous model -- removing it twice is not an error worth surfacing */ }
+      try { glviewer.removeSurface(surfaceHandleRef.current); } catch { /* already removed with the previous model */ }
       surfaceHandleRef.current = null;
     }
 
@@ -8791,12 +7624,8 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
 
     chains.forEach((chain) => {
       const sel = { ...blockSelector(chain), hetflag: false };
-      // Nucleic acid chains, when shown, get the standard DNA/RNA look
-      // instead of the protein representation: a cartoon ribbon tracing the
-      // backbone plus sticks for the bases, which is how every molecular
-      // viewer draws nucleic acids and what makes a double helix readable. A
-      // protein cartoon applied to DNA renders a thin, nearly invisible trace
-      // with no bases at all, which is why DNA structures looked empty here.
+      // Nucleic chains get a nucleic cartoon whatever the protein representation:
+      // a protein cartoon on DNA draws a thin trace with no bases.
       if (chain.isNucleic) {
         // Either the DNA/RNA group switch or this chain's own eye toggle.
         if (!visibility.nucleic || visibility.chains[chain.id] === false) {
@@ -8804,33 +7633,10 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
           return;
         }
         const nucColor = chainColors[chain.id] || "#7FB3E8";  // distinct default from the protein purple, so DNA reads as a different kind of thing at a glance
-        // Cartoon AND sticks together, on purpose.
-        //
-        // 3Dmol.js builds its cartoon ribbon from backbone atoms it
-        // recognises, and for nucleic acids that depends on the residue names
-        // and atom naming in the file -- which varies between PDB entries,
-        // and between what PyMOL writes out and what the original entry
-        // contained. When it can't build the ribbon it draws nothing at all
-        // and reports no error, which is what "DNA is just blank" looks like.
-        // Sticks are built from the atoms themselves and therefore always
-        // render something, so the chain is visible even when the ribbon
-        // can't be constructed.
-        //
-        // The explicit cartoon `style` was also dropped here: a style name
-        // 3Dmol doesn't accept for the geometry it managed to build is one
-        // more way to end up with an empty chain, and the default is the
-        // right look anyway. Ribbon over the whole chain, lines on the BASES
-        // only -- see NUCLEIC_BASE_ATOMS. Two calls rather than one because
-        // they target different atom sets: the first would otherwise be
-        // overwritten.
+        // No explicit cartoon style: one 3Dmol rejects for the geometry it built
+        // leaves the chain empty, and the default looks right. The nucleic cartoon
+        // already draws the base rungs, so the bases are not drawn again.
         glviewer.setStyle(sel, { cartoon: { color: nucColor } });
-        // Cartoon only. 3Dmol's nucleic cartoon ALREADY draws the base rungs
-        // between the two backbone ribbons -- that ladder is part of the
-        // ribbon geometry, not something that has to be added. Drawing base
-        // atoms on top of it (as sticks first, then as lines) was therefore a
-        // second, messier copy of a ladder that was already there, which is
-        // the tangle of thin strands visible over the helix in the 2OWO
-        // render. Removing it leaves the clean ladder.
         return;
       }
       if (visibility.chains[chain.id] === false) {
@@ -8852,14 +7658,10 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
     });
 
     if (repMode === "surface") {
-      // Surface rendering is scoped per-chain-letter only (no serial
-      // disambiguation) -- addSurface's own chain field accepts a list of
-      // letters, and mixing per-block serial ranges into that same call would
-      // incorrectly union every block sharing any of those letters back
-      // together. Rare enough in practice (surface mode + a colliding chain
-      // letter across structures) that this is a known, accepted limitation
-      // rather than something worth the complexity of a per-block surface
-      // call.
+      // Surfaces are scoped by chain letter only: addSurface takes a list of
+      // letters, and adding serial ranges would union every block sharing a
+      // letter. Two structures sharing a chain letter in surface mode therefore
+      // share a surface.
       const visibleChainIds = chains.filter((c) => visibility.chains[c.id] !== false).map((c) => c.chainLetter || c.id);
       if (visibleChainIds.length && window.$3Dmol.SurfaceType) {
         glviewer.addSurface(window.$3Dmol.SurfaceType.VDW, { opacity: 0.85, colorscheme: "whiteCarbon" }, { chain: visibleChainIds, hetflag: false })
@@ -8876,17 +7678,11 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
       }
     }
 
-    // Ligands / other hetero groups (anything not water) -- distinct per-
-    // residue-type coloring by default (falls back to the rotating
-    // VIEWER_LIGAND_COLORS palette only where the person hasn't picked a
-    // color explicitly -- see ligandColors, same override pattern as
-    // chainColors), sticks by default regardless of the protein's own
-    // representation so a ligand stays legible even in cartoon mode (matches
-    // the general convention most molecular viewers, including PyMOL itself,
-    // use for bound ligands). Ions -- spheres, not sticks. A monatomic ion
-    // has no bonds, and the stick representation draws only bonds, so ions
-    // were being selected and styled correctly and still rendering as nothing
-    // at all. Sized a little larger than waters so they read as distinct.
+    // Ligands and other hetero groups: per-group colours (an explicit choice in
+    // ligandColors, else VIEWER_LIGAND_COLORS) and sticks whatever the protein
+    // representation, so they stay legible in cartoon mode. Ions are spheres: a
+    // monatomic ion has no bonds, and sticks draw only bonds. Slightly larger
+    // than waters.
     hetGroups.filter((g) => g.isIon).forEach((group, i) => {
       const key = group.resn + "|" + group.resi + "|" + group.chain;
       // The group switch or this one ion on its own.
@@ -8903,9 +7699,7 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
     });
 
     if (visibility.ligands) {
-      // Ions are excluded here -- they are drawn as spheres just above and
-      // would otherwise be styled twice, with the later stick call winning
-      // and making them invisible again.
+      // Ions are styled as spheres above; a later stick style would hide them.
       hetGroups.filter((g) => g.resn !== "HOH" && !g.isIon).forEach((group, i) => {
         const key = group.resn + "|" + group.resi + "|" + group.chain;
         if (visibility.hidden[key]) {
@@ -8913,12 +7707,8 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
           return;
         }
         const color = ligandColors[key] || VIEWER_LIGAND_COLORS[i % VIEWER_LIGAND_COLORS.length];
-        // blockSelector's serial-range scoping matters here too, not just for
-        // chains -- two loaded structures can easily share both a chain
-        // letter AND a ligand residue number (e.g. two copies of the same PDB
-        // entry, or two structures that happen to both number their ligand as
-        // residue 501), so resi+chain alone can be just as ambiguous as chain
-        // alone was.
+        // Scoped by serials as for chains: two structures can share a chain letter
+        // and a ligand residue number.
         const ligStyle = (itemReps || {})[key]
           ? residueStyleFor(itemReps[key], color)
           : { stick: { color, radius: 0.22 } };
@@ -8926,25 +7716,18 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
       });
     }
 
-    // Waters -- explicit resn:'HOH' selection per 3Dmol.js's own documented
-    // AtomSelectionSpec, shown as small spheres when on, fully hidden (empty
-    // style) when off. Display-only: doesn't touch the underlying model, and
-    // the .pse/report/images this viewer is showing already never included
-    // waters in the first place (Astra3 always strips water before analysis).
+    // Waters as small spheres, or an empty style when off. Display only; Astra3
+    // strips water before analysis.
     if (visibility.waters) {
       glviewer.setStyle({ resn: "HOH" }, { sphere: { color: "#6E8EE8", radius: 0.18 } });
     } else {
       glviewer.setStyle({ resn: "HOH" }, {});
     }
 
-    // --- Selection highlight -------------------------------------------
-    // Applied last so it wins over every representation above -- a selected
-    // residue should look selected regardless of what it otherwise is.
-    // Residues coloured in an earlier selection and then deselected. Applied
-    // before the live selection so a residue picked again shows the active
-    // colour rather than its committed one. Recolouring the whole chain,
-    // ligand or ion clears these for that chain (see ViewerPage), which is
-    // what makes the chain controls still feel authoritative.
+    // Selection highlight, applied last so it wins over every representation.
+    // Residues coloured in an earlier selection come first, so a residue picked
+    // again shows the active colour. Recolouring a whole chain, ligand or ion
+    // clears these for it (see ViewerPage).
     for (const painted of Object.values(paintedResidues || {})) {
       applyResidueHighlight(glviewer, painted, painted.color, painted.rep, backgroundColor);
     }
@@ -8958,10 +7741,8 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
       glviewer.setStyle(residueSelector(hidden), {});
     }
 
-    // --- Hover / pick ---------------------------------------------------
-    // Registered here rather than once at load time because setStyle above
-    // rebuilds the scene's geometry, and 3Dmol attaches hover/click state to
-    // the atoms it draws -- registering before that is silently lost.
+    // Hover and pick, registered after setStyle: restyling rebuilds the geometry
+    // and drops callbacks attached before it.
     try {
       glviewer.setHoverable({}, true,
         (atom) => { if (atom) hoverCbRef.current?.(atomDescriptor(atom)); },
@@ -9026,16 +7807,10 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
       }
     };
 
-    // Rolling the view by dragging near the edge, the way PyMOL does.
-    //
-    // The previous attempt tracked the pointer's angle about the centre,
-    // which only rolls when the drag happens to curve around that centre --
-    // dragging straight down the right-hand side produced almost no angular
-    // change and so appeared to do nothing. What PyMOL actually does is map
-    // the drag's dominant axis to a roll whose direction depends on which
-    // edge the drag started in: vertical drags roll on the left/right bands,
-    // horizontal drags roll on the top/bottom bands, and the sign flips
-    // between opposite edges so the motion always tracks the pointer.
+    // Rolls the view when dragging near an edge, as PyMOL does: vertical drags
+    // roll in the left and right bands, horizontal drags in the top and bottom
+    // bands, with the direction flipped between opposite edges so the motion
+    // follows the pointer.
     const EDGE_FRACTION = 0.14;
     const ROLL_DEGREES_PER_PIXEL = 0.4;
     let rolling = false;
@@ -9060,11 +7835,8 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
       // is never ambiguous about which axis it reads.
       const depthX = onLeft ? x : onRight ? rect.width - x : Infinity;
       const depthY = onTop ? y : onBottom ? rect.height - y : Infinity;
-      // Signs are set so the structure follows the pointer as the person sees
-      // it on screen. Screen y grows downward while a clockwise on-screen
-      // rotation is a NEGATIVE rotation about the viewing axis, so each of
-      // these is the inverse of the naive reading -- which is why the first
-      // version turned the wrong way.
+      // Screen y grows downward, and a clockwise on-screen rotation is negative
+      // about the viewing axis, so each sign is the inverse of the naive reading.
       if (depthX <= depthY) {
         rollAxis = "vertical";
         // Right edge, dragging down -> clockwise. Left edge mirrors it.
@@ -9090,16 +7862,9 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
       const travel = rollAxis === "vertical" ? dy : dx;
       const delta = travel * ROLL_DEGREES_PER_PIXEL * rollSign;
       if (delta === 0) return;
-      // Roll about the VIEWING axis, so the structure spins in the plane of
-      // the screen like a cartwheel and no new face comes into view.
-      //
-      // 3Dmol's plain "z" is the model's own z axis, which after any prior
-      // orbiting points somewhere other than at the viewer -- so rotating
-      // about it tipped the structure and revealed new faces instead of
-      // spinning it flat. "vz" is the view-relative axis, which is the one
-      // that means "towards the camera" regardless of how the model has been
-      // turned. Older builds of the library do not accept it, so a failure
-      // falls back to plain "z" rather than leaving the drag doing nothing.
+      // Rolls about the viewing axis ("vz") so the structure spins in the plane of
+      // the screen. Plain "z" is the model's own axis, which tips the structure once
+      // it has been orbited. Older 3Dmol builds reject "vz" and fall back to "z".
       try {
         glviewer.rotate(delta, "vz");
         glviewer.render();
@@ -9117,10 +7882,8 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
 
     const endRoll = () => { rolling = false; };
 
-    // Clicking empty space clears the selection. Deferred a frame so 3Dmol's
-    // own atom-click callback has run first and recorded a hit if there was
-    // one -- without that ordering every atom click would also read as a
-    // background click and immediately undo itself.
+    // Deferred a frame so 3Dmol's atom-click callback runs first; otherwise every
+    // atom click would also clear the selection.
     const onClick = () => {
       const clickedAtom = Date.now() - atomClickAtRef.current < 250;
       if (!clickedAtom) pickBackgroundRef.current?.();
@@ -9140,10 +7903,7 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
     };
   }, [mountNode]);
 
-  // Auto-spin via 3Dmol's own built-in spin() rather than a manual rAF loop
-  // -- the library already provides this and it composes correctly with the
-  // native mouse-drag orbit controls (spin stops automatically the moment the
-  // user starts dragging).
+  // 3Dmol's own spin(), which stops when the person starts dragging.
   useEffect(() => {
     const glviewer = viewerRef.current;
     if (!glviewer) return;
@@ -9155,13 +7915,9 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
     const glviewer = viewerRef.current;
     if (!glviewer) return;
     glviewer.zoomTo(); // recenters and rescales to fit
-    // zoomTo() only handles position/zoom -- it doesn't touch rotation, so a
-    // view that's been dragged/tilted stays tilted after "reset". 3Dmol's own
-    // getView()/setView() pair exposes the full camera state as [pos.x,
-    // pos.y, pos.z, zoomZ, q.x, q.y, q.z, q.w] -- keep the position/zoom
-    // zoomTo() just computed, but force the rotation quaternion back to
-    // identity [0,0,0,1] (no rotation), so "reset view" genuinely returns to
-    // a straight-on, untilted angle, not just re-centered.
+    // zoomTo() resets position and zoom but not rotation. getView() returns
+    // [pos.x, pos.y, pos.z, zoomZ, q.x, q.y, q.z, q.w]; keep the position and
+    // zoom and set the quaternion to identity.
     if (typeof glviewer.getView === "function" && typeof glviewer.setView === "function") {
       const view = glviewer.getView();
       if (Array.isArray(view) && view.length === 8) {
@@ -9180,39 +7936,19 @@ function useMolViewer(mountNode, { pdbText, chains, hetGroups, repMode, visibili
   return { resetView, captureScreenshot, libraryMissing };
 }
 
-// Minimal PDB ATOM/HETATM line parser -- extracts exactly what the sidebar
-// needs to build its chain/ligand lists (chain id, residue name, residue
-// number, het-vs-polymer flag). 3Dmol.js itself does the REAL, full PDB
-// parsing for rendering (addModel above) -- this second, small pass exists
-// only because the sidebar UI needs a summary (which chains exist, which
-// ligands exist) before/independent of what 3Dmol chooses to render, and re-
-// deriving that from 3Dmol's internal GLModel object is more roundabout than
-// reading the same 15 columns PyMOL/wwPDB's own fixed-width PDB spec defines.
+// A minimal ATOM/HETATM parser for the sidebar's chain and ligand lists
+// (chain, residue name and number, hetero flag). 3Dmol does the full parse
+// for rendering.
 function parsePdbSummary(pdbText) {
-  // chains/hetGroups are keyed by a DISAMBIGUATED key, not the raw chain
-  // letter alone.pdb is written by PyMOL's own cmd.save() with no selection
-  // filter, which the PyMOL Wiki's own documentation on multi-object saves
-  // confirms writes every loaded object's atoms "flat" into one file with no
-  // automatic re-lettering -- so two independently-loaded structures that
-  // both happen to use "chain A" produce a PDB file with two genuinely
-  // separate, non-contiguous "chain A" blocks. A raw chain-letter-keyed
-  // parser (the previous version of this function) necessarily merges those
-  // into one entry, which is why recoloring "chain A" recolored both
-  // structures at once with no way to select just one.
+  // Chains and het groups are keyed by a disambiguated key, not the chain
+  // letter: a multi-object save writes every object flat with no re-lettering,
+  // so two structures can both have a chain A. A TER record, or a change of
+  // letter without one, starts a new block.
   //
-  // Disambiguation strategy: PDB's own TER record marks the end of each
-  // polymer chain segment (standard for every chain PyMOL writes, not just at
-  // object boundaries) -- used here as a genuine block boundary, so a SECOND
-  // appearance of "chain A" starting after a TER (even with nothing else
-  // between them) is correctly recognized as a NEW, separate block rather
-  // than silently continuing the first one. A change in chain letter with no
-  // TER in between (a malformed/nonstandard file) is treated as a boundary
-  // too, as a defensive fallback.
   // Structure tags Astra3 writes at the top of the viewer file
-  // ("REMARK 999 ASTRA3 STRUCTURE S1 1XGD"), mapped to the segment ID each
-  // structure's atoms carry ("*" when the file holds one structure). With
-  // these, every atom's structure is known exactly; files from before they
-  // existed fall back to the groupIndex heuristic below.
+  // ("REMARK 999 ASTRA3 STRUCTURE S1 1XGD") map each structure to the segment
+  // ID its atoms carry ("*" for a single structure). Older files fall back to
+  // the groupIndex heuristic below.
   const structureTags = new Map();
   const serialInfo = new Map(); // atom serial -> { blockKey, resKey, structureLabel }
   const residueSerials = new Map(); // resKey -> [serials]: one residue in one structure
@@ -9227,18 +7963,10 @@ function parsePdbSummary(pdbText) {
   let openBlockChainLetter = null; // raw chain letter of the currently-open block, or null
   let openBlockKey = null; // this block's disambiguated key
   let boundaryPending = true; // true right after a TER, or at the very start
-  // Best-effort structure-boundary detection for OVERLAY/TERMINI's combined
-  // viewer file, so the sidebar can show a real ID ("3FXI") instead of just
-  // "(2nd occurrence)" -- see the ViewerPage-level code that consumes
-  // groupIndex for the honest limits of this heuristic. Signal: a new
-  // structure's chains almost always start back at "A" (standard PDB
-  // convention), so a chain letter that is alphabetically <= the CURRENT
-  // group's own first letter is treated as the start of a new
-  // group/structure; anything alphabetically later stays part of the same
-  // group (a second, third, ... chain of the SAME structure). This can
-  // misattribute an unusual file that reuses an early letter mid-structure,
-  // which is why the consumer of this falls back to the plain
-  // occurrence label instead of ever showing a confidently-wrong ID.
+  // Structure boundaries for older OVERLAY and TERMINI files without tags: a
+  // chain letter at or before the current group's first letter starts a new
+  // structure. This can misattribute an unusual file, so ViewerPage only shows
+  // structure IDs when the group count matches.
   let groupIndex = -1;
   let currentGroupFirstLetter = null;
 
@@ -9257,25 +7985,10 @@ function parsePdbSummary(pdbText) {
     const resn = line.slice(17, 20).trim();
     const chainLetter = line.slice(21, 22).trim() || "A";
     const resi = line.slice(22, 26).trim();
-    // Standard PDB fixed-width columns 7-11 (0-indexed 6:11) -- globally
-    // unique across a whole flat multi-object save (PyMOL renumbers serials
-    // sequentially over everything it writes), unlike chain letter or residue
-    // number, either of which can and does repeat across different loaded
-    // structures. Used below as the real disambiguator 3Dmol.js is actually
-    // given for selection/coloring -- chain letter alone is what 3Dmol.js's
-    // own model understands, and it has no concept of this parser's synthetic
-    // "A#2"-style keys, so a selection needs {chain: <raw letter>, serial:
-    // [exact, exact, ...]} together to genuinely scope to just one block.
-    // Confirmed against 3Dmol.js's own documented AtomSelectionSpec that
-    // "serial" is typed as a plain number, NOT the
-    // number|SelectionRange|Array "resi" gets -- so there is no min/max RANGE
-    // form for it at all; a real, serious bug in an earlier version of this
-    // function passed exactly that (a 2-element [min,max] array), which
-    // 3Dmol.js's own documented "if values are provided as a list, only one
-    // value must match" rule means matched ONLY the first and last atom
-    // serial of each block, not the range between them. Every matching serial
-    // number is collected explicitly below instead, which is unambiguously
-    // correct per that same documented rule.
+    // Columns 7-11. Serials are unique across a multi-object save, unlike chain
+    // letters and residue numbers, so selections use {chain, serial: [...]}.
+    // 3Dmol's serial field takes single numbers, not a range, and a list matches
+    // any one of its values, so every serial is listed.
     const serial = parseInt(line.slice(6, 11).trim(), 10);
     const structureLabel = structureTags.size
       ? (structureTags.get(line.slice(72, 76).trim()) || structureTags.get("*") || null)
@@ -9284,15 +7997,13 @@ function parsePdbSummary(pdbText) {
     if (boundaryPending || chainLetter !== openBlockChainLetter || structureLabel !== openStructureLabel) {
       const count = (occurrenceCounts.get(chainLetter) || 0) + 1;
       occurrenceCounts.set(chainLetter, count);
-      // First occurrence keeps the plain letter as its key/label (so an
-      // ordinary single-structure file, which never repeats a chain letter,
-      // looks and behaves exactly as it always did -- this only changes
-      // anything once a letter genuinely repeats).
+      // The first occurrence keeps the plain letter, so a file that never repeats
+      // one is unaffected.
       openBlockKey = count > 1 ? `${chainLetter}#${count}` : chainLetter;
       openBlockChainLetter = chainLetter;
       boundaryPending = false;
-      // See this function's own comment on groupIndex above. With structure
-      // tags the group is simply the structure's position among them.
+      // See groupIndex above. With structure tags, the group is the structure's
+      // position among them.
       if (structureLabel) {
         groupIndex = [...new Set(structureTags.values())].indexOf(structureLabel);
       } else if (currentGroupFirstLetter === null || chainLetter <= currentGroupFirstLetter) {
@@ -9339,8 +8050,7 @@ function parsePdbSummary(pdbText) {
     // simple majority is a reliable signal here.
     isNucleic: c.resCount > 0 && c.nucleicCount / c.resCount > 0.5,
   }));
-  // A het group made of exactly one atom is an ion whatever it's called --
-  // catches metals and unusual entries the name lists above don't know.
+  // A one-atom het group is an ion whatever its name.
   const hetGroups = Array.from(hetMap.values()).map((g) => ({
     ...g,
     isIon: g.isIon || g.serials.length === 1,
@@ -9367,23 +8077,6 @@ function chainDisplayLabel(c, groupIds) {
   return `Chain ${letter}${c.occurrence > 1 ? ` (${ordinalSuffix(c.occurrence)} occurrence)` : ""}`;
 }
 
-// Atom names that make up a nucleotide BASE (the flat ring that carries the
-// genetic letter), as opposed to the sugar-phosphate backbone.
-//
-// Drawing sticks over an entire nucleic chain -- backbone included -- buries
-// the ribbon in a thicket of bonds and reads as a mess rather than as DNA.
-// Every molecular viewer draws nucleic acids as a backbone ribbon with only
-// the bases shown as sticks, which is what makes base pairing legible.
-//
-// Listed POSITIVELY rather than as "everything except the backbone": 3Dmol's
-// `invert` flag inverts the whole selection, which would escape this chain
-// and restyle the rest of the structure. These names are fixed by the PDB
-// standard and cover A/C/G/T/U, so a positive list is both safe and exact.
-const NUCLEIC_BASE_ATOMS = [
-  "N1", "C2", "N3", "C4", "C5", "C6", "N7", "C8", "N9",
-  "O2", "O4", "O6", "N2", "N4", "N6", "C7", "C5M",
-];
-
 // Residue names 3Dmol.js will be asked to draw as nucleic acid rather than
 // protein. Covers DNA (DA/DC/DG/DT), RNA (A/C/G/U), and the "+"/"D" prefixed
 // variants older PDB entries use.
@@ -9394,15 +8087,8 @@ const NUCLEIC_RESN = new Set([
   "ADE", "CYT", "GUA", "THY", "URA",
 ]);
 
-// Monatomic ions that appear as HETATM records. Astra3's own analysis already
-// names and colors these separately from ligands, so the viewer should too.
-//
-// they were already being picked up as hetero groups and styled as sticks --
-// but a single atom has no bonds, and the stick representation draws only
-// bonds, so every ion rendered as literally nothing. They were in the model
-// and in the selection the whole time, just drawn with the one style that
-// cannot show them. Spheres are both visible and the convention every
-// molecular viewer uses for ions.
+// Monatomic ions recorded as HETATM, drawn as spheres; Astra3's analysis
+// also names and colours them apart from ligands.
 const ION_RESN = new Set([
   "NA", "K", "MG", "CA", "MN", "FE", "FE2", "CO", "NI", "CU", "CU1", "ZN",
   "CD", "HG", "CL", "BR", "IOD", "F", "LI", "RB", "CS", "SR", "BA", "AL",
@@ -9410,24 +8096,16 @@ const ION_RESN = new Set([
   "YB", "LU", "TB", "HO", "ER", "NH4", "OH",
 ]);
 
-// Polyatomic ions/counter-ions worth grouping with the monatomic ones -- they
-// behave like ions in a structure (small, unbound, decorative) even though
-// sticks would technically render them.
+// Small polyatomic ions grouped with the monatomic ones.
 const POLY_ION_RESN = new Set(["SO4", "PO4", "NO3", "CO3", "ACT", "EDO", "GOL", "MES", "TRS", "CAC", "FMT"]);
 
 function isIonResn(resn) {
   return ION_RESN.has(resn) || POLY_ION_RESN.has(resn);
 }
 
-// Builds the real 3Dmol.js AtomSelectionSpec fragment that scopes a selection
-// to exactly ONE disambiguated block (chain or ligand), using the block's raw
-// chain letter plus its explicit list of real atom serial numbers -- see
-// parsePdbSummary's own comment for why chain letter alone isn't enough once
-// two loaded structures share a letter, AND for why this must be an explicit
-// list, not a [min,max] pair (3Dmol.js's "serial" field is a plain number
-// with no range form, unlike "resi"). Falls back to chain-letter-only if no
-// serials were captured (shouldn't happen for a well-formed PDB, but degrades
-// gracefully rather than selecting nothing).
+// Selection spec for one disambiguated block: its chain letter plus every
+// atom serial (see parsePdbSummary). Falls back to the letter alone if no
+// serials were recorded.
 function blockSelector(entry) {
   const chainLetter = entry.chainLetter || entry.chain;
   if (entry.serials && entry.serials.length) {
@@ -9437,12 +8115,8 @@ function blockSelector(entry) {
 }
 
 function ViewerPage() {
-  // Plain useRef's identity never changes across renders, so it can't be used
-  // as an effect dependency to detect "the DOM node just became available".
-  // mountNode is real React state, set via the callback ref passed to the
-  // mount <div> below, so it genuinely changes (null -> the real node, and
-  // back to null on unmount) and can correctly drive the viewer-creation
-  // effect inside useMolViewer.
+  // State set by a callback ref, so useMolViewer can react to the node
+  // appearing; a ref object never changes identity.
   const [mountNode, setMountNode] = useState(null);
   const { history, quickViews, addQuickView, removeQuickView, settings, isElectron, sessionStartTime, selectedViewerId, setSelectedViewerId } = useApp();
   const toast = useToast();
@@ -9488,15 +8162,9 @@ function ViewerPage() {
   const [loadError, setLoadError] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // entry.sessionPath is the real ".pse" path Astra3 printed during the run
-  // (see pymol-bridge.js's "Session saved:" capture). The ".pdb" this viewer
-  // needs is always its exact sibling: same folder, same base name,
-  // save_session() in astra3_render_report.py writes both at once
-  // specifically so a real-coordinate file survives for this viewer to load.
-  // Deriving it from the real captured path (an extension swap) is exact and
-  // needs no filesystem search; when that's unavailable,
-  // resolveRealOutputFolder's on-disk search (shared with ReportsPage.pdb
-  // filename rather than guessing that too.
+  // The .pdb Astra3 writes beside the session (save_session in
+  // astra3_render_report.py), found by swapping the extension. Entries without
+  // a session path search the output folder.
   const pdbPathFor = async (entry) => {
     if (entry.sessionPath && /\.(pse|cxs)$/.test(entry.sessionPath)) {
       return entry.sessionPath.slice(0, -4) + ".pdb";
@@ -9513,8 +8181,7 @@ function ViewerPage() {
     setLoading(true);
     setLoadError(null);
     if (!isElectron) {
-      // Outside Electron there's no real filesystem to read from -- show a
-      // clear explanation rather than fake data.
+      // No filesystem outside Electron.
       setLoading(false);
       setLoadError("Loading real structure data requires the desktop app (file access is not available in this preview).");
       setPdbText(null);
@@ -9568,16 +8235,10 @@ function ViewerPage() {
 
   const { chains: parsedChains, hetGroups, residueIndex } = useMemo(() => parsePdbSummary(pdbText), [pdbText]);
   const chains = parsedChains.length ? parsedChains : [];
-  // Real structure IDs for the chain labels below, when the number of
-  // detected structure groups (see parsePdbSummary's own groupIndex
-  // heuristic) matches the number of structures the SELECTED history entry
-  // actually says were involved -- e.g. a real OVERLAY of 3FXI and 4FXI
-  // produces exactly 2 groups and 2 known IDs, so "Chain A" and "Chain A (2nd
-  // occurrence)" become "3FXI (Chain A)" and "4FXI (Chain A)". If the counts
-  // don't match (the heuristic misattributed something, or this isn't a
-  // multi-structure entry at all), this intentionally stays null and the
-  // label falls back to the honest, if less friendly, occurrence-number form
-  // instead of ever showing a confidently WRONG structure ID.
+  // Structure IDs for chain labels, used only when the detected structure
+  // groups match the IDs the entry names (an OVERLAY of 3FXI and 4FXI gives
+  // "3FXI (Chain A)" and "4FXI (Chain A)"). Otherwise null, and labels use the
+  // occurrence number rather than risk a wrong ID.
   const groupIdsForLabels = useMemo(() => {
     if (!selected) return null;
     const knownIds = idsFromHistoryEntry(selected);
@@ -9586,61 +8247,40 @@ function ViewerPage() {
     if (maxGroupIndex + 1 !== knownIds.length) return null;
     return knownIds;
   }, [selected, chains]);
-  // hetGroups includes water (resn HOH) alongside real ligands -- see where
-  // it's later filtered the same way for rendering. Used here to decide
-  // whether the "Ligands" visibility toggle should even be offered: no real
-  // ligand-containing structure should show a toggle for something that was
-  // never there to begin with.
+  // hetGroups includes water; the Ligands toggle is only offered when a real
+  // ligand is present.
   const realLigandGroups = hetGroups.filter((g) => g.resn !== "HOH");
-  // Protein and nucleic chains are separated everywhere the panel counts or
-  // toggles them. A DNA duplex arrives as two chains in the same list as the
-  // protein, so a combined "Chains (4)" count described a structure that has
-  // two protein chains and two nucleic ones, and the master toggle set every
-  // chain -- meaning switching protein chains off also switched the DNA off
-  // and left the DNA/RNA toggle unable to bring it back.
+  // Protein and nucleic chains are counted and toggled separately, so turning
+  // protein chains off does not hide the DNA.
   const proteinChains = chains.filter((c) => !c.isNucleic);
   const nucleicChains = chains.filter((c) => c.isNucleic);
-  // Split exactly the way useMolViewer splits them when styling, INCLUDING
-  // the index each group gets, because the default colour is chosen by
-  // position within its own list. Listing ions among the ligands (as this
-  // panel did) meant the swatch shown next to an ion was a different colour
-  // from the sphere actually drawn for it.
+  // Split exactly as useMolViewer splits them, indices included: the default
+  // colour is chosen by position within each list.
   const ionGroups = hetGroups.filter((g) => g.isIon);
   const ligandOnlyGroups = hetGroups.filter((g) => g.resn !== "HOH" && !g.isIon);
   const chainHets = hetGroupsByChain(chains, hetGroups);
 
   const [repMode, setRepMode] = useState("cartoon");
-  // ions/nucleic default ON: unlike waters (noise in almost every structure)
-  // they are part of what the person came to look at, and a structure whose
-  // DNA or metal centre is hidden by default just looks broken.
-  // `hidden` holds individually hidden ligands/ions, keyed the same way
-  // as ligandColors. The `ligands` and `ions` flags stay as the group
-  // switches they always were; this is the per-item layer under them,
-  // matching what chains already had.
+  // Ions and nucleic chains are on by default; waters are off. hidden holds
+  // individually hidden ligands and ions, keyed as ligandColors; the ligands
+  // and ions flags are the group switches above it.
   const [visibility, setVisibility] = useState({ ligands: true, ions: true, nucleic: true, waters: false, chains: {}, hidden: {} });
   const [chainColors, setChainColors] = useState({});
   const [ligandColors, setLigandColors] = useState({});
-  // Per-item representation overrides, keyed exactly as the colour maps
-  // are. Absent means "whatever this kind of thing defaults to": the
-  // Representation buttons for a chain, spheres for an ion, sticks for a
-  // ligand. Only an explicit choice is stored, so changing the global
-  // representation still moves every chain that has not been set apart.
+  // Per-item representation overrides, keyed as the colour maps. Absent means
+  // the default for that kind of item, so changing the global representation
+  // still moves every chain not set apart.
   const [itemReps, setItemReps] = useState({});
   const setItemRep = (key, rep) => setItemReps((st) => {
     const next = { ...st };
     if (rep) next[key] = rep; else delete next[key];
     return next;
   });
-  // colorTarget can now be either { kind: "chain", id } or { kind: "ligand",
-  // key } -- see the recolor panel below, which reads/writes chainColors or
-  // ligandColors depending on which kind is currently targeted.
+  // { kind: "chain", id } or { kind: "ligand", key }.
   const [colorTarget, setColorTarget] = useState(null);
   // Chains whose "Bound to this chain" list has been folded away; open by default.
   const [closedChainHets, setClosedChainHets] = useState({});
   const [autoSpin, setAutoSpin] = useState(true);
-  // Default matches the viewer's own original hardcoded background -- see
-  // useMolViewer's own createViewer call, now seeded from this instead of a
-  // fixed literal.
   const [backgroundColor, setBackgroundColor] = useState("#0f0a16");
 
   // Assign default colors/visibility to newly-seen chains without clobbering
@@ -9658,12 +8298,8 @@ function ViewerPage() {
     });
   }, [chains]);
 
-  // Hover readout and click-to-select.
-  //
-  // hoveredAtom is transient (it changes on every pointer move) and is only
-  // ever read by the readout, so it is deliberately NOT part of the styling
-  // effect's dependencies -- re-running setStyle on every mouse move would
-  // rebuild the whole scene continuously.
+  // hoveredAtom changes on every pointer move and only the readout reads it,
+  // so it is not a styling dependency.
   const [hoveredAtom, setHoveredAtom] = useState(null);
   // Selection is a list so Shift+click can build one up. The panel describes
   // the most recent pick; the colour controls apply to all of them.
@@ -9677,11 +8313,8 @@ function ViewerPage() {
   // Residues hidden with the Selected panel's eye button, keyed like
   // selections. Kept after the selection is released.
   const [hiddenResidues, setHiddenResidues] = useState({});
-  // Residues whose colour was committed when they stopped being selected.
-  // Keyed by the atom key so re-picking the same residue replaces rather than
-  // stacks. Deselecting used to discard the colour along with the selection,
-  // which meant a residue could only stay coloured for as long as it stayed
-  // selected.
+  // Residues whose colour was kept when they were deselected, keyed by atom
+  // key so picking one again replaces its entry.
   const [paintedResidues, setPaintedResidues] = useState({});
   const selection = selections.length ? selections[selections.length - 1] : null;
 
@@ -9717,10 +8350,8 @@ function ViewerPage() {
     clearPaintedOnChain(key);
   }, [clearPaintedOnChain]);
 
-  // Clicking empty space abandons the selection: the colour and
-  // representation go with it. Keeping them was the wrong default -- most
-  // clicks off a residue are "never mind", not "commit this", and a commit
-  // that happens by looking away is hard to undo.
+  // Clicking empty space abandons the selection, colour and representation
+  // included: most clicks away mean never mind.
   const resetSelections = useCallback(() => {
     setSelections([]);
     setSelectionRep(DEFAULT_SELECTION_REP);
@@ -9762,12 +8393,9 @@ function ViewerPage() {
     selections, selectionColor, selectionRep, paintedResidues, hiddenResidues,
   });
 
-  // Everything the viewer lets a person change, back to how the model was
-  // first drawn: the camera, the global representation, per-item colours and
-  // representations, per-item hiding, painted residues, the current
-  // selection, and the background. resetView on its own only moved the
-  // camera, so a structure recoloured chain by chain stayed recoloured and
-  // there was no way back short of reopening the session.
+  // Everything back to how the model was first drawn: camera, representation,
+  // per-item colours, representations and hiding, painted residues, selection
+  // and background.
   const resetEverything = useCallback(() => {
     resetView();
     setRepMode("cartoon");
@@ -9806,14 +8434,9 @@ function ViewerPage() {
   const hiddenCount = Object.keys(hiddenResidues).length;
 
   const toggleChainVis = (id) => setVisibility((v) => ({ ...v, chains: { ...v.chains, [id]: !v.chains[id] } }));
-  // Group switches behave the way the chain one already did: the box reads
-  // "on" when ANY member is showing, and switching it off hides every member
-  // individually. Turning a single ligand back on therefore flips the group
-  // box back on by itself while the rest stay hidden -- which makes "hide all,
-  // then show the one I want" two clicks instead of one per ligand.
-  //
-  // The group flags stay true so they never mask the per-item map; the map is
-  // what decides what is drawn.
+  // A group box reads on when any member shows, and switching it off hides
+  // every member individually, so showing one ligand after hiding all is one
+  // click. The group flags stay true; the per-item map decides what is drawn.
   const groupKeyOf = (g) => g.resn + "|" + g.resi + "|" + g.chain;
   const anyGroupVisible = (list) => list.some((g) => !visibility.hidden[groupKeyOf(g)]);
   const setGroupVis = (list, show, flag) => setVisibility((st) => ({
@@ -9825,8 +8448,7 @@ function ViewerPage() {
   const toggleGroupVis = (key) => setVisibility((v) => ({ ...v, hidden: { ...v.hidden, [key]: !v.hidden[key] } }));
   const isGroupHidden = (key) => visibility.hidden[key] === true;
 
-  // Fetches or reads the structure first, so an ID that cannot be shown is
-  // reported here and never saved to the list.
+  // Fetched or read first, so an ID that cannot be shown is never saved.
   const openQuickView = async (event) => {
     event.preventDefault();
     if (quickBusy) return;
@@ -9860,10 +8482,7 @@ function ViewerPage() {
       if (err) toast.push({ tone: "error", title: "Could not open session", message: err });
       return;
     }
-    // Falls back to resolveRealOutputFolder's on-disk search for entries that
-    // predate real sessionPath capture -- same reasoning as ReportsPage's
-    // openSession (see resolveRealOutputFolder's own comment for why a
-    // guessed folder name is unreliable for OVERLAY/TERMINI in particular).
+    // Entries without a session path search the output folder.
     const folder = await resolveRealOutputFolder(selected, settings);
     if (!folder) { toast.push({ tone: "error", title: "Could not open session", message: "Could not locate this run's output folder." }); return; }
     const files = await window.astra3Native.listDir(`${folder}/Session`);
@@ -9877,10 +8496,7 @@ function ViewerPage() {
     const uri = captureScreenshot();
     if (!uri) { toast.push({ tone: "error", title: "Screenshot failed", message: "Viewer isn't ready yet." }); return; }
     if (isElectron) {
-      // Renderer has no direct filesystem write access (by design -- see the
-      // security hardening pass); hand the data URI to the main process to
-      // save via a native dialog, same pattern as every other file write in
-      // this app.
+      // The renderer cannot write files; the main process saves through a dialog.
       const saved = await window.astra3Native.saveScreenshot(uri, `${selected?.label || "structure"}_viewer.png`);
       if (!saved || saved.cancelled) return;
       if (!saved.ok) { toast.push({ tone: "error", title: "Screenshot not saved", message: saved.error || "" }); return; }
@@ -9999,12 +8615,6 @@ function ViewerPage() {
           <div style={{ flex: 1, position: "relative" }}>
             <div ref={setMountNode} style={{ position: "absolute", inset: 0 }} />
             {libraryMissing ? (
-              // Fails loudly rather than leaving a blank canvas with no
-              // explanation -- matches index.html's own "fail loudly, not
-              // silently" handling for a missing React/ReactDOM. This
-              // specifically means renderer/vendor/3Dmol-min.js is missing:
-              // run scripts/vendor-deps.sh (needs internet access once) to
-              // fetch it, then relaunch Astra3.
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 30 }}>
                 <EmptyState icon="alertTriangle" title="3D renderer failed to load" description="renderer/vendor/3Dmol-min.js is missing. Run scripts/vendor-deps.sh (needs internet access once), then relaunch Astra3." />
               </div>
@@ -10031,11 +8641,8 @@ function ViewerPage() {
               Drag to orbit · drag near an edge to rotate · middle-click/ctrl+drag to pan · scroll to zoom ·
               click an atom to select · shift+click for several
             </div>
-            {/* Hover readout, bottom-right, opposite the controls hint.
-                Falls back to the current selection when nothing is under the
-                cursor, so the panel doesn't flicker empty every time the
-                pointer crosses background -- and so what you selected stays
-                readable while you orbit around it. */}
+            {/* Hover readout, bottom right. Falls back to the current selection when
+                nothing is under the pointer, so it stays readable while orbiting. */}
             {(hoveredAtom || selection) && (
               <div className="mono" style={{
                 // Raised above the controls hint rather than sharing its
@@ -10099,16 +8706,12 @@ function ViewerPage() {
             </div>
 
             <CollapsibleSection title="Visibility" style={{ marginBottom: 20 }}>
-              {/* Protein chains only. The master switch sets just these, so
-                  hiding the protein no longer takes the nucleic chains with
-                  it and leaves the DNA/RNA toggle unable to restore them. */}
+              {/* Protein chains only: the master switch leaves nucleic chains to the
+                  DNA/RNA toggle. */}
               {proteinChains.length > 0 && (
                 <>
-                  {/* With a single chain the master toggle and the per-chain
-                      toggle are the same control, and the expander opens a
-                      list of one. A one-chain structure gets that single row
-                      directly instead of three stacked rows that all do the
-                      same thing. */}
+                  {/* A one-chain structure gets a single row rather than a master toggle and an
+                      expander listing one chain. */}
                   {proteinChains.length === 1 ? (
                     <VisRow
                       label={`Protein Chain (${proteinChains[0].chainLetter || proteinChains[0].id})`}
@@ -10116,11 +8719,8 @@ function ViewerPage() {
                       onChange={() => toggleChainVis(proteinChains[0].id)}
                     />
                   ) : (
-                    /* The master switch only. Individual chains are toggled in
-                       the Chains section, which lists them with their colors
-                       and representations -- the expander that used to live
-                       here was the same per-chain control a panel away, and
-                       two places to hide the same chain is one too many. */
+                    /* The master switch only; individual chains are toggled in the Chains
+                       section. */
                     <VisRow
                       label={`Protein Chains (${proteinChains.length})`}
                       checked={proteinChains.some((c) => visibility.chains[c.id] !== false)}
@@ -10139,9 +8739,7 @@ function ViewerPage() {
                   onChange={(v) => setGroupVis(realLigandGroups, v, "ligands")}
                 />
               )}
-              {/* Each offered only when the structure actually contains that
-                  thing, so a plain protein isn't given toggles for things it
-                  does not have. */}
+              {/* Each only offered when the structure contains it. */}
               {hetGroups.some((g) => g.isIon) && (
                 <VisRow
                   label="Ions"
@@ -10163,16 +8761,8 @@ function ViewerPage() {
                   <button onClick={() => toggleChainVis(c.id)} style={{ background: "none", border: "none", cursor: "pointer", color: visibility.chains[c.id] !== false ? "var(--text-0)" : "var(--text-2)" }}>
                     <Icon name={visibility.chains[c.id] !== false ? "eye" : "eyeOff"} size={14} />
                   </button>
-                  {/* Chain label: for an ordinary single-structure
-                      file (or when the real structure IDs couldn't be
-                      confidently attributed -- see groupIdsForLabels'
-                      own comment), this reads "Chain A". Once a chain
-                      letter genuinely repeats in a multi-structure
-                      viewer file AND the real IDs are known, it reads
-                      "3FXI (Chain A)" / "4FXI (Chain A)" instead of
-                      the old, admittedly odd "(2nd occurrence)"
-                      phrasing -- each block is still independently
-                      visible, hideable, and recolorable either way. */}
+                  {/* "Chain A", or "3FXI (Chain A)" when a letter repeats in a multi-structure
+                      file and the IDs are known (see groupIdsForLabels). */}
                   <span style={{ fontSize: 12.5, fontWeight: 600, flex: 1 }}>
                     {chainDisplayLabel(c, groupIdsForLabels)}
                   </span>
@@ -10345,9 +8935,8 @@ function ViewerPage() {
                       </span>
                     )}
                   </div>
-                  {/* One dropdown rather than a stack of rows -- the list is
-                      long enough that rows pushed the buttons below the fold.
-                      Applies to every selected residue at once. */}
+                  {/* A dropdown, since a row per option pushed the buttons below the fold.
+                      Applies to every selected residue. */}
                   <label style={{ display: "block", fontSize: 10.5, color: "var(--text-2)", marginBottom: 4 }}>
                     Representation
                   </label>
@@ -10374,9 +8963,7 @@ function ViewerPage() {
                             }}>
                       Keep colour
                     </Button>
-                    {/* Abandons the selection and everything about it,
-                        including any colour these residues were given on an
-                        earlier pass. */}
+                    {/* Abandons the selection, including colours from an earlier pass. */}
                     <Button
                       variant="secondary"
                       size="sm"
@@ -10414,9 +9001,7 @@ function ViewerPage() {
               <div style={{ marginTop: 6, padding: 10, background: "var(--bg-2)", borderRadius: "var(--radius-md)" }}>
                 <div style={{ fontSize: 11, color: "var(--text-1)", marginBottom: 10 }}>Viewer background</div>
 
-                {/* Same native-OS-picker + hex-field pattern as chain
-                    recoloring above -- see that panel's own comment
-                    for why no color-picker library is vendored. */}
+                {/* The native picker and a hex field, as for chain recolouring. */}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                   <input
                     type="color"
@@ -10431,11 +9016,7 @@ function ViewerPage() {
                   <HexColorInput value={backgroundColor} onCommit={setBackgroundColor} />
                 </div>
 
-                {/* White -> darker -> black gradient quick-select --
-                    a simple ramp of preset swatches
-                    rather than a full gradient-picker widget, since a
-                    handful of stops covers the realistic range anyone
-                    would actually want for a structure background. */}
+                {/* Preset swatches from white to black. */}
                 <div style={{ fontSize: 9.5, fontWeight: 700, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Quick select</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {["#FFFFFF", "#D9D9D9", "#B0B0B0", "#808080", "#4A4A4A", "#26222E", "#0F0A16", "#000000"].map((c) => (
@@ -10535,27 +9116,16 @@ function VisRow({ label, checked, onChange }) {
   );
 }
 
-// Plain hex-code text entry, paired with the native <input type="color">
-// wheel above it. Keeps its own draft text while typing (so "#AB" isn't
-// force-corrected mid-keystroke) and only commits upward once the value is a
-// genuine 3- or 6-digit hex color; shorthand (#RGB) is expanded to the
-// 6-digit form 3Dmol.js/chainColors expects on commit. Resyncs its draft from
-// the external value when that changes from elsewhere (the wheel, a preset
-// swatch) so all three inputs always agree.
-// The recolor panel, one component rather than three copies. It is rendered
-// inside whichever section owns the thing being recolored -- clicking an ion
-// used to open this panel at the foot of the Ligands section, a scroll away
-// from the ion that was clicked.
+// The recolour panel, rendered inside whichever section owns the item being
+// recoloured, so it opens beside what was clicked.
 function RecolorPanel({ title, color, fallback, onPick, rep, onRep, defaultRepLabel }) {
   const active = color || fallback;
   return (
     <div style={{ marginTop: 10, padding: 10, background: "var(--bg-2)", borderRadius: "var(--radius-md)" }}>
       <div style={{ fontSize: 11, color: "var(--text-1)", marginBottom: 10 }}>{title}</div>
 
-      {/* Native OS color picker: a real color wheel with its own hex field,
-          built into Chromium at zero bundle cost. Paired with the plain hex
-          field for people who would rather type a code than open the picker.
-          Both write to the same state as the preset swatches. */}
+      {/* The native colour picker, plus a hex field for typing a code. Both write
+          the same state as the swatches. */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <input
           type="color"
@@ -10567,9 +9137,7 @@ function RecolorPanel({ title, color, fallback, onPick, rep, onRep, defaultRepLa
             background: "none", cursor: "pointer", flexShrink: 0,
           }}
         />
-        {/* Sized to its contents: a hex code is seven characters, and a field
-            stretched across the panel invited the guess that more than that
-            was expected. */}
+        {/* Sized for a seven-character hex code. */}
         <HexColorInput value={active} onCommit={onPick} width={104} />
       </div>
 
@@ -10591,12 +9159,8 @@ function RecolorPanel({ title, color, fallback, onPick, rep, onRep, defaultRepLa
         ))}
       </div>
 
-      {/* Representation, alongside the colour. The buttons at the top of the
-          sidebar set every protein chain at once; this sets one chain, one
-          ligand or one ion on its own, which is the only way to draw (say) a
-          single ion as sticks while everything else stays as it is.
-          "Default" clears the override rather than picking a seventh style,
-          so the item goes back to following the global setting. */}
+      {/* Representation for one chain, ligand or ion, as opposed to the buttons at
+          the top, which set every protein chain. "Default" clears the override. */}
       <div style={{ marginTop: 10 }}>
         <div style={{ fontSize: 9.5, fontWeight: 700, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Representation</div>
         <select
@@ -10618,6 +9182,8 @@ function RecolorPanel({ title, color, fallback, onPick, rep, onRep, defaultRepLa
   );
 }
 
+// Hex text entry beside the colour wheel. Keeps a draft while typing and
+// commits only a valid #RGB or #RRGGBB, expanded to six digits.
 function HexColorInput({ value, onCommit, width }) {
   const [draft, setDraft] = useState(value);
   const lastCommitted = useRef(value);
@@ -10645,7 +9211,7 @@ function HexColorInput({ value, onCommit, width }) {
       setDraft(normalized);
       onCommit(normalized);
     } else {
-      setDraft(value); // invalid entry -- revert to the last known-good color rather than leaving garbage in the field
+      setDraft(value); // invalid: revert to the last valid colour
     }
   };
 
@@ -10672,26 +9238,16 @@ function HexColorInput({ value, onCommit, width }) {
    SETTINGS PAGE
    ============================================================ */
 function SettingsPage() {
-  const { settings, updateSettings, isElectron, platform, engineInfo } = useApp();
+  const { settings, updateSettings, isElectron, engineInfo } = useApp();
   const toast = useToast();
   const save = () => toast.push({ tone: "success", title: "Settings saved" });
 
-  // Real found/not-found status for the PyMOL path shown below, so a person
-  // typing or browsing to a path gets immediate feedback here instead of only
-  // discovering it's wrong from the (dismissible) top-bar setup banner or a
-  // failed run later. null = not checked yet; true/false once a real
-  // fs.access check (see main.js's own verifyPymolPath) has run against the
-  // CURRENT value of settings.pymolPath -- re-checked whenever that value
-  // changes, not just once on mount, so editing the field or using Browse
-  // updates this live.
+  // Whether the PyMOL path below exists, checked whenever it changes. null
+  // means not checked yet.
   const [pymolVerified, setPymolVerified] = useState(null);
 
-  // The value actually persisted on disk (tools/pymol_path.txt), kept
-  // separate from settings.pymolPath (which updates live as the field is
-  // typed into, before anything is actually saved). Used to detect a REAL,
-  // committed change -- see pendingPymolPath below -- so the restart-
-  // confirmation prompt only fires when the saved value is genuinely about to
-  // change, not on every keystroke.
+  // The saved path, as opposed to settings.pymolPath, which follows the field
+  // while typing. A restart is only offered when the saved value would change.
   const [savedPymolPath, setSavedPymolPath] = useState(null);
   // Set when a candidate path (from Browse or the text field's onBlur)
   // differs from savedPymolPath, holding it until the person confirms or
@@ -10728,16 +9284,9 @@ function SettingsPage() {
     return () => { cancelled = true; };
   }, [isElectron, settings.pymolPath]);
 
-  // Routes a candidate path (from Browse or the field's onBlur) through the
-  // restart-confirmation prompt whenever it genuinely differs from what's
-  // actually saved -- pymol-bridge.js's start() only reads the saved path
-  // fresh at the moment a NEW PyMOL process is launched, so changing it while
-  // an already-running PyMOL process is still alive (or even just a stale one
-  // from earlier in the session) silently had no effect until something
-  // happened to restart that process on its own -- indistinguishable, from
-  // the person's side, from "saving the new path just doesn't work." A full
-  // app restart is the simplest way to guarantee the change actually takes
-  // effect everywhere, not just for the next spawned PyMOL process.
+  // A path that differs from the saved one goes through the restart prompt:
+  // the bridge reads the saved path only when it starts PyMOL, so a running
+  // process would keep the old one.
   const requestPymolPathChange = (candidate, fromBrowse = false) => {
     if (!candidate) return;
     if (candidate === savedPymolPath) {
@@ -10763,14 +9312,11 @@ function SettingsPage() {
     }
     await window.astra3Native.setPymolPath(pendingPymolPath);
     await window.astra3Native.restartApp();
-    // No further code runs in practice -- app.exit() in main.js quits this
-    // process immediately after relaunch() queues the new one.
+    // main.js exits right after relaunch().
   };
 
   const cancelPymolPathChange = () => {
-    // Reverts the visible field back to the actually-saved value -- without
-    // this, the text input would keep showing the rejected candidate even
-    // though nothing was actually persisted.
+    // Show the saved value again.
     if (savedPymolPath) updateSettings({ pymolPath: savedPymolPath });
     setPendingPymolPath(null);
     setPathValidationError(null);
@@ -10788,33 +9334,32 @@ function SettingsPage() {
   const browseOutputDir = async () => {
     if (!isElectron) { toast.push({ tone: "neutral", title: "Native picker", message: "Available in the desktop app." }); return; }
     const picked = await window.astra3Native.openFolderDialog();
-    if (picked) {
-      const dir = normalizeOutputDir(picked);
-      updateSettings({ outputDir: dir });
-      // Written as the setting shows it (it was the picked folder, one level
-      // up, until the setting caught up); the same folder is no change.
-      if (dir !== settings.outputDir) notifyIfRestartNeeded(dir);
-    }
+    if (picked) commitOutputDir(picked);
   };
 
-  // PyMOL only reads ASTRA3_BASE_DIR once, at its own startup (see pymol-
-  // bridge.js) -- if it's already running, changing this setting won't move
-  // where THIS session's output goes until PyMOL restarts. Without this
-  // notice, that would look like the setting silently doing nothing.
-  // The field's value when it was focused: leaving it unchanged is no
-  // change, and needs no restart notice.
+  // The field shows the folder as the main process saved it, or reverts if
+  // the folder was refused.
   const outputDirAtFocus = useRef(null);
-  const notifyIfRestartNeeded = async (newPath) => {
+  const commitOutputDir = async (candidate) => {
     if (!isElectron) return;
-    const result = await window.astra3Native.setOutputDir(newPath);
-    if (result?.requiresRestart) {
-      toast.push({
-        tone: "neutral",
-        title: "Restart needed",
-        message: `${ENGINE_NAMES[engineInfo.engine] || "The engine"} is already running; the new output directory takes effect the next time it starts.`,
-        duration: 6000,
-      });
+    let result;
+    try {
+      result = await window.astra3Native.setOutputDir(candidate);
+    } catch (e) {
+      result = { ok: false, error: e?.message || "The output folder could not be changed." };
     }
+    if (result && result.ok) {
+      updateSettings({ outputDir: result.dir });
+      return;
+    }
+    const current = await window.astra3Native.getOutputDir().catch(() => null);
+    if (current) updateSettings({ outputDir: current });
+    toast.push({
+      tone: "error",
+      title: "Output folder not changed",
+      message: `${(result && result.error) || "That folder can't hold results."}${current ? `\n\nResults are still saved in:\n${current}` : ""}`,
+      duration: 9000,
+    });
   };
 
   return (
@@ -10837,7 +9382,7 @@ function SettingsPage() {
           <SettingRow label="Default output directory" stacked>
             <div style={{ display: "flex", gap: 6 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <TextInput mono icon="folder" value={settings.outputDir} onFocus={(e) => { outputDirAtFocus.current = e.target.value; }} onChange={(e) => updateSettings({ outputDir: e.target.value })} onBlur={(e) => { const fixed = normalizeOutputDir(e.target.value); if (fixed !== e.target.value) updateSettings({ outputDir: fixed }); if (fixed !== outputDirAtFocus.current) notifyIfRestartNeeded(fixed); }} />
+                <TextInput mono icon="folder" value={settings.outputDir} onFocus={(e) => { outputDirAtFocus.current = e.target.value; }} onChange={(e) => updateSettings({ outputDir: e.target.value })} onBlur={(e) => { if (e.target.value !== outputDirAtFocus.current) commitOutputDir(e.target.value); }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
               </div>
               <Button variant="secondary" onClick={browseOutputDir}>Browse</Button>
             </div>
@@ -10914,15 +9459,8 @@ function SettingsPage() {
             <SegmentedControl value={settings.theme} onChange={(v) => updateSettings({ theme: v })} options={[{ value: "dark", label: "Dark" }, { value: "light", label: "Light" }]} />
           </SettingRow>
           <SettingRow label="Content font" desc="Body text, card copy, and descriptions. Tabs and inputs keep their own fixed typeface and are unaffected.">
-            {/* A native <select> renders its open dropdown via the
-                OS/browser chrome itself, not a custom-positioned div --
-                which is why it's used here rather than a
-                hand-built menu: viewport-overflow ("goes beneath the
-                screen") is handled correctly by construction, with no
-                positioning logic of ours that could get it wrong.
-                <optgroup> keeps a long list (everything bundled with
-                Astra3 plus a wide range of common system fonts)
-                organized instead of one flat, hard-to-scan list. */}
+            {/* A native <select>: the OS draws the open list, so it never runs off
+                screen. Grouped into bundled and system fonts. */}
             <select
               value={settings.contentFont}
               onChange={(e) => updateSettings({ contentFont: e.target.value })}
@@ -10976,7 +9514,7 @@ function EngineSettings({ children }) {
     // up from the setup dialog: this page stays mounted from launch.
   }, [isElectron, engineInfo.available?.chimerax]);
 
-  const useChimeraxPath = async (candidate) => {
+  const applyChimeraxPath = async (candidate) => {
     const value = String(candidate || "").trim();
     if (!value || value === cxSaved) return;
     setCxPath(value);
@@ -10999,7 +9537,7 @@ function EngineSettings({ children }) {
   const browse = async () => {
     if (!isElectron) { toast.push({ tone: "neutral", title: "Native picker", message: "Available in the desktop app." }); return; }
     const picked = await window.astra3Native.openChimeraxExecutableDialog();
-    if (picked) useChimeraxPath(picked);
+    if (picked) applyChimeraxPath(picked);
   };
 
   const choose = async (value) => {
@@ -11047,7 +9585,7 @@ function EngineSettings({ children }) {
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <TextInput mono icon="cube" value={cxPath} placeholder="Not found" onChange={(e) => setCxPath(e.target.value)}
-              onBlur={(e) => { if (isElectron) useChimeraxPath(e.target.value); }} />
+              onBlur={(e) => { if (isElectron) applyChimeraxPath(e.target.value); }} />
           </div>
           <Button variant="secondary" onClick={browse}>Browse</Button>
         </div>
@@ -11443,7 +9981,7 @@ function ConsolePage() {
   const [busy, setBusy] = useState(false); // true only while THIS page's own command is running
   const [history, setHistory] = useState([]);
   const [histIdx, setHistIdx] = useState(-1);
-  const lockedByOther = isBusy && !busy && !prompt; // another page kicked off a run with nothing to answer -- console must wait its turn
+  const lockedByOther = isBusy && !busy && !prompt; // another page's run with nothing to answer
   const inputRef = useRef(null);
   // Astra3 starts when the console opens, so the first command typed runs
   // rather than only launching it. A command typed during the launch waits
@@ -11460,16 +9998,15 @@ function ConsolePage() {
     if (!input.trim()) return;
     const text = input.trim();
     if (prompt) {
-      // A prompt is pending -- from THIS console's own command, or from a run
-      // started on a completely different page -- typing here and hitting
-      // Enter answers it directly, exactly like a real terminal.
+      // A pending prompt, from this console or another page, is answered by
+      // typing here and pressing Enter.
       setHistory((h) => [text, ...h]);
       setHistIdx(-1);
       setInput("");
       answerPrompt(text);
       return;
     }
-    if (isBusy) return; // another page's run is active with nothing pending to answer -- must wait its turn
+    if (isBusy) return; // another page's run with nothing to answer
     const cmd = text;
     setHistory((h) => [cmd, ...h]);
     setHistIdx(-1);
@@ -11478,34 +10015,19 @@ function ConsolePage() {
     try {
       const consoleStartedAt = Date.now();
       const result = await runAstraCommand(cmd, { originPage: "console" });
-      // a structure analysed from the Advanced Console produced real output
-      // folders, reports and sessions on disk, but was recorded nowhere -- so
-      // it never appeared in History, the Reports tab or the 3D Viewer, and
-      // there was no way to open any of it from inside the app. The console
-      // was the only route that ran a real analysis and then forgot it had.
-      //
-      // Recorded only when the run actually saved something: a session or
-      // report path is what proves a structure was analysed, as opposed to a
-      // helper command like -help or CHANGEDIR, which should not clutter the
-      // history with entries that have nothing to open.
+      // Runs from the console are recorded in History like any other, so their
+      // reports and sessions can be opened in the app. Only when the run saved a
+      // session or report: helper commands such as -help have nothing to open.
       if (result?.cancelled || cancelRequestedRef.current) {
-        // A cancelled run almost always HAS saved a session -- Astra3 writes
-        // it before rendering -- so the check below would record it as a
-        // completed analysis and fire the completion chime for a run the
-        // person stopped. Nothing is kept from it, here as anywhere else.
-        // Astra3's own "...cancelled" line is already in the console above.
+        // A cancelled run has usually saved a session already (it is written before
+        // rendering), so it would pass the check below. Nothing is kept from it.
         await discardRunOutput(result?.lines, null, null, consoleStartedAt);
       } else if (result?.sessionPath || result?.reportPath) {
-        // The structure ID is the first bare token -- everything else on the
-        // line is a flag. Falls back to the whole command if that yields
-        // nothing, so an entry is never left unlabelled.
+        // The structure ID is the first bare token; the rest are flags. Falls back
+        // to the whole command so the entry always has a label.
         const id = cmd.split(/\s+/).find((t) => t && !t.startsWith("-"));
-        // Same completion feedback (green glow + chime) a run from any other
-        // page gets. The console's runs were reaching the same PyMOL and
-        // producing the same output, so finishing one should feel the same;
-        // fired here rather than in runAstraCommand because only this call
-        // site knows the run actually produced a structure rather than being
-        // a helper command.
+        // The same glow and chime as other pages. Fired here rather than in
+        // runAstraCommand, since only this caller knows a structure was produced.
         setCompletionPulse(Math.random());
         addHistoryEntry({
           kind: "single",
@@ -11517,12 +10039,7 @@ function ConsolePage() {
         });
       }
     } catch (e) {
-      // Errors are already appended to consoleLog by runAstraCommand's own
-      // logging (appendLog runs for every recordLine call, and the
-      // bridge/main process log the Python traceback and exit reason as
-      // error-toned lines before this promise rejects) -- nothing extra to
-      // show here, but the catch must not be silently empty, or a real
-      // failure could look like it vanished with no trace.
+      // runAstraCommand has already logged the error and traceback to the console.
     } finally { setBusy(false); inputRef.current?.focus(); }
   };
 
@@ -11591,26 +10108,12 @@ function ConsolePage() {
    ROOT APP
    ============================================================ */
 
-// Single window-edge glow (see astra-completion-glow in index.html) fired
-// whenever completionPulse changes -- see AppProvider's own comment on
-// where/why this is triggered (a real analysis finishing on
-// Single/Overlay/Termini, or a fully-successful Batch queue). The optional
-// sound is synthesized directly via the Web Audio API rather than a bundled
-// audio file -- no asset to vendor, works fully offline, and keeps this at
-// effectively zero bundle-size cost, same reasoning as using the native color
-// picker instead of a vendored library earlier in this project. A single
-// shared AudioContext, unlocked on the first real user gesture.
-//
-// the completion chime created a BRAND NEW AudioContext every time it fired.
-// Chromium (and therefore Electron) starts an AudioContext in the "suspended"
-// state unless it is created during a user gesture, and a suspended context
-// silently discards everything scheduled on it -- no error, no sound, and the
-// visual glow still worked, which is what was reported. Creating the
-// context once, resuming it on the first click/keypress, and resuming again
-// before each play removes every version of that failure.
-//
-// Deliberately lazy: constructing an AudioContext at module load would itself
-// happen outside a gesture, which is the state we're avoiding.
+// Window-edge glow (astra-completion-glow in index.html) on each change of
+// completionPulse, with an optional chime synthesised through Web Audio.
+// Chromium starts an AudioContext suspended unless it is created during a
+// user gesture, and a suspended context plays nothing, so one shared context
+// is created lazily and resumed on the first click or key press and again
+// before each chime.
 let _sharedAudioCtx = null;
 function getAudioContext() {
   if (typeof window === "undefined") return null;
@@ -11633,8 +10136,7 @@ if (typeof window !== "undefined") {
   window.addEventListener("keydown", unlock, { passive: true, capture: true });
 }
 
-// Plays the two-note completion chime. Returns nothing and never throws --
-// audio is secondary feedback and must never be able to break a run.
+// Never throws: the chime must not be able to break a run.
 function playCompletionChime() {
   const ctx = getAudioContext();
   if (!ctx) return;
@@ -11658,13 +10160,10 @@ function playCompletionChime() {
         osc.stop(now + start + 0.4);
       });
     } catch {
-      // No audio device, or the context died -- the glow is the primary
-      // feedback either way.
+      // No audio device, or the context died; the glow still shows.
     }
   };
-  // The context is NOT closed afterwards, unlike before: it is shared and
-  // reused for the rest of the session. Closing it meant the next chime had
-  // to build a new one from scratch, outside any user gesture.
+  // Not closed: the context is reused for the rest of the session.
   if (ctx.state === "suspended") ctx.resume().then(play).catch(() => {});
   else play();
 }
@@ -11698,46 +10197,9 @@ function CompletionPulse() {
   );
 }
 
-// Blocking "where's PyMOL?" modal, replacing the old dismissible top-bar
-// banner. The previous banner could be
-// dismissed and then never seen again, so a person whose PyMOL path was
-// missing or wrong could navigate straight into starting an analysis anyway
-// -- which used to crash the whole app with an "Uncaught Exception" dialog
-// (see pymol-bridge.js's own 'error' listener comment for that separate, now-
-// fixed bug) rather than cleanly stopping them beforehand. This can't be
-// dismissed and has no backdrop-click-to-close; it only goes away once the
-// real underlying problem (setupStatus) is actually resolved, which -- with
-// changing the PyMOL path now always triggering a full app restart (see
-// SettingsPage's own requestPymolPathChange) -- happens naturally the moment
-// that restart completes and this check re-runs fresh on the new launch.
-// Renders on every page EXCEPT Settings itself, since that's the one place a
-// person actually needs free access to in order to fix this. The gaps this
-// whole dialog closes, replacing the earlier, simpler
-// PymolMissingModal: (1) it never distinguished a true first launch (nothing
-// has ever been configured) from an existing install that broke later, so a
-// brand-new user got the same terse "Where's PyMOL?" wording a returning user
-// with a moved install would; (2) it only linked out to Settings rather than
-// letting someone fix this right here; (3) neither this dialog nor Settings'
-// own flow ever confirmed the selected file was REALLY PyMOL (see
-// verifyIsRealPymol's own comment for the direct VLC repro that exposed this)
-// before accepting it.
-//
-// isFirstLaunch (from AppProvider's own setupStatus effect) drives two real
-// differences, not just wording: the welcome/explanation copy only shows on a
-// genuine first launch, and confirming a valid path restarts Astra3 only when
-// an EXISTING saved path is being changed (matching Settings' own change
-// flow) -- a true first-time save has no already-running PyMOL process to
-// restart for, so skipping that step there is a real simplification, not just
-// fewer clicks. Small fixed constellation of stars around the setup dialog --
-// see this file's own astra-setup-star CSS comment for why plain
-// opacity/scale twinkling was used instead of true orbital motion. Positions
-// are spread around the dialog's edges/corners (percentages relative to the
-// backdrop, not the card itself, so they read as floating in the space AROUND
-// the dialog rather than overlapping its actual readable content) with varied
-// size/duration/delay per star so the whole effect feels organic rather than
-// mechanically uniform. Color is a genuine MIX of yellow shades , not one
-// uniform tone: a few warmer/more saturated golds, a few paler, more pastel
-// ones, so the constellation doesn't read as flat.
+// Stars around the setup dialog, placed relative to the backdrop so they sit
+// around the card rather than over it, with varied size, timing and shades
+// of yellow.
 const SETUP_STAR_COLORS = ["#FFD54A", "#FFF3C4", "#FFC93C", "#FDE9A0", "#FFE066", "#FFF6D8"];
 const SETUP_STARS = [
   { top: "16%", left: "20%", size: 4, duration: 3.2, delay: 0 },
@@ -11754,11 +10216,8 @@ const SETUP_STARS = [
   { top: "94%", left: "72%", size: 4, duration: 2.5, delay: 1.0 },
 ];
 function SetupStarField() {
-  // Shared entrance duration for every star's own fade-in -- kept as one
-  // constant here (rather than per-star) since the ENTRANCE should read as a
-  // single smooth arrival, not staggered at the same varied pace as the
-  // ongoing twinkle; each star's own `delay` still staggers WHEN that arrival
-  // begins, just not how long it takes.
+  // One entrance duration for every star; each star's delay staggers when it
+  // starts.
   const fadeInDuration = 1.1;
   return (
     <>
@@ -11767,13 +10226,8 @@ function SetupStarField() {
           top: s.top, left: s.left, width: s.size, height: s.size,
           background: SETUP_STAR_COLORS[i % SETUP_STAR_COLORS.length],
           color: SETUP_STAR_COLORS[i % SETUP_STAR_COLORS.length],
-          // Two chained animations -- see this file's own astra-star-fade-
-          // in/astra-star-twinkle CSS comment for why: fade-in owns the
-          // star's own stagger delay and holds it fully transparent for that
-          // whole window (fill-mode "both"), then twinkle takes over the
-          // instant fade-in finishes (its own delay = the same stagger plus
-          // fade-in's fixed duration), picking up exactly where fade-in left
-          // off.
+          // Fade-in holds the star transparent through its delay (fill-mode both),
+          // then the twinkle starts where the fade-in ends.
           animation: `astra-setup-star-in ${fadeInDuration}s ease-out ${s.delay}s both, astra-setup-star-twinkle ${s.duration}s ease-in-out ${s.delay + fadeInDuration}s infinite`,
         }} />
       ))}
@@ -11781,8 +10235,11 @@ function SetupStarField() {
   );
 }
 
+// Shown on every page except Settings while no analysis program is set up.
+// isFirstLaunch decides the welcome text, and whether saving a path restarts
+// the app (only when a saved path is being changed).
 function PymolSetupDialog({ page, setPage }) {
-  const { setupStatus, isElectron, updateSettings, platform, homeDir, switchEngine, rememberEngineVersion } = useApp();
+  const { setupStatus, isElectron, updateSettings, platform, switchEngine, rememberEngineVersion } = useApp();
   const [dismissed, setDismissed] = useState(false);
   // Which program the location below is for. Either one is enough to start.
   const [engine, setEngine] = useState("pymol");
@@ -11791,13 +10248,8 @@ function PymolSetupDialog({ page, setPage }) {
   const [validationError, setValidationError] = useState(null);
   const [restarting, setRestarting] = useState(false);
 
-  // Resets dismissed whenever setupStatus itself changes -- which happens
-  // both at initial launch AND every time runAstraCommand's own fresh pre-
-  // flight check fails (see that function's own comment). This is exactly
-  // what makes "closing the dialog doesn't permanently suppress it" work:
-  // closing only hides THIS specific occurrence, and the next PyMOL-dependent
-  // action that fails produces a genuinely new setupStatus value, reopening
-  // it.
+  // Closing hides this occurrence only. setupStatus changes again whenever a
+  // pre-flight check in runAstraCommand fails, which reopens the dialog.
   useEffect(() => { setDismissed(false); }, [setupStatus]);
 
   if (!isElectron || !setupStatus || page === "settings" || dismissed) return null;
@@ -11871,8 +10323,7 @@ function PymolSetupDialog({ page, setPage }) {
     } else {
       setRestarting(true);
       await window.astra3Native.restartApp();
-      // No further code runs in practice -- app.exit() in main.js quits this
-      // process immediately after relaunch() queues the new one.
+      // main.js quits this process once the relaunch is queued.
     }
   };
 
@@ -12013,13 +10464,8 @@ function PymolVerifiedToast() {
   return null;
 }
 
-// Contains a render failure to the page that caused it.
-//
-// Every page stays mounted at once, and React unmounts the entire tree when
-// an error escapes to the root. Without a boundary, one page throwing takes
-// the whole window with it -- leaving a blank, unnavigable application rather
-// than one broken tab. The rest of the interface stays usable, and the error
-// is shown with a way to recover.
+// Contains a render failure to the page that caused it. Every page stays
+// mounted, and an error reaching the root would unmount the whole window.
 class PageErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -12058,10 +10504,9 @@ class PageErrorBoundary extends React.Component {
 }
 
 // On Windows, ChimeraX draws images and saves sessions through its windowed
-// program, whose window can appear for a moment when it starts: once per
-// ChimeraX start, so the first run of a session and the first after
-// switching to ChimeraX. astra3_chimerax_scene.py prints a line just before
-// starting it, and the notice says what the window was.
+// program, whose window can appear briefly once per ChimeraX start.
+// astra3_chimerax_scene.py prints a line just before starting it, and the
+// notice explains the window.
 function ChimeraxWindowNotice() {
   const { bridge, platform } = useApp();
   const toast = useToast();
@@ -12084,21 +10529,29 @@ function ChimeraxWindowNotice() {
   return null;
 }
 
+function OutputLocationNotice() {
+  const { outputNotice, setOutputNotice } = useApp();
+  const toast = useToast();
+  useEffect(() => {
+    if (!outputNotice) return;
+    toast.push({ tone: "warning", title: outputNotice.title, message: outputNotice.message, duration: 15000 });
+    setOutputNotice(null);
+  }, [outputNotice]);
+  return null;
+}
+
 function AstraApp() {
   const [page, setPage] = useState("home");
   const [collapsed, setCollapsed] = useState(false);
   const [zoomFactor, setZoomFactor] = useState(1);
 
-  // Loads the real current zoom on startup (Electron persists it across app
-  // restarts on its own) so the displayed percentage in Settings/TopBar
-  // always reflects what's actually applied, not a fresh default that would
-  // be wrong on a second launch.
+  // Electron keeps the zoom across restarts; read it so the displayed
+  // percentage matches.
   useEffect(() => {
     if (typeof window !== "undefined" && window.astra3Native?.getZoomFactor) {
       window.astra3Native.getZoomFactor()
         .then((f) => setZoomFactor(f))
-        // Keeps the default already in state -- the app is perfectly usable
-        // at 100%, so a failed read should not become an unhandled rejection.
+        // Keep 100% if the read fails.
         .catch(() => {});
     }
   }, []);
@@ -12118,11 +10571,8 @@ function AstraApp() {
 
   useEffect(() => {
     const onKey = (e) => {
-      if (!e.metaKey && !e.ctrlKey) return; // Cmd on macOS, Ctrl on Windows -- keeps this portable per the brief's own Windows-portability requirement
-      // Zoom: the standard Cmd/Ctrl +/-/0 convention every browser and
-      // Electron app already uses, so this needs no separate explanation --
-      // "=" is checked alongside "+" since that's the actual unshifted key
-      // most keyboards send for this shortcut.
+      if (!e.metaKey && !e.ctrlKey) return; // Cmd on macOS, Ctrl elsewhere
+      // Cmd/Ctrl +, -, 0. "=" is the unshifted key for "+".
       if (e.key === "=" || e.key === "+") { e.preventDefault(); zoomIn(); return; }
       if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomOut(); return; }
       if (e.key === "0") { e.preventDefault(); zoomReset(); return; }
@@ -12136,18 +10586,9 @@ function AstraApp() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Safety-net drag/drop prevention at the document level. Every individual
-  // drag-and-drop use in this app (the priority picker and structure-list
-  // reordering in HomomerPriorityPicker/ StructureListEditor, plus DropZone's
-  // own file-drop areas) already calls e.preventDefault() in its own
-  // onDragOver/onDrop handlers -- but Chromium's DEFAULT action for an
-  // unhandled dragover/drop event that reaches the document itself (not
-  // absorbed by any specific element's own handler, e.g. because the actual
-  // mouse-up coordinate landed a pixel outside the intended drop target
-  // during a fast drag) is to navigate the window to whatever was dragged.
-  // This is a known, common Electron gotcha independent of any specific
-  // component's own drag code being correct. Added once, globally, rather
-  // than in every individual drop handler.
+  // Every drop target already prevents the default, but a drop that lands just
+  // outside one reaches the document, where Chromium navigates the window to
+  // the dropped file.
   useEffect(() => {
     const preventDefault = (e) => e.preventDefault();
     document.addEventListener("dragover", preventDefault);
@@ -12183,18 +10624,15 @@ function AstraApp() {
           <PymolSetupDialog page={page} setPage={setPage} />
           <PymolVerifiedToast />
           <ChimeraxWindowNotice />
+          <OutputLocationNotice />
           <CompletionPulse />
           <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
           <NavRail page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} />
           <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
             <TopBar page={page} setPage={setPage} zoomFactor={zoomFactor} zoomIn={zoomIn} zoomOut={zoomOut} zoomReset={zoomReset} />
             <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
-              {/* Every page stays mounted (hidden via display:none rather
-                  than unmounted) so navigating away from a page with a
-                  run in progress doesn't lose its live console output or
-                  leave an in-flight y/n prompt's Promise dangling with
-                  nothing left to resolve it -- switching tabs mid-run is
-                  exactly the scenario this needs to survive. */}
+              {/* Every page stays mounted, hidden with display:none, so leaving a page
+                  mid-run keeps its console output and any pending y/n prompt. */}
               {Object.entries(pages).map(([id, element]) => (
                 <div key={id} style={{ display: page === id ? "flex" : "none", flexDirection: "column", flex: 1, minHeight: 0 }}>
                   <PageActiveContext.Provider value={page === id}>

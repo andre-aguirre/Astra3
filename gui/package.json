@@ -1,7 +1,7 @@
 {
   "name": "astra3",
   "productName": "Astra3",
-  "version": "2.0.1",
+  "version": "2.0.3",
   "description": "Astra3: Structural Analysis Toolkit for PDB Rendering Automation",
   "main": "electron/main.js",
   "author": "Andre Aguirre",
@@ -22,7 +22,7 @@
     "lint": "eslint --no-eslintrc -c ../.eslintrc.json renderer/app.jsx"
   },
   "devDependencies": {
-    "electron": "^43.7.7",
+    "electron": "^43.8.1",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.21.0",
     "@electron/notarize": "^2.3.2",
@@ -38,6 +38,7 @@
       "!**/*.map",
       "!scripts/**/*",
       "!tests/**/*",
+      "!tools/**/*",
       "!docs/**/*",
       "!build/**/*"
     ],
@@ -87,6 +88,7 @@
       "entitlements": "build-resources/entitlements.mac.plist",
       "entitlementsInherit": "build-resources/entitlements.mac.plist"
     },
+    "afterPack": "scripts/check-package.js",
     "afterSign": "scripts/notarize.js",
     "directories": {
       "output": "dist"

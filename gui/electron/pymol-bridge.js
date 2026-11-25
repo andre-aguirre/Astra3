@@ -1,98 +1,48 @@
 // ============================================================
-// Astra3: PyMOL process bridge (Electron main process only)
+// Astra3: engine process bridge (main process only)
 // ============================================================
-// This is the ONLY place in the whole application that spawns PyMOL or talks
-// to Astra3's own command grammar. It deliberately does not know anything
-// about the GUI's pages/forms -- it accepts exactly the same command strings
-// a person would type at Astra3's own "Enter a PDB ID:" prompt
-// (e.g. "9BOX -low -csv", "OVERLAY 6DK3 9BOX -mmCIF") and returns/emits the
-// same stdout Astra3 already prints. No parallel command language, no
-// duplicated grammar -- by design, the GUI and Advanced Console share one
-// interface.
-//
-// The stdout PARSING (progress/prompt/ completion detection) depends on the
-// ANSI-stripping step below, because every regex here was being tested
-// against raw, ANSI- color-coded text (Astra3 colors nearly every line --
-// e.g. format_yn_prompt() in astra3_core.py interleaves color codes between
-// every character of "(y/n)" itself), so literally none of PROMPT_RE,
-// PROGRESS_MARKERS, or the "Ready for next" completion check could ever
-// match.
+// Starts PyMOL, ChimeraX or the Astra3 Engine running astra3.py, writes the
+// same command lines a person would type at its prompt, and parses its output:
+// progress, y/n prompts, saved paths and the return to the command prompt.
+// Astra3 colours nearly everything it prints, so output is matched after
+// stripping ANSI codes.
 // ============================================================
 
+const os = require("os");
 const { spawn } = require("child_process");
 const { EventEmitter } = require("events");
 const readline = require("readline");
-const { describePymolLaunchError, explainStartupFailure } = require("./mac-compat");
+const { describePymolLaunchError, intelEngineNotice, explainStartupFailure } = require("./mac-compat");
 
-// How long a launch may take to reach the ready prompt. A first launch can be
-// slow (Gatekeeper checks, or an Intel PyMOL translated by Rosetta on Apple
-// silicon), so this is generous; a launch that takes longer is reported as a
-// failure instead of being sent commands it cannot yet read.
+// A first launch can be slow (Gatekeeper, or Rosetta translating an Intel
+// PyMOL), so this is generous. A launch that takes longer is reported as
+// failed rather than sent commands it cannot read yet.
 const READY_TIMEOUT_MS = 90000;
 
-// Strips ANSI/SGR color escape sequences (e.g. "\x1b[92m", "\x1b[0m",
-// "\x1b[38;5;229m") so pattern matching below can test against the actual
-// TEXT of a line, not the raw bytes -- see the file header above for why this
-// matters: every color constant in astra3_core.py
-// (RED/GREEN/YELLOW/.../RESET, plus the 256-color STAR_*/ASTRA_PURPLE banner
-// colors) is exactly this shape, and Astra3 wraps color codes around most of
-// what it prints, including interleaved between individual characters
-// (format_yn_prompt() puts a color code before AND after each of "(", "y",
-// "/", "n", ")" individually). Scoped precisely to "ESC [ <digits/semicolons>
-// m" -- the SGR form, which is the only ANSI sequence type Astra3 ever emits
-// -- rather than a more exotic general-purpose ANSI-stripping pattern that
-// would be harder to verify covers exactly what's actually used here and
-// nothing more.
+// SGR colour codes only, the one escape sequence Astra3 prints.
 function stripAnsi(text) {
   return text.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-// Astra3's own y/n prompts always end in this exact shape, per
-// astra3_core.py's format_yn_prompt() (e.g. "Use only chain A for this
-// analysis? (y/n): "). Matching on the trailing "(y/n):" is deliberately
-// loose about the question text, since Astra3 has several different prompts
-// that all share this ending.
-//
-// IMPORTANT: every real prompt in astra3_core.py/astra3_structure.py is
-// printed with print(..., end="", flush=True) -- there is NO trailing newline
-// before Astra3 calls input() and blocks. This is deliberate on the Python
-// side (a real interactive terminal expects the cursor to sit right after
-// "(y/n): " on the same line, not on a fresh line below it) but it has a real
-// consequence here: Node's readline 'line' event ONLY fires on a newline
-// character, so a naive line-buffered read of stdout would NEVER see the
-// prompt text at all -- the process would appear to just hang with no visible
-// prompt and no way to answer. This is handled below by accumulating raw
-// stdout chunks (not readline) and checking the unterminated trailing
-// fragment against this same regex on every chunk, in addition to normal
-// line-by-line handling for everything else.
+// Astra3's y/n prompts end in "(y/n):" (format_yn_prompt). They are printed
+// without a newline before input() blocks, so they are looked for in the
+// unterminated tail of stdout as well as in complete lines.
 const PROMPT_RE = /\(y\/n\)(?:\/\w+)*:\s*$/i;
+const PYTHON_LINE_RE = /^\s*(?:>\s*)?Python:\s*\S+\s*\(([^)]+)\)\s*$/;
 const ENGINE_LINE_RE = /^\s*(?:>\s*)?Engine:\s*(PyMOL|ChimeraX|Astra3 Engine)(?:\s+v?([0-9][^\s]*))?/;
 
-// Astra3's own "this run was cancelled" prints -- "Analysis cancelled.
-// Cleaning up and returning to the PDB prompt." and the OVERLAY/TERMINI/Import
-// forms of it, plus the bare "Cancelled. Ready for the next command."
-//
-// A cancel that lands on one of astra3.py's own check_for_cancellation()
-// checkpoints returns to the prompt EXACTLY like a successful run does: same
-// "Ready for next..." line, same prompt. Without reading these notices the
-// completion check below cannot tell the two apart,.
+// Printed when a run is cancelled. A cancel taken at a checkpoint returns to
+// the prompt exactly like a finished run, so these lines are what tell the
+// two apart.
 const RUN_CANCELLED_RE = /^(?:Analysis|OVERLAY|TERMINI|BATCH|Import) cancelled\b|^Cancelled\. Ready for/i;
 
-// How long cancel() waits for a graceful SIGINT cancel to actually take
-// effect before force-killing the whole PyMOL process instead. Long enough
-// that a normal in-progress-loop cancellation (which Astra3's own
-// check_for_cancellation() checkpoints handle fine) has time to land; short
-// enough that someone who cancelled while a prompt was blocking input() --
-// which SIGINT can never unblock on its own, see cancel()'s own comment --
-// isn't left staring at "Cancelling..." for long before the app gives up and
-// resets for them.
+// How long cancel() waits for a graceful stop before killing the process.
+// SIGINT cannot interrupt a blocking input(), so a cancel at a prompt needs
+// this fallback.
 const FORCE_CANCEL_TIMEOUT_MS = 4000;
 
-// A conservative set of "this line means the run reached roughly this far
-// along" markers, built from print statements that appear verbatim in
-// astra3.py / astra3_structure.py / astra3_render_report.py. Order matters
-// only in that later matches overwrite the progress value if a later stage's
-// line arrives.
+// Lines that mark how far a run has got. A later stage's line overrides an
+// earlier one.
 const PROGRESS_MARKERS = [
   [/^Processing:/, 10],
   [/^Chain \S+ named/, 20],
@@ -119,42 +69,29 @@ class PymolBridge extends EventEmitter {
     this.getPaletteFile = getPaletteFile;
     this.getAstra3Engine = getAstra3Engine || (() => null);
     this.proc = null;
-    this._stdoutBuffer = ""; // raw, unterminated tail of stdout not yet resolved into a complete line or a detected prompt
-    // Recent complete output lines, kept so a prompt can be interpreted with
-    // the lines that preceded it. Alternatives are often stated above the
-    // question rather than in it ("Or type a chain letter (A, B)..."), so the
-    // question alone is not enough to tell whether a typed answer is valid.
+    this._stdoutBuffer = ""; // unterminated tail of stdout
+    // Recent lines give a prompt its context: alternatives such as "Or type a
+    // chain letter (A, B)" are printed above the question.
     this._recentLines = [];
     this._pendingPrompt = null; // { resolve } while awaiting a y/n answer
     this._pendingCommand = null; // { resolve, reject } for the in-flight runCommand()
     this._startPromise = null; // the in-flight launch, while start() waits for the ready prompt
-    this._cancelledRun = false; // whether the in-flight command was cancelled rather than completed
-    this._lastSessionPath = null; // most recent "Session saved: <path>" seen during the current run, reset per command
-    this._lastReportPath = null; // most recent "HTML report saved: <path>" -- same lifecycle
-    this._lastOutputAt = 0; // timestamp of the most recent stdout line -- see cancel()'s force-kill logic
-    this._readyResolvers = []; // pending { resolve } callbacks waiting for astra3.py's own "Enter a PDB ID" ready-prompt -- see _handleLine and start()'s own comment on the launch race this exists to fix
-    // { triggerRegex, response } while a command needs an automatic follow-up
-    // answer WITHOUT surfacing a user-facing prompt at all -- see
-    // runImportCommand's own comment for why IMPORT needs this (its "Enter
-    // file path:" question has an answer the GUI already knows, since the
-    // person picked the file through the GUI's own file picker/drop zone, not
-    // something to ask them again). Cleared the instant it fires (one-shot)
-    // so it can never accidentally fire twice or leak into a later, unrelated
-    // command.
+    this._cancelledRun = false;
+    this._lastSessionPath = null; // "Session saved:" path of the current command
+    this._lastReportPath = null; // "HTML report saved:" path of the current command
+    this._lastOutputAt = 0; // time of the last stdout line, for cancel()
+    this._readyResolvers = []; // callers waiting for the first "Enter a PDB ID" prompt
+    // One-shot automatic answer, used by IMPORT for its "Enter file path:"
+    // question: { triggerRegex, response }.
     this._autoRespond = null;
-    // Real AST-XXXX IDs (and their PyMOL object names) astra3.py actually
-    // registered during the CURRENT command, parsed straight from its own
-    // "Temporary ID: AST-XXXX Name: <name>" print (see the IMPORT command
-    // handler in astra3.py) -- reset per command, same lifecycle as
-    // _lastSessionPath just above.
+    // AST IDs registered by the current command ("Temporary ID: ..." lines).
     this._lastRegisteredIds = [];
     // Bumped by every start(), and captured by closure in every event handler
     // that start() registers (stdout "data", stderr "line", process "exit").
     this._generation = 0;
-    // Files imported this session, newest first: { path, entries: [{ id,
-    // name }] }. Imports only live as long as the engine process, which is
-    // restarted by engine switches, forced cancels and crashes, so each new
-    // engine re-imports these under the same IDs (_restoreImports).
+    // Files imported this session, newest first: { path, entries: [{ id, name }] }.
+    // Imports live only as long as the engine process, so a restarted engine
+    // re-imports them under the same IDs (_restoreImports).
     this.imports = [];
     // Sequence number added to every "log" event. Results and log lines
     // reach the renderer over separate IPC channels, so each result carries
@@ -186,10 +123,9 @@ class PymolBridge extends EventEmitter {
     return { pymol: "PyMOL", chimerax: "ChimeraX", astra3: "Astra3 Engine" }[this.engine] || "PyMOL";
   }
 
-  // Whether the engine process is still alive. Not ChildProcess.killed, which
-  // Node sets for any signal sent, including the SIGINT of a cancel: Astra3
-  // handles that and goes on running, and taken for stopped it would be left
-  // running beside the next engine started.
+  // Not ChildProcess.killed, which is also set by the SIGINT of a cancel that
+  // Astra3 survives; treating that as stopped would leave it running beside
+  // the next engine.
   isRunning() {
     return !!this.proc && this.proc.exitCode === null && this.proc.signalCode === null;
   }
@@ -199,29 +135,12 @@ class PymolBridge extends EventEmitter {
     return !!this._startPromise || !!this._pendingCommand;
   }
 
-  // Starts PyMOL running Astra3's own script.
+  // Starts the engine running astra3.py, passed as the script argument
+  // ("pymol -cq astra3.py"). Without it PyMOL starts a bare prompt and treats
+  // every command as PyMOL syntax.
   //
-  // IMPORTANT: astra3.py is an interactive script written to be run via
-  // PyMOL's own `run <path>,main` command typed AFTER PyMOL has already
-  // started (that's what astra3.command does, and it's why the very first
-  // line PyMOL itself prints is "PyMOL>run .../astra3.py,main" in every real
-  // session transcript). Launching PyMOL with only `-cq` and no script
-  // argument starts a bare PyMOL prompt that was never told to run Astra3 at
-  // all -- every "command" written to its stdin after that gets interpreted
-  // as raw PyMOL syntax instead of an Astra3 command, which PyMOL silently
-  // fails on under -q (quiet) with no visible error, and the bridge's "Ready
-  // for next command" detector never fires because Astra3 itself never
-  // actually started -- matching exactly the "freezes immediately, no output
-  // at all" symptom this was built to fix.
-  //
-  // Passing the script path directly as a PyMOL command-line argument (`pymol
-  // -cq /path/to/astra3.py`) is the equivalent, non-interactive way to get
-  // the same result -- PyMOL runs the given script on startup, same as typing
-  // `run astra3.py` at its own prompt would.
-  // One launch at a time. A second caller during a launch (the console
-  // opening, then a command typed straight away) waits for that launch's
-  // ready prompt instead of starting another or writing to a process that
-  // is not reading input yet.
+  // One launch at a time: a caller arriving mid-launch waits for the same
+  // ready prompt.
   start() {
     if (this._startPromise) return this._startPromise;
     if (this.isRunning()) return Promise.resolve({ ok: true, alreadyRunning: true });
@@ -239,11 +158,10 @@ class PymolBridge extends EventEmitter {
   async _launch() {
     if (this.isRunning()) return { ok: true, alreadyRunning: true };
     this._recentLines = [];
-    this._stdoutBuffer = ""; // reset in case this is a restart after a previous process's stop()/crash
+    this._stdoutBuffer = "";
 
-    // The analysis engine chosen in Settings. Both run astra3.py the same
-    // way -- a script reading commands on stdin -- so everything after the
-    // launch is shared.
+    // Every engine runs astra3.py as a script reading commands on stdin, so
+    // everything after the launch is shared.
     const wanted = this.getEngine();
     const engine = wanted === "chimerax" || wanted === "astra3" ? wanted : "pymol";
     this.engine = engine;
@@ -262,34 +180,36 @@ class PymolBridge extends EventEmitter {
     const pymolPath = engine === "astra3" ? process.execPath
       : engine === "chimerax" ? this.getChimeraxPath() : this.getPymolPath();
     if (!pymolPath) {
-      const msg = "Neither PyMOL nor ChimeraX was found -- open Settings > Analysis engine and choose where either one is installed (one-time setup).";
+      const msg = "Neither PyMOL nor ChimeraX was found. Open Settings > Analysis engine and choose where either one is installed.";
       this.emit("log", { text: msg, tone: "error" });
       return { ok: false, error: msg };
     }
     this.emit("state", { engine: engineName });
     const scriptPath = this.getAstraScriptPath();
     if (!scriptPath) {
-      // This is not a user-configuration problem (astra3.py's location is
-      // resolved automatically, not picked by the user) -- reaching this
-      // means the install itself is missing python/astra3.py, which is a
-      // packaging/installation problem, not something Settings can fix.
-      const msg = "Could not find astra3.py alongside this app. Your Astra3 installation may be incomplete or damaged -- try reinstalling.";
+      // An installation problem, not a setting.
+      const msg = "Could not find astra3.py alongside this app. The installation may be incomplete or damaged; try reinstalling.";
       this.emit("log", { text: msg, tone: "error" });
       return { ok: false, error: msg };
     }
 
-    // See the constructor's own comment on _generation. Every event handler
-    // registered below captures thisGeneration and checks it against
-    // this._generation before touching any shared state -- once a NEWER
-    // start() call bumps the counter, this process's own (possibly still-
-    // dying, not-yet-exited) handlers become no-ops.
+    // Refuse to start if the output folder is unusable, rather than let Python
+    // write somewhere the interface is not looking.
+    let baseDir = null;
+    try {
+      baseDir = this.getAstraBaseDir ? await this.getAstraBaseDir() : null;
+    } catch (e) {
+      const msg = (e && e.message) || "Astra3 can't save results in the output folder. Choose another output folder in Settings.";
+      this.emit("log", { text: msg, tone: "error" });
+      return { ok: false, error: msg };
+    }
+
+    // Handlers below ignore events once a newer start() has bumped _generation,
+    // so a dying process cannot touch the new one's state.
     this._generation += 1;
     const thisGeneration = this._generation;
-    // Set by the 'error' handler below if the launch fails asynchronously
-    // (the normal case for EACCES/ENOENT -- see that handler's own comment);
-    // checked just before the final return so start() reports the real
-    // failure immediately instead of waiting out the ready-
-    // wait safety net below and then returning a misleading { ok: true }.
+    // Set by the asynchronous 'error' event (EACCES, ENOENT), so start() reports
+    // the real failure instead of waiting out the ready timeout.
     let launchError = null;
     // Output printed before the ready prompt, for the error shown when a
     // launch fails, and whether the process exited while starting.
@@ -299,18 +219,8 @@ class PymolBridge extends EventEmitter {
     let startupExitCode = null;
 
     try {
-      // ASTRA3_BASE_DIR: see resolveAstraBaseDir() in main.js for why this
-      // needs to be set explicitly. process.env is spread first so PyMOL
-      // still gets a normal environment (PATH, etc.) -- only ASTRA3_BASE_DIR
-      // is added/overridden, and only when a value is actually configured
-      // (getAstraBaseDir() returns null before the person has ever touched
-      // the output directory setting, in which case Astra3's own
-      // detect_base_dir() fallback chain applies exactly as if this override
-      // didn't exist).
-      const baseDir = this.getAstraBaseDir ? this.getAstraBaseDir() : null;
-      // PYTHONDONTWRITEBYTECODE: the engine must not write __pycache__ into an
-      // app bundle (Astra3's own or its own); macOS blocks that and names
-      // Astra3 in a "prevented from modifying apps" notice.
+      // PYTHONDONTWRITEBYTECODE: writing __pycache__ into an app bundle (Astra3's
+      // or the engine's) is blocked by macOS with a notice naming Astra3.
       const env = { ...process.env, PYTHONDONTWRITEBYTECODE: "1", ASTRA3_ENGINE: engine };
       // Images are drawn by a windowed ChimeraX (its no-window mode cannot
       // render on macOS); on macOS it is the same program.
@@ -322,11 +232,9 @@ class PymolBridge extends EventEmitter {
         env.ASTRA3_ENGINE_JOBS = jobs.newJobsDir();
         jobs.watch(env.ASTRA3_ENGINE_JOBS);
       }
-      // ChimeraX runs the script in its no-window mode, where a script reads
-      // stdin and prints to stdout as PyMOL's -c mode does. --exit closes it
-      // when the script ends; --nostatus keeps status-line chatter out of the
-      // output the app parses. ChimeraX runs the --script value as
-      // "runscript <value>", which splits on spaces, so the path is quoted.
+      // ChimeraX's no-window mode reads stdin like PyMOL's -c. --exit closes it when
+      // the script ends, --nostatus keeps status chatter out of the output, and the
+      // path is quoted because --script values are split on spaces.
       const args = engine === "astra3" ? [own.script, scriptPath]
         : engine === "chimerax"
           ? ["--nogui", "--exit", "--nostatus", ...(process.platform === "linux" ? ["--offscreen"] : []), "--script", `"${scriptPath}"`]
@@ -344,27 +252,17 @@ class PymolBridge extends EventEmitter {
 
     this.proc.stdout.setEncoding("utf-8");
     this.proc.stdout.on("data", (chunk) => {
-      if (thisGeneration !== this._generation) return; // stale process, superseded by a newer start() -- ignore
+      if (thisGeneration !== this._generation) return; // superseded process
       if (awaitingReady && launchCapture.length < 4000) launchCapture += chunk;
       this._handleStdoutChunk(chunk);
     });
 
-    // spawn() does NOT throw synchronously for most real-world launch
-    // failures (a missing executable, wrong permissions, or -- -- selecting a
-    // macOS .app bundle instead of the real binary inside it). Node reports
-    // those asynchronously via an 'error' event on the returned ChildProcess
-    // instead. With no listener for that event anywhere, Node's own default
-    // behavior for an unhandled 'error' event is to THROW it, which crashes
-    // the entire Electron main process with exactly the "Uncaught Exception:
-    // Error: spawn ... EACCES" dialog this produces -- not a bug in the
-    // spawned command itself, a bug in this file never listening for the one
-    // event that actually reports that class of failure. The try/catch around
-    // the spawn() call above only ever catches synchronous throws (a
-    // genuinely malformed options object, for example), which is a real but
-    // much rarer failure mode than this.
+    // Most launch failures (missing executable, permissions, an .app bundle
+    // instead of its binary) arrive as an asynchronous 'error' event, which
+    // would crash the main process if unhandled.
     this.proc.on("error", (err) => {
       if (thisGeneration !== this._generation) return;
-      const msg = (engine === "pymol" && describePymolLaunchError(err, pymolPath, process.platform, process.arch)) || `Failed to launch ${engineName} at "${pymolPath}": ${err.message}`;
+      const msg = (engine === "pymol" && describePymolLaunchError(err, pymolPath, process.platform, process.arch, os.release())) || `Failed to launch ${engineName} at "${pymolPath}": ${err.message}`;
       launchError = msg;
       this.emit("log", { text: msg, tone: "error" });
       this.emit("state", { running: false, exitCode: null, launchError: msg });
@@ -373,11 +271,7 @@ class PymolBridge extends EventEmitter {
         this._pendingCommand.reject(new Error(msg));
         this._pendingCommand = null;
       }
-      // Drains the ready-wait Promise below immediately instead of leaving it
-      // to the ready timeout -- without this, start() would still wait out
-      // the whole timeout before returning, and
-      // even then would return the wrong { ok: true } since nothing else
-      // checked launchError.
+      // Settle the ready wait now rather than at its timeout.
       if (this._readyResolvers.length > 0) {
         const resolvers = this._readyResolvers;
         this._readyResolvers = [];
@@ -394,13 +288,7 @@ class PymolBridge extends EventEmitter {
 
     this.proc.on("exit", (code) => {
       if (thisGeneration !== this._generation) {
-        // A newer process has already replaced this one -- this exit event
-        // belongs to a stale, superseded process (e.g. one this same instance
-        // force-killed via stop(), whose actual OS-level termination only
-        // completed after a new start() already ran). Touching
-        // _pendingCommand/_pendingPrompt here would corrupt whatever the NEW
-        // process is currently doing, so this is a deliberate no-op rather
-        // than the normal cleanup below.
+        // A superseded process exiting late; the new one's state is not ours.
         return;
       }
       if (jobs) jobs.stop();
@@ -410,16 +298,8 @@ class PymolBridge extends EventEmitter {
         exitedDuringStartup = true;
         startupExitCode = code;
       }
-      // If PyMOL exits (crash, ModuleNotFoundError, killed, whatever) while a
-      // command was in flight or a y/n prompt was pending, those promises
-      // must be settled here. Without this, runCommand()'s caller (see
-      // app.jsx's runAstraCommand) awaits forever: its finally-block never
-      // runs, isBusy never clears, and the whole app appears permanently
-      // "busy" with no way to recover except force-quitting the app itself.
-      // This was the root cause behind the console hanging after a crash AND
-      // behind "Could not cancel: PyMOL is not running" (cancel() correctly
-      // saw this.proc as null, but nothing had told the stuck UI that the run
-      // was actually over).
+      // Settle an in-flight command or prompt, or the interface would stay busy
+      // forever after a crash.
       if (this._pendingCommand) {
         const err = new Error(
           code === 0
@@ -430,17 +310,13 @@ class PymolBridge extends EventEmitter {
         this._pendingCommand = null;
       }
       if (this._pendingPrompt) {
-        // _pendingPrompt here is just a marker (not a promise -- the real
-        // promise blocking the UI lives in app.jsx's onPrompt, waiting on the
-        // renderer's PromptDialog). Rejecting _pendingCommand above already
-        // unblocks that promise chain, but the PromptDialog itself is still
-        // open with no way to dismiss it. Emitting a null prompt tells the
-        // renderer to close it.
+        // Closes the renderer's prompt dialog; the rejection above has already
+        // ended the command.
         this._pendingPrompt = null;
         this.emit("state", { prompt: null, promptClosedReason: "process-exited" });
       }
-      this._stdoutBuffer = ""; // stale partial-line state from the dead process, never useful after exit
-      this._recentLines = []; // likewise: prompt context from a dead process must not describe a new one
+      this._stdoutBuffer = "";
+      this._recentLines = [];
     });
 
     this.emit("state", { running: true });
@@ -458,18 +334,9 @@ class PymolBridge extends EventEmitter {
       resolvers.forEach((resolve) => resolve());
     });
 
-    // spawn() returning does NOT mean astra3.py is actually ready for input
-    // -- it means the OS process exists, which is well before Python has even
-    // finished importing its own modules, let alone printed the startup
-    // banner and reached its own "Enter a PDB ID:" ready-prompt.
-    // runCommand() wrote straight to stdin the instant start() returned, so a
-    // command typed while PyMOL was still launching landed in the OS pipe
-    // buffer well before Python ever called input(). Waiting for the real
-    // ready-prompt line here means nothing is EVER written to stdin before
-    // Python has genuinely called input() and is actually listening.
-    // this._readyResolvers is drained by _handleLine the moment that exact
-    // line arrives (see there); a generous timeout is a safety net only, not
-    // the normal path.
+    // The process exists well before astra3.py reaches input(). Commands are
+    // held until its "Enter a PDB ID:" prompt appears; the timeout is only a
+    // safety net.
     let timedOut = false;
     await new Promise((resolve) => {
       const timer = setTimeout(() => { timedOut = true; resolve(); }, READY_TIMEOUT_MS);
@@ -503,17 +370,16 @@ class PymolBridge extends EventEmitter {
     return { ok: true };
   }
 
-  // Re-imports this session's files into a freshly started engine under
-  // their existing IDs. Runs before the launch resolves, so the command that
-  // triggered the launch can use them. Files that can no longer be read are
-  // dropped; if the engine dies part-way, the rest are kept for next time.
+  // Re-imports this session's files under their existing IDs before the launch
+  // resolves, so the command that triggered it can use them. Unreadable files
+  // are dropped.
   async _restoreImports(engineName) {
     if (this.imports.length === 0) return;
     const count = this.imports.length;
     this.emit("log", { text: `Importing ${count} file${count === 1 ? "" : "s"} again in ${engineName}, under the same IDs.`, tone: "muted" });
     const restored = [];
     let changed = false;
-    // Oldest first, in the order they were originally imported.
+    // Oldest first, in import order.
     const pending = this.imports.slice().reverse();
     while (pending.length) {
       const record = pending[0];
@@ -543,12 +409,8 @@ class PymolBridge extends EventEmitter {
   }
 
   stop() {
-    // Invalidates this process's generation immediately -- before even kill()
-    // is called -- so any stdout/stderr/exit event this now-dying process
-    // fires afterward (kill() sends a termination signal but does not
-    // guarantee instant death) is recognized as stale by the generation check
-    // in start()'s handlers and ignored, rather than mutating shared state a
-    // subsequent start() call's NEW process is now relying on.
+    // Invalidate first: kill() is not instant, and events from the dying process
+    // must not touch a successor's state.
     this._generation += 1;
     if (this.proc) {
       this.proc.kill();
@@ -562,53 +424,26 @@ class PymolBridge extends EventEmitter {
       this._pendingCommand.reject(new Error(`${this._engineName()} was stopped`));
       this._pendingCommand = null;
     }
-    // A pending prompt marker (and the renderer's own dialog state) must also
-    // be cleared here. During that window, the renderer's prompt dialog could
-    // still be showing (or reappear) for a run that Astra3's own side had
-    // already been forcibly torn down for.
+    // Close any open prompt dialog for the run that was torn down.
     if (this._pendingPrompt) {
       this._pendingPrompt = null;
       this.emit("state", { prompt: null, promptClosedReason: "process-stopped" });
     }
   }
 
-  // Cancels the CURRENTLY RUNNING command without killing the PyMOL process
-  // itself -- equivalent to pressing Ctrl+C at a real terminal running
-  // astra3.py, which astra3_core.py's own handle_sigint() is already built to
-  // catch (see the project's cancellation infrastructure:
-  // check_for_cancellation(), OperationCancelled). SIGINT is not available on
-  // Windows the same way; child_process.kill falls back to forcibly
-  // terminating the process there instead, since there is no equivalent
-  // "interrupt but keep running" signal on that platform for a console
-  // subprocess in this configuration.
+  // Cancels the running command, like Ctrl+C in a terminal: astra3_core's
+  // SIGINT handler stops at the next check_for_cancellation(). On Windows
+  // kill() terminates the process instead.
   //
-  // KNOWN LIMITATION this works around: astra3_core.py's handle_sigint only
-  // sets a flag that's checked at specific checkpoints inside a running
-  // analysis loop (check_for_cancellation()) -- it does NOT raise anything
-  // itself, which means it does NOT unblock PyMOL if it's currently sitting
-  // inside a blocking input() call waiting for a y/n-style prompt answer"
-  // behavior, and this handler never re-raises that itself). This arms a
-  // bounded fallback: force the whole PyMOL process closed (stop()) if the
-  // SAME command is still pending AND nothing new has been printed for
-  // FORCE_CANCEL_TIMEOUT_MS.
-  //
-  // Deliberately evidence-based (polls for silence) rather than a single
-  // fixed-delay shot: a multi-structure TERMINI/OVERLAY cancellation can
-  // legitimately take several seconds to clean up (deleting temp objects per
-  // structure, closing out image writes in progress) while still printing
-  // progress the whole time -- a flat "force-kill N seconds after cancel()
-  // was called, no matter what" could fire WHILE that legitimate cleanup was
-  // still actively happening and about to finish on its own, killing a
-  // process that wasn't actually stuck. Checking for silence (no new output)
-  // is what actually distinguishes "genuinely blocked on an unanswered prompt
-  // with zero further output" from "still working."
+  // SIGINT cannot unblock input(), so if the command is still pending and has
+  // printed nothing for FORCE_CANCEL_TIMEOUT_MS the process is stopped. Silence
+  // is the test, not elapsed time, because cleaning up a multi-structure run
+  // can take several seconds while it keeps printing.
   cancel() {
     if (!this.isRunning()) return { ok: false, error: `${this._engineName()} is not running.` };
     if (!this._pendingCommand) return { ok: false, error: "No command is currently running." };
 
-    // Recorded before the signal goes out, so the result this run resolves
-    // with says it was cancelled however Astra3 chooses to end -- at one of
-    // its own checkpoints, or not at all.
+    // Recorded first, so the result reports a cancel however Astra3 ends the run.
     this._cancelledRun = true;
 
     const pendingAtCancelTime = this._pendingCommand;
@@ -618,7 +453,7 @@ class PymolBridge extends EventEmitter {
       this.proc.stdin.write("\x03\n");
       this.emit("log", { text: "Sent cancel to the Astra3 Engine.", tone: "muted" });
     } else if (process.platform === "win32") {
-      this.stop(); // no graceful interrupt available; this is a full restart of the PyMOL process on Windows
+      this.stop(); // no SIGINT on Windows
       return { ok: true };
     } else {
       this.proc.kill("SIGINT");
@@ -626,10 +461,7 @@ class PymolBridge extends EventEmitter {
     }
 
     const checkForStillStuck = () => {
-      // Only relevant if THIS SAME command is still the one pending -- if
-      // it's null (finished) or a different object (a new command started
-      // since), the graceful cancel already worked (or this cancel() call is
-      // simply stale) and there's nothing to force.
+      // Finished, or another command has started: nothing to force.
       if (this._pendingCommand !== pendingAtCancelTime) return;
       const silentFor = Date.now() - this._lastOutputAt;
       if (silentFor >= FORCE_CANCEL_TIMEOUT_MS) {
@@ -640,9 +472,7 @@ class PymolBridge extends EventEmitter {
         this.stop();
         return;
       }
-      // Still pending but has printed something recently -- genuinely
-      // working, not stuck. Check again once whatever time remains until it
-      // WOULD have been silent for the full timeout elapses.
+      // Still printing, so still working; check again later.
       setTimeout(checkForStillStuck, FORCE_CANCEL_TIMEOUT_MS - silentFor);
     };
     setTimeout(checkForStillStuck, FORCE_CANCEL_TIMEOUT_MS);
@@ -650,10 +480,7 @@ class PymolBridge extends EventEmitter {
     return { ok: true };
   }
 
-  // Writes one command exactly as a person would type it at Astra3's own
-  // prompt, and resolves once that run appears to have finished (a "Ready for
-  // next PDB." / "Ready for next command." line, per astra3.py's own prompt
-  // text) or a bounded timeout elapses.
+  // Writes one command line and resolves when Astra3 returns to its prompt.
   async runCommand(commandString) {
     const startResult = await this._ensureStarted();
     if (!startResult.ok) return startResult;
@@ -670,35 +497,20 @@ class PymolBridge extends EventEmitter {
   _dispatch(commandString, { autoRespond = null } = {}) {
     return new Promise((resolve, reject) => {
       this._pendingCommand = { resolve, reject };
-      this._cancelledRun = false; // a fresh command has not been cancelled
-      this._lastSessionPath = null; // this run hasn't saved a session yet -- don't carry over a stale path from the previous command
+      this._cancelledRun = false;
+      this._lastSessionPath = null;
       this._lastReportPath = null;
-      this._lastRegisteredIds = []; // same reasoning -- don't carry over a stale registration list from the previous command
+      this._lastRegisteredIds = [];
       this._autoRespond = autoRespond === null ? null : { triggerRegex: /Enter file path:\s*$/i, response: autoRespond };
       this.emit("log", { text: commandString, tone: "command" });
       this.proc.stdin.write(commandString + "\n");
     });
   }
 
-  // Runs astra3.py's own IMPORT command end-to-end, including its second
-  // interactive step -- Astra3 does not accept the file path as part of the
-  // initial "IMPORT" command line at all; it always prints "Enter file path:"
-  // and blocks on a separate input() call (see the IMPORT handler in
-  // astra3.py). filePath is the REAL absolute path the person picked,
-  // resolved on the renderer side via Electron's webUtils.getPathForFile()
-  // (see preload.js) -- this writes "IMPORT", arms a one-shot auto-respond
-  // for the "Enter file path:" line with that path as the answer (see
-  // _handleLine's own auto-respond check), and waits for the command to
-  // finish exactly like runCommand() does, since IMPORT loops back to the
-  // same top-level "Enter a PDB ID:" prompt when it's done either
-  // way (success or a rejected file).
-  //
-  // Resolves with the same shape runCommand() does, PLUS registeredIds -- the
-  // real AST-XXXX id(s) astra3.py itself assigned (parsed from its own
-  // "Temporary ID: ..." prints), not a client-side guess.
-  //
-  // Successful imports are recorded in this.imports so later engines can
-  // restore them.
+  // IMPORT asks "Enter file path:" separately, so the path the person picked
+  // is answered automatically. Resolves like runCommand, plus registeredIds:
+  // the AST IDs Astra3 assigned. Successful imports are recorded in
+  // this.imports for later engines.
   async runImportCommand(filePath) {
     const startResult = await this._ensureStarted();
     if (!startResult.ok) return startResult;
@@ -713,8 +525,7 @@ class PymolBridge extends EventEmitter {
     return result;
   }
 
-  // Answers a pending y/n prompt (the renderer showed a native dialog for it;
-  // this writes the chosen answer to PyMOL's stdin).
+  // Writes the person's answer to a pending prompt.
   answerPrompt(answer) {
     if (!this._pendingPrompt) return { ok: false, error: "No prompt is pending." };
     this.proc.stdin.write(answer + "\n");
@@ -722,70 +533,29 @@ class PymolBridge extends EventEmitter {
     return { ok: true };
   }
 
-  // Processes one raw chunk of stdout. Complete, newline-terminated lines are
-  // handled exactly as before (progress markers, "Ready for next" completion
-  // detection, tone classification for the console). The unterminated
-  // remainder (if any) -- which is where a real y/n prompt lives, since
-  // Astra3 prints those with end="" and never a trailing newline -- is
-  // checked against PROMPT_RE on every chunk, so a prompt is detected the
-  // moment it actually arrives rather than never.
+  // Complete lines go to _handleLine; the unterminated tail is checked for a
+  // prompt, which Astra3 prints without a newline.
   _handleStdoutChunk(chunk) {
     this._stdoutBuffer += chunk;
 
     const lines = this._stdoutBuffer.split("\n");
-    // The last element is whatever came after the final '\n' in the buffer so
-    // far -- NOT a complete line yet (or the whole thing, if no '\n' has
-    // arrived at all). Keep it in the buffer; process everything before it as
-    // complete lines.
+    // The last element is the unterminated tail; keep it buffered.
     this._stdoutBuffer = lines.pop();
 
     for (const line of lines) {
       this._handleLine(line);
     }
 
-    // Check the still-unterminated tail for a prompt. This is the actual fix:
-    // without this, a prompt ending in "(y/n): " with no trailing newline
-    // would sit in this._stdoutBuffer forever, invisible to _handleLine, and
-    // the run would appear to hang with no way to respond.
-    //
-    // Tested against the ANSI-stripped buffer, not the raw one --
-    // format_yn_prompt() in astra3_core.py interleaves a color code between
-    // EVERY character of "(y/n)" (e.g. the literal bytes are
-    // ESC[97m(ESC[0mESC[92myESC[0m...), so the raw buffer never contains the
-    // literal substring "(y/n):" at all and this could never match before
-    // stripping.
+    // format_yn_prompt colours each character of "(y/n)", so only the stripped
+    // text can match.
     if (PROMPT_RE.test(stripAnsi(this._stdoutBuffer))) {
       const promptText = this._stdoutBuffer.trim();
-      this._stdoutBuffer = ""; // consumed -- this text won't also show up prefixed to the next real line later
+      this._stdoutBuffer = ""; // consumed by the prompt
       this.emit("log", { text: promptText, tone: this._classifyTone(promptText) });
       this._pendingPrompt = {};
-      // Not every prompt sharing the "(y/n): " ending is strictly yes/no --
-      // e.g. intra-structure homomer reduction accepts "y", "n", a specific
-      // chain letter, or (during BATCH) "skip". Rather than trying to regex-
-      // detect which exact prompt this is (fragile, and would need updating
-      // every time a new prompt shape is added in Python), every prompt is
-      // offered BOTH the y/n quick-tap buttons AND a free-text field -- the
-      // UI decides how to present that, this just always provides both
-      // options through.
-      //
-      // No separate "context" field here (an earlier version captured a
-      // rolling buffer of recent lines and displayed them again inside the
-      // prompt box) -- every page that shows this inline prompt already shows
-      // its own live console feed directly above it, so duplicating that
-      // content inside the box just repeated text the person had already seen
-      // scroll by seconds earlier, with no new information.
-      // Free text is offered only when the prompt genuinely accepts more than
-      // y/n. Astra3 signals that in the prompt itself: either by listing extra
-      // options inside the parentheses ("(y/n)/skip:") or by spelling out an
-      // alternative above it ("Or type a chain letter (A, B) to use that chain
-      // instead"). Offering a text box on a question with exactly two valid
-      // answers invites input that can only be rejected.
-      // The alternatives are usually stated on an EARLIER line than the
-      // question itself -- "Or type a chain letter (A, B) to use that chain
-      // instead." sits above "Use only chain B for this analysis? (y/n):".
-      // Looking at the question alone therefore missed them and disabled the
-      // text box on prompts that genuinely accept a typed answer. The recent
-      // output is considered alongside it.
+      // Free text is offered only when the prompt accepts more than y/n, either
+      // inside the parentheses ("(y/n)/skip:") or on a line above ("Or type a
+      // chain letter (A, B) ..."), so recent output is checked too.
       const recentContext = (this._recentLines || []).slice(-6).map((l) => stripAnsi(l)).join("\n");
       const stripped = stripAnsi(promptText) + "\n" + recentContext;
       const acceptsMore =
@@ -801,74 +571,52 @@ class PymolBridge extends EventEmitter {
   }
 
   _handleLine(line) {
-    // Kept short deliberately: this is context for interpreting the next
-    // prompt, not a scrollback buffer.
+    // Context for the next prompt, not scrollback.
     this._recentLines.push(line);
     if (this._recentLines.length > 8) this._recentLines.shift();
 
     this.emit("log", { text: line, tone: this._classifyTone(line) });
 
-    this._lastOutputAt = Date.now(); // see cancel()'s force-kill logic -- evidence the process is still alive and doing something, not silently stuck
+    this._lastOutputAt = Date.now();
 
-    // Match against the ANSI-stripped text, not the raw line -- most of these
-    // source prints are color-wrapped (e.g. "Report saved:" is actually
-    // printed as {GREEN}Report saved: ...{RESET}, so the raw line starts with
-    // an escape code, not the letter "R", and every ^-anchored regex below
-    // would silently never match). A few of these particular prints happen to
-    // be plain today, but stripping unconditionally means this stays correct
-    // even if that changes later, rather than being a fragile, one-off "this
-    // specific print isn't colored right now" assumption.
+    // Most of these prints are colour-wrapped, so anchored patterns need the
+    // stripped text.
     const clean = stripAnsi(line);
 
     // "Engine: PyMOL 3.1.6.1", printed by astra3.py as it starts, names the
     // engine and version shown in the top bar.
     const engineMatch = ENGINE_LINE_RE.exec(clean);
     if (engineMatch) this.emit("state", { engine: engineMatch[1], engineVersion: engineMatch[2] || null });
+    // "Python: 3.10.12 (x86_64)", printed once as astra3.py starts, gives the
+    // architecture of the engine's own interpreter.
+    const pythonMatch = PYTHON_LINE_RE.exec(clean);
+    if (pythonMatch) {
+      const notice = intelEngineNotice(this._engineName(), pythonMatch[1], process.platform, process.arch);
+      if (notice) this.emit("log", { text: notice, tone: "warning" });
+    }
     // astra3.py prints this when an imported file has disappeared; it has
     // already unregistered the IDs.
     if (/^(?:> )?Imported file missing:/.test(clean)) this._dropImports(clean.match(/AST-\d+/g) || []);
 
-    // Astra3 saying so itself, which also covers a cancel that came from
-    // somewhere other than cancel() -- a real Ctrl+C in an attached
-    // terminal, say.
+    // Also covers a cancel that did not come from cancel(), such as Ctrl+C in a
+    // terminal.
     if (RUN_CANCELLED_RE.test(clean)) this._cancelledRun = true;
 
-    // Auto-respond: writes a known answer to stdin the instant a specific
-    // trigger line appears, with NO user-facing prompt shown at all -- see
-    // runImportCommand's own comment for why IMPORT's "Enter file path:"
-    // question is answered this way instead of going through the normal
-    // global-prompt UI: the GUI already knows the answer (the person picked
-    // the file through its own file picker), so asking again would just be a
-    // redundant, confusing extra step. Checked before the y/n PROMPT_RE below
-    // so this can take priority for the one specific line it's armed for;
-    // cleared immediately so it only ever fires once per arm.
+    // Checked before PROMPT_RE so an armed auto-answer wins; fires once.
     if (this._autoRespond && this._autoRespond.triggerRegex.test(clean)) {
       const response = this._autoRespond.response;
       this._autoRespond = null;
       this.proc.stdin.write(response + "\n");
-      return; // this line was consumed as the trigger, not real output to classify/emit further below
+      return;
     }
 
-    // Captures every "Temporary ID: AST-XXXX Name: <name>" line astra3.py's
-    // own IMPORT handler prints (one per registered object -- a .pse can
-    // register more than one at once). Reset per command alongside
-    // _lastSessionPath below, included in the resolved result so a caller
-    // like runImportCommand can report back the REAL id(s) PyMOL actually
-    // assigned, rather than a client-side guess.random(), never actually
-    // registered with the running PyMOL process at all, which is why using
-    // that fabricated ID in any later command was correctly rejected by
-    // validate_structure_id's known_ast_ids check.
+    // One line per registered object; a .pse can register several.
     const registeredMatch = /^Temporary ID:\s*(AST-\d+)\s+Name:\s*(.+?)\s*$/.exec(clean);
     if (registeredMatch) {
       this._lastRegisteredIds.push({ id: registeredMatch[1], name: registeredMatch[2] });
     }
 
-    // Drains every pending _waitUntilReady-style waiter the instant
-    // astra3.py's own real ready-prompt line arrives -- see start()'s own
-    // comment for the launch race this exists to fix. Matched with the same
-    // "Enter a PDB ID" fragment the completion-detection check below already
-    // uses (that one fires on every subsequent return to the prompt, this one
-    // only cares about the very FIRST time it's ever seen, at startup).
+    // The first "Enter a PDB ID" prompt releases callers waiting for the launch.
     if (this._readyResolvers.length > 0 && /Enter a PDB ID(?: \(or -help\))?:\s*$/i.test(clean)) {
       const resolvers = this._readyResolvers;
       this._readyResolvers = [];
@@ -882,50 +630,23 @@ class PymolBridge extends EventEmitter {
       }
     }
 
-    // Captures the real session (.pse) path Astra3 itself just wrote,
-    // straight from its own "Session saved: <path>" print (see save_session()
-    // in astra3_render_report.py). This is the ONLY reliable way to know
-    // where a run's output actually landed -- trying to reconstruct the
-    // output folder name in the renderer from the structure ID/label
-    // (guessing at astra3_security.py's safe_output_dirname() sanitization
-    // rules) drifts out of sync for anything beyond a single plain ID:
-    // OVERLAY and TERMINI both build their folder names with a different
-    // scheme ("Overlay_" / "Termini_" prefixes, IDs joined differently) that
-    // a GUI-side guess got wrong. astra3_render_report.py's own
-    // save_session() also always writes a sibling .pdb next to the .pse (same
-    // folder, same base name) specifically so a real path this is loadable
-    // elsewhere -- so this one captured path is enough to derive both.
+    // The paths Astra3 prints are the only reliable record of where a run wrote:
+    // OVERLAY and TERMINI folder names cannot be rebuilt from the IDs. A .pdb is
+    // always saved beside the .pse.
     const sessionMatch = /^Session saved: (.+\.(?:pse|cxs))\s*$/.exec(clean);
     if (sessionMatch) {
       this._lastSessionPath = sessionMatch[1];
     }
 
-    // Astra3 prints the report's full path, so it is captured rather than
-    // derived. Deriving it from the session path means walking up the
-    // directory tree, which is both fragile and unnecessary when the exact
-    // path is already on the line.
+    // The report path is printed in full, so it is captured as is.
     const reportMatch = /^HTML report saved: (.+\.html)\s*$/.exec(clean);
     if (reportMatch) {
       this._lastReportPath = reportMatch[1];
     }
 
-    // Astra3's own "ready for input again" lines close out a run. Both real
-    // prints are color-wrapped ({GREEN}Ready for next command.{RESET} /
-    // {WHITE}Ready for next PDB.{RESET}), so this must also match against the
-    // stripped text -- this exact ^-anchored check against the raw line was
-    // the direct cause of runs that finished successfully on Astra3's own
-    // side (visible in its own printed "Ready for next..." line) but stayed
-    // stuck showing "processing" in the GUI forever, since _pendingCommand
-    // was never resolved.
-    //
-    // The top-level "Astra3 > Enter a PDB ID:" REPL prompt itself is printed
-    // at the start of EVERY loop iteration regardless of which branch handled
-    // the previous input, making it a universal "whatever just happened is
-    // over" signal that covers every command shape, not just the ones that
-    // happen to print "Ready for next...". A command is finished when
-    // astra3.py asks for the next one. Its "Ready for next" line comes just
-    // before that prompt; ending the command there let the prompt that
-    // follows end the NEXT command before its own output arrived.
+    // A command is finished when astra3.py asks for the next one. Its "Ready for
+    // next" line comes just before that prompt; ending the command there would
+    // let the prompt that follows end the next command before its output arrived.
     if (/Enter a PDB ID(?: \(or -help\))?:\s*$/i.test(clean)) {
       if (this._pendingCommand) {
         this._pendingCommand.resolve({
@@ -941,17 +662,14 @@ class PymolBridge extends EventEmitter {
         });
         this._pendingCommand = null;
         this._cancelledRun = false;
-        this._lastSessionPath = null; // don't leak this run's path into the next command's result if the next run fails before saving its own
-        this._lastRegisteredIds = []; // same reasoning -- don't leak this run's registered IDs into the next command's result
+        this._lastSessionPath = null;
+        this._lastRegisteredIds = [];
       }
     }
   }
 
   _classifyTone(line) {
-    // Tested against ANSI-stripped text -- same reasoning as _handleLine
-    // above: "Report saved"/"HTML report saved"/etc. are all printed color-
-    // wrapped, so the raw line doesn't start with the literal text these
-    // patterns anchor on.
+    // Matched on stripped text; these lines are colour-wrapped.
     const clean = stripAnsi(line);
     if (/^\s*Error-fetch|^\s*Selector-Error|error/i.test(clean)) return "error";
     if (/warning/i.test(clean)) return "warning";

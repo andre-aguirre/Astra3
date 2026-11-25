@@ -2,16 +2,11 @@
 /**
  * Stages the Python that ships inside the application bundle.
  *
- * By default this copies source. Bytecode compilation is available but is
- * OFF unless explicitly requested, for a reason that is worth stating
- * plainly:
- *
- *   CPython bytecode is only loadable by the exact minor version that
- *   produced it. Astra3's modules are imported by PyMOL's own bundled
- *   interpreter, whose version is chosen by whoever installed PyMOL and
- *   varies between PyMOL releases and between machines. A .pyc compiled on
- *   the build machine therefore fails to import on any user whose PyMOL
- *   ships a different Python, with "bad magic number".
+ * By default this copies source. CPython bytecode loads only under the
+ * minor version that produced it, and Astra3's modules are imported by the
+ * interpreter of whatever PyMOL is installed, which varies between PyMOL
+ * releases and between computers. A .pyc made on the build computer
+ * therefore fails with "bad magic number" wherever PyMOL's Python differs.
  *
  * To compile anyway, set ASTRA3_COMPILE_WITH to the interpreter that the
  * target PyMOL uses, for example:
@@ -19,10 +14,9 @@
  *   ASTRA3_COMPILE_WITH=/Applications/PyMOL.app/Contents/bin/python \
  *     npm run build:python
  *
- * That produces bytecode matching that PyMOL, and is only appropriate when
- * the PyMOL version in use is known and controlled. The build refuses to
- * guess an interpreter for this reason. The Astra3 Engine runs its own
- * Python and needs the source, so a bytecode build has no Astra3 Engine.
+ * That suits only a known, fixed PyMOL, so the build never guesses an
+ * interpreter. The Astra3 Engine runs its own Python and needs the source,
+ * so a bytecode build has no Astra3 Engine.
  *
  * Output: build/python-dist/
  */
@@ -30,8 +24,8 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const SRC = path.join(__dirname, "..", "..", "python");
-const OUT = path.join(__dirname, "..", "build", "python-dist");
+const SRC = process.env.ASTRA3_PYTHON_SRC || path.join(__dirname, "..", "..", "python");
+const OUT = process.env.ASTRA3_PYTHON_DIST || path.join(__dirname, "..", "build", "python-dist");
 
 // Executed as a file path (astra3.py by PyMOL or ChimeraX, the scene script by
 // ChimeraX's runscript); a .pyc cannot be substituted here.
@@ -58,10 +52,19 @@ if (compiler) {
   mode = "bytecode";
 }
 
+// Anything else in python/ (batch lists, settings, run output) belongs to
+// the computer that built the app.
+const SHIPPED = /^(astra3[A-Za-z0-9_]*\.py|astra3_logo\.png)$/;
+
 const staged = [];
+const left = [];
 for (const name of fs.readdirSync(SRC).sort()) {
   const full = path.join(SRC, name);
   if (fs.statSync(full).isDirectory()) continue;
+  if (!SHIPPED.test(name)) {
+    left.push(name);
+    continue;
+  }
 
   if (mode === "bytecode" && name.endsWith(".py") && !KEEP_AS_SOURCE.has(name)) {
     const target = path.join(OUT, name.replace(/\.py$/, ".pyc"));
@@ -79,6 +82,7 @@ for (const name of fs.readdirSync(SRC).sort()) {
 
 console.log(`Mode: ${mode}${version ? ` (Python ${version})` : ""}`);
 for (const s of staged) console.log(`  ${s}`);
+if (left.length) console.log(`Not staged: ${left.join(", ")}`);
 if (mode === "bytecode") {
   console.log(`\nThese modules will ONLY import under Python ${version}.`);
   console.log("If the installed PyMOL bundles a different Python, the application will fail to start.");

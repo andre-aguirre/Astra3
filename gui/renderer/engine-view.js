@@ -67,7 +67,7 @@
     markEl.classList.toggle("busy", !!busy);
   };
 
-  // -- colour ---------------------------------------------------------------
+  // Colour
   const clamp01 = (v) => Math.max(0, Math.min(1, v));
   const hex = (rgb) => "#" + rgb.slice(0, 3).map((c) => Math.round(clamp01(c) * 255).toString(16).padStart(2, "0")).join("");
   // Darkens toward a cool shadow rather than toward grey, so buried colours
@@ -82,7 +82,7 @@
     return lut;
   })();
 
-  // -- camera ---------------------------------------------------------------
+  // Camera
   // PyMOL's view: elements 0-8 the model-to-camera rotation (column-major),
   // 9-11 the camera position relative to the rotation origin, 12-14 the
   // origin. 3Dmol places a point at R (v + modelGroup) + rotationGroup and
@@ -117,7 +117,7 @@
     viewer.setView([-v[12], -v[13], -v[14], CAMERA_Z + v[11], qx, qy, qz, qw, v[9], v[10]]);
   }
 
-  // -- drawing objects --------------------------------------------------------
+  // Drawing objects
   const xyz = (p) => ({ x: p[0], y: p[1], z: p[2] });
   function addCone(viewer, base, tip, radius, rgb) {
     const axis = [tip[0] - base[0], tip[1] - base[1], tip[2] - base[2]];
@@ -163,7 +163,7 @@
     }
   }
 
-  // -- the scene -------------------------------------------------------------
+  // The scene
   function sceneKey(job, pdbs) {
     return JSON.stringify([pdbs, job.structures.map((s) => [s.colors, s.burial, s.sticks, s.spheres, s.labels]),
       job.palette, job.cgo, job.background, job.opaque, !!job.closeup]);
@@ -219,7 +219,7 @@
     viewer.setViewStyle({ style: "outline", color: "black", width: pixels * angstromPerPixel });
   }
 
-  // -- full-size image -------------------------------------------------------
+  // Full-size image
   function captureViewer(job, scale) {
     const [w, h] = job.size;
     const dpr = window.devicePixelRatio || 1;
@@ -294,7 +294,7 @@
     return toPng(slot.viewer.getCanvas(), w, h);
   }
 
-  // -- the window --------------------------------------------------------------
+  // The window
   // The window is optional (Settings > Astra3 Engine) and hidden by default;
   // images are drawn the same either way. When it is shown, the 3D view
   // follows each image as it is drawn, and choosing an image in the list

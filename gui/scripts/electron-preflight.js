@@ -2,21 +2,14 @@
 // ============================================================
 // Astra3: Electron installation preflight/diagnostic
 // ============================================================
-// Run manually with `npm run preflight`, or automatically via the
-// `pretest`/`prestart` hooks in package.json. Checks the Electron
-// installation for the exact failure mode this project hit once
-// already:
-// a partially-extracted Electron.app plus a missing or malformed
-// node_modules/electron/path.txt, which produces the cryptic
-// "Electron failed to install correctly" error with no indication
-// of what's actually wrong.
+// Run with `npm run preflight`, or through the `prestart` hook in
+// package.json. Checks the Electron installation for a partly extracted
+// Electron.app or a missing or malformed node_modules/electron/path.txt,
+// which Electron reports only as "Electron failed to install correctly".
 //
-// This script never downloads, modifies, or re-signs anything by
-// itself. It only INSPECTS the current installation and reports
-// findings in plain language, plus (only when explicitly run with
-// --repair) offers to fix the specific, narrow set of problems it
-// knows how to fix safely -- see runRepair() below for exactly what
-// that does and does not touch.
+// It inspects the installation and reports what it finds. With --repair
+// it also fixes the two problems described above runRepair(); it never
+// downloads or re-signs anything.
 // ============================================================
 
 const fs = require("fs");
@@ -32,7 +25,8 @@ const DIST_DIR = path.join(ELECTRON_DIR, "dist");
 const args = process.argv.slice(2);
 const REPAIR_MODE = args.includes("--repair");
 const VERBOSE = args.includes("--verbose");
-const ADVISORY_MODE = args.includes("--advisory"); // used by the prestart hook: report problems but never block `npm start` from at least attempting to run -- Electron's own error message is still the final word if something's actually broken
+// --advisory (the prestart hook): report problems without stopping `npm start`.
+const ADVISORY_MODE = args.includes("--advisory");
 
 let checksRun = 0;
 let checksPassed = 0;
@@ -100,10 +94,8 @@ function checkVersionMatches() {
     reportWarn("No electron entry found in package.json dependencies", `installed: ${installedVersion}`);
     return;
   }
-  // Simple sanity check rather than full semver range resolution (no
-  // extra dependency for this) -- flags an obvious major mismatch,
-  // which is the case that actually matters here (a stale cached
-  // install from a previous project version).
+  // Compares major versions only, which is enough to catch a stale install
+  // left from an earlier version of the project.
   const declaredMajor = (declaredRange.match(/(\d+)/) || [])[1];
   const installedMajor = (installedVersion.match(/^(\d+)/) || [])[1];
   if (declaredMajor && installedMajor && declaredMajor !== installedMajor) {
@@ -119,8 +111,7 @@ function checkVersionMatches() {
 // ------------------------------------------------------------
 // 3/4/5. path.txt existence, contents, and trailing-newline check
 // ------------------------------------------------------------
-// This is the exact failure this script exists to catch. Electron's
-// own index.js does:
+// Electron's index.js does:
 //   executablePath = fs.readFileSync(pathFile, 'utf-8')
 //   ... path.join(__dirname, 'dist', executablePath)
 // with NO trimming of the read value. A trailing newline (e.g. from
@@ -159,10 +150,9 @@ function checkPathTxt() {
   }
   reportPass("path.txt has no trailing newline", JSON.stringify(raw));
 
-  // Content sanity: on macOS this should look like
-  // "Electron.app/Contents/MacOS/Electron"; on Windows, "electron.exe";
-  // on Linux, "electron". Checked loosely (existence of the resolved
-  // file matters more than the exact string shape -- see check 7).
+  // Expected: "Electron.app/Contents/MacOS/Electron" on macOS,
+  // "electron.exe" on Windows, "electron" on Linux. Checked loosely: check 7
+  // tests whether the resolved file exists.
   const expectedFragment = process.platform === "darwin" ? "Electron.app"
     : process.platform === "win32" ? ".exe"
     : "electron";
@@ -181,7 +171,8 @@ function checkPathTxt() {
 // ------------------------------------------------------------
 function resolveExecutablePath() {
   if (!fs.existsSync(PATH_TXT)) return null;
-  const raw = fs.readFileSync(PATH_TXT, "utf-8"); // deliberately NOT trimmed -- must match Electron's own (buggy) behavior for this check to be meaningful
+  // Not trimmed, because Electron does not trim it either.
+  const raw = fs.readFileSync(PATH_TXT, "utf-8");
   return path.join(DIST_DIR, raw);
 }
 
@@ -200,10 +191,8 @@ function checkAppAndExecutable() {
       reportFail("Electron.app is missing from dist/", null, "reextract");
       return null;
     }
-    // The specific failure mode from the incident report: an
-    // Electron.app that exists but only contains a couple of files
-    // (~252KB) because the postinstall unzip was interrupted/failed
-    // partway through, rather than a genuinely missing app bundle.
+    // An Electron.app with only a few files (about 252 KB) is one whose
+    // postinstall extraction stopped partway.
     let fileCount = 0;
     try {
       const walk = (dir) => {
@@ -258,16 +247,13 @@ function hasTrailingNewlineInPathTxt() {
 function checkArchitecture(execPath) {
   section("8. Architecture");
   if (!execPath) {
-    reportWarn("Skipped -- no resolved executable to check");
+    reportWarn("Skipped: no resolved executable to check");
     return;
   }
   const hostArch = os.arch(); // 'arm64', 'x64', etc.
   let electronPkgArch = null;
   try {
-    // electron's own package.json doesn't directly declare arch, but
-    // npm records what was actually installed in the platform-specific
-    // optionalDependency that got resolved. Simpler and more direct:
-    // ask the binary itself (macOS: `file`, cross-platform-ish).
+    // The binary itself says which architecture it was built for.
     if (process.platform === "darwin" || process.platform === "linux") {
       const fileOut = spawnSync("file", [execPath], { encoding: "utf-8" });
       if (fileOut.status === 0) {
@@ -278,7 +264,7 @@ function checkArchitecture(execPath) {
       }
     }
   } catch (e) {
-    // `file` not available or failed -- not fatal, just can't confirm arch this way
+    // `file` is unavailable; the architecture is reported as unknown.
   }
   if (!electronPkgArch) {
     reportWarn("Could not determine the Electron binary's architecture (the `file` command may be unavailable)");
@@ -297,12 +283,12 @@ function checkArchitecture(execPath) {
 }
 
 // ------------------------------------------------------------
-// 9. Executable is runnable (has execute permission, isn't obviously broken)
+// 9. Executable is runnable (present and executable)
 // ------------------------------------------------------------
 function checkRunnable(execPath) {
   section("9. Executable permissions");
   if (!execPath) {
-    reportWarn("Skipped -- no resolved executable to check");
+    reportWarn("Skipped: no resolved executable to check");
     return;
   }
   try {
@@ -311,27 +297,27 @@ function checkRunnable(execPath) {
   } catch (e) {
     reportFail(
       "Executable does not have execute permission",
-      `${execPath} -- try: chmod +x "${execPath}"`,
+      `${execPath}; try: chmod +x "${execPath}"`,
     );
   }
 }
 
 // ------------------------------------------------------------
-// 10. Code signing state (macOS only) -- sensible for DEVELOPMENT,
-// explicitly not claiming this is sufficient for distribution.
+// 10. Code signing state (macOS only), for development. A release build
+// also needs notarization (scripts/notarize.js).
 // ------------------------------------------------------------
 function checkCodeSigning(execPath) {
   if (process.platform !== "darwin") {
-    return; // codesign/spctl are macOS-specific; nothing meaningful to check elsewhere
+    return; // codesign and spctl are macOS tools
   }
   section("10. Code signing (macOS, development-only signal)");
   if (!execPath) {
-    reportWarn("Skipped -- no resolved executable to check");
+    reportWarn("Skipped: no resolved executable to check");
     return;
   }
   const appPath = path.join(DIST_DIR, "Electron.app");
   if (!fs.existsSync(appPath)) {
-    reportWarn("Skipped -- Electron.app not found");
+    reportWarn("Skipped: Electron.app not found");
     return;
   }
 
@@ -343,7 +329,7 @@ function checkCodeSigning(execPath) {
       "codesign --verify failed",
       (verifyResult.stderr || "").trim() ||
         "The app's signature is missing or broken. For local development this can be fixed with an ad-hoc " +
-        "signature -- this is NOT sufficient " +
+        "signature; this is NOT sufficient " +
         "for distributing a built app to other people, only for running it yourself.",
     );
   }
@@ -353,7 +339,7 @@ function checkCodeSigning(execPath) {
   if (/revoked/i.test(spctlOutput)) {
     reportFail(
       "macOS Gatekeeper reports this Electron build's notarization has been REVOKED",
-      "This is a real, upstream fact about this specific cached Electron download -- not a false " +
+      "This is a real, upstream fact about this specific cached Electron download; not a false " +
       "positive to work around by disabling Gatekeeper globally. An ad-hoc local signature " +
       "(codesign --sign -) lets YOU run it for development; it does not un-revoke the original " +
       "signature or make the app suitable for distribution to others.",
@@ -371,7 +357,7 @@ function checkCodeSigning(execPath) {
 function checkCanLaunch(execPath) {
   section("11. Electron launch test");
   if (!execPath) {
-    reportWarn("Skipped -- no resolved executable to check");
+    reportWarn("Skipped: no resolved executable to check");
     return;
   }
   try {
@@ -435,9 +421,7 @@ function findEsbuildBinary() {
   }
   const localBin = path.join(PROJECT_ROOT, "node_modules", ".bin", process.platform === "win32" ? "esbuild.cmd" : "esbuild");
   if (fs.existsSync(localBin)) return localBin;
-  // Fall back to a global install if present (matches how this
-  // project's own build:renderer script behaves when esbuild is a
-  // devDependency vs. installed globally).
+  // Otherwise a global install, as build:renderer would use.
   try {
     const globalPath = execFileSync(process.platform === "win32" ? "where" : "which", ["esbuild"], { encoding: "utf-8" }).trim().split("\n")[0];
     if (globalPath && fs.existsSync(globalPath)) return globalPath;
@@ -446,15 +430,13 @@ function findEsbuildBinary() {
 }
 
 // ------------------------------------------------------------
-// 13. Astra3 can launch (best-effort: starts the app, waits briefly,
-// confirms the process is alive and didn't immediately crash, then
-// terminates it -- does not attempt full UI interaction, which is
-// outside what a non-interactive preflight script can verify)
+// 13. Astra3 can launch: starts the app, checks it is still running after
+// four seconds, then ends it. The interface itself is not exercised.
 // ------------------------------------------------------------
 function checkAstraLaunches(execPath) {
   section("13. Astra3 launch smoke test");
   if (!execPath) {
-    reportWarn("Skipped -- no resolved Electron executable");
+    reportWarn("Skipped: no resolved Electron executable");
     return;
   }
   const mainEntry = path.join(PROJECT_ROOT, "electron", "main.js");
@@ -465,12 +447,10 @@ function checkAstraLaunches(execPath) {
   console.log("  Launching Astra3 for a 4-second smoke test (checks the process stays alive; this does not verify UI interaction)...");
   const child = spawnSync(execPath, [PROJECT_ROOT, "--no-sandbox"], {
     encoding: "utf-8",
-    timeout: 4000, // spawnSync's timeout kills the process after this long -- used deliberately as "did it survive this long without crashing"
+    timeout: 4000,
   });
-  // spawnSync with a timeout that's hit returns status=null and
-  // signal='SIGTERM' -- that's the SUCCESS case here (it was still
-  // running when we killed it), not a failure. A real crash shows up
-  // as a non-null status with a non-zero exit code before the timeout.
+  // Ended by the timeout (status null, SIGTERM) means the app was still
+  // running: a pass. A crash exits earlier with a non-zero status.
   if (child.signal === "SIGTERM" && child.status === null) {
     reportPass("Astra3 stayed running for the full smoke-test window (no immediate crash)");
   } else if (child.error) {
@@ -486,31 +466,19 @@ function checkAstraLaunches(execPath) {
 }
 
 // ------------------------------------------------------------
-// --repair: fixes the specific, narrow problems this script itself
-// detected. Every action is logged before it's taken.
+// --repair fixes two of the problems found above, logging each action
+// before taking it:
+//  1. path.txt missing, wrong or ending in a newline: rewritten locally.
+//  2. A partly extracted Electron.app: re-extracted from Electron's local
+//     download cache (~/Library/Caches/electron on macOS,
+//     %LOCALAPPDATA%\electron\Cache on Windows, ~/.cache/electron on Linux),
+//     which `npm install` filled. When the cache has no complete file, it
+//     says so and stops.
 //
-// Two things it can fix:
-//  1. path.txt (missing / wrong contents / trailing newline) -- pure
-//     local file write, no download, no signature involved.
-//  2. A corrupt/partially-extracted Electron.app -- ONLY by
-//     re-extracting from Electron's own local download cache
-//     (~/Library/Caches/electron on macOS, %LOCALAPPDATA%\electron\Cache
-//     on Windows, ~/.cache/electron on Linux -- see Electron's own
-//     "Advanced Installation" docs for this layout), which npm's own
-//     postinstall step already populated during `npm install`. This
-//     NEVER downloads anything itself -- it only re-extracts a file
-//     that's already on disk from a source npm itself trusted enough
-//     to write there. If the cache doesn't have a complete file (e.g.
-//     the download itself failed, not just the extraction), this
-//     script says so and stops rather than guessing.
-//
-// Never touches code signing (that's inherently a judgment call about
-// trust, not something to automate) and never downloads anything from
-// the network itself.
+// It never downloads anything and never changes code signing.
 // ------------------------------------------------------------
 function findElectronCacheDir() {
-  // Matches @electron/get's own resolution order -- see Electron's
-  // "Advanced Installation Instructions" doc.
+  // The order @electron/get uses.
   if (process.env.ELECTRON_CACHE) return process.env.ELECTRON_CACHE;
   if (process.env.electron_config_cache) return process.env.electron_config_cache;
   if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Caches", "electron");
@@ -524,9 +492,7 @@ function findCachedElectronZip(version) {
   const platform = process.platform;
   const arch = os.arch();
   const expectedName = `electron-v${version}-${platform}-${arch}.zip`;
-  // Cache layout is [checksum-hash-dir]/[filename] -- search one level
-  // of subdirectories for a file matching the expected name, rather
-  // than assuming a specific hash (which varies by release).
+  // The cache holds <hash>/<file name>; the hash differs by release.
   let hashDirs;
   try {
     hashDirs = fs.readdirSync(cacheDir, { withFileTypes: true }).filter((e) => e.isDirectory());
@@ -537,13 +503,10 @@ function findCachedElectronZip(version) {
     const candidate = path.join(cacheDir, dir.name, expectedName);
     if (fs.existsSync(candidate)) {
       const stat = fs.statSync(candidate);
-      // A real Electron zip for any recent version is tens of MB at
-      // minimum -- a file present but only a few KB almost certainly
-      // means the cached download itself was incomplete, same failure
-      // mode as the Electron.app extraction, just one step earlier.
-      // Don't try to extract something this small.
+      // An Electron zip is tens of MB; a much smaller one is an
+      // incomplete download and is not extracted.
       if (stat.size < 10 * 1024 * 1024) {
-        console.log(`  Found a cached zip at ${candidate} but it's only ${(stat.size / 1024).toFixed(0)} KB -- too small to be a real Electron build. Skipping it.`);
+        console.log(`  Found a cached zip at ${candidate} but it's only ${(stat.size / 1024).toFixed(0)} KB; too small to be a real Electron build. Skipping it.`);
         continue;
       }
       return candidate;
@@ -554,9 +517,7 @@ function findCachedElectronZip(version) {
 
 function reextractElectronApp(zipPath) {
   console.log(`  Re-extracting ${path.basename(zipPath)} into ${DIST_DIR} ...`);
-  // Clear out whatever partial/corrupt extraction is currently there
-  // first, so leftover fragments from the failed extraction can't mix
-  // with the fresh one.
+  // The partial extraction is removed first, so no fragment of it remains.
   const appPath = process.platform === "darwin" ? path.join(DIST_DIR, "Electron.app") : null;
   if (appPath && fs.existsSync(appPath)) {
     fs.rmSync(appPath, { recursive: true, force: true });
@@ -565,13 +526,10 @@ function reextractElectronApp(zipPath) {
 
   let result;
   if (process.platform === "darwin") {
-    // ditto preserves the macOS app bundle structure (resource forks,
-    // symlinks inside frameworks) correctly, which a generic unzip
-    // sometimes does not -- same tool used in the original manual fix.
+    // ditto keeps the bundle's symlinks and extended attributes.
     result = spawnSync("ditto", ["-xk", zipPath, DIST_DIR], { encoding: "utf-8" });
   } else if (process.platform === "win32") {
-    // Expand-Archive is built into PowerShell 5+ (ships with every
-    // supported Windows version) -- no extra dependency needed.
+    // Expand-Archive is part of PowerShell 5 and later.
     result = spawnSync("powershell", ["-NoProfile", "-Command", `Expand-Archive -Path "${zipPath}" -DestinationPath "${DIST_DIR}" -Force`], { encoding: "utf-8" });
   } else {
     result = spawnSync("unzip", ["-o", zipPath, "-d", DIST_DIR], { encoding: "utf-8" });
@@ -637,7 +595,7 @@ function runRepair() {
     if (fs.existsSync(path.join(DIST_DIR, "electron"))) candidate = "electron";
   }
   if (!candidate) {
-    console.log(`Cannot determine the correct path.txt contents for this platform -- the expected `);
+    console.log(`Cannot determine the correct path.txt contents for this platform; the expected `);
     console.log(`Electron binary was not found under ${DIST_DIR}. This likely means the extraction`);
     console.log(`itself is incomplete, which this script cannot safely repair (that requires`);
     console.log(`re-running \`npm install\` or manually re-extracting the cached archive).`);

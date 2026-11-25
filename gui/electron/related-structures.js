@@ -3,7 +3,7 @@
 // ============================================================
 // Finds other PDB entries of the same protein as a query entry and says,
 // for each one, what it is useful for and what will go wrong if it is
-// compared -- before any analysis is run.
+// compared, before any analysis is run.
 //
 // How relatedness is decided:
 //   1. The query entry's protein entity is identified, with its UniProt

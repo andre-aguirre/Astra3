@@ -1,11 +1,9 @@
 // ============================================================
 // Astra3: Electron main process
 // ============================================================
-// Owns: the native window, native dialogs, filesystem access, and the PyMOL
-// child process. The renderer (React GUI) never touches Node or the
-// filesystem directly: see preload.js and the
-// contextIsolation/nodeIntegration settings below. All of that goes through
-// IPC, handled here.
+// Owns the window, native dialogs, filesystem access and the engine process.
+// The sandboxed renderer reaches all of these only through the IPC handlers
+// below (see preload.js).
 // ============================================================
 
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeImage, session, clipboard } = require("electron");
@@ -14,40 +12,32 @@ const fs = require("fs");
 const os = require("os");
 const { macWindowShadowAllowed, describePymolLaunchError } = require("./mac-compat");
 const { execFileSync, spawn } = require("child_process");
+const outputLocation = require("./output-location");
+const runFolders = require("./run-folders");
 
 const isMac = process.platform === "darwin";
 const isDev = !app.isPackaged;
 
 
-// User-writable state (the chosen PyMOL location, the output folder, the
-// diagnostic log) lives in the standard macOS per-user application-support
-// directory.
-//
-// It must NOT live inside the application bundle. A distributed .app is code
-// signed with a hardened runtime, and writing into Contents/Resources both
-// invalidates that signature and fails outright when the app is installed to
-// /Applications by a user without write access there. Configuration that
-// belongs to the person, not the program, also has no business inside the
-// bundle regardless.
-//
-// Anything found in a previous in-bundle location is migrated once on first
-// run, so an upgrade keeps the settings the person already chose.
+// Per-user settings live in Application Support, never in the signed app
+// bundle, where writing breaks the signature and may not be permitted.
+// Settings a development checkout kept in gui/tools are migrated once.
 function resolveToolsDir() {
   const dir = path.join(app.getPath("userData"), "tools");
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch {
-    // Reported by the callers that need it; there is no useful recovery here.
+    // Callers report write failures.
   }
   return dir;
 }
 const TOOLS_DIR = resolveToolsDir();
 
+// Packaged builds skip this: any tools folder inside the app came from the
+// build machine, not from the person using it.
 function migrateLegacyToolsFiles() {
-  const legacyDirs = [
-    path.join(__dirname, "..", "tools"),
-    path.join(process.resourcesPath || "", "tools"),
-  ];
+  if (app.isPackaged) return;
+  const legacyDirs = [path.join(__dirname, "..", "tools")];
   for (const name of ["pymol_path.txt", "output_dir.txt", "engine.txt", "chimerax_path.txt"]) {
     const target = path.join(TOOLS_DIR, name);
     if (fs.existsSync(target)) continue;
@@ -59,7 +49,7 @@ function migrateLegacyToolsFiles() {
           break;
         }
       } catch {
-        // Unreadable legacy file -- fall through to the next location.
+        // Unreadable; try the next location.
       }
     }
   }
@@ -69,8 +59,7 @@ const PYMOL_PATH_FILE = path.join(TOOLS_DIR, "pymol_path.txt");
 const ENGINE_FILE = path.join(TOOLS_DIR, "engine.txt");
 const CHIMERAX_PATH_FILE = path.join(TOOLS_DIR, "chimerax_path.txt");
 
-// -- Analysis engine --
-// PyMOL unless the person has chosen ChimeraX or the Astra3 Engine in Settings.
+// Analysis engine: PyMOL unless ChimeraX or the Astra3 Engine is chosen in Settings.
 const ENGINES = new Set(["pymol", "chimerax", "astra3"]);
 function readEngine() {
   try {
@@ -168,10 +157,8 @@ function chimeraxVersion(exePath) {
   });
 }
 
-// Which engine analyses run with: the one chosen in Settings (PyMOL until
-// another is chosen) when it is installed, otherwise the other one when it is,
-// so a computer with only one of them works without being asked anything.
-// None when neither is installed; the setup dialog then asks for either.
+// The chosen engine if it works, else the first that does (PyMOL, ChimeraX,
+// Astra3 Engine). null when none is available; the setup dialog then asks.
 const ENGINE_NAMES = { pymol: "PyMOL", chimerax: "ChimeraX", astra3: "Astra3 Engine" };
 function isFilePath(p) {
   try {
@@ -212,10 +199,8 @@ function effectiveEngine() {
   return engineStatus().engine || readEngine();
 }
 
-// Locations a PyMOL installation is normally found in on macOS, in descending
-// order of likelihood. Both the app bundle's executable and the plain
-// command-line binaries are checked, since which exists depends on whether
-// PyMOL came from the Schrodinger installer, Homebrew, conda or pip.
+// Usual PyMOL locations on macOS, most likely first: the Schrodinger
+// installer, Homebrew, conda environments and pip.
 function macPymolCandidates() {
   const home = app.getPath("home");
   const candidates = [
@@ -248,15 +233,13 @@ function macPymolCandidates() {
   return candidates;
 }
 
-// First PyMOL that actually exists on this machine, or null. Checks for a
-// file at each candidate rather than assuming a directory implies an install,
-// so an empty folder left by an uninstall is not reported as one.
+// Requires a file, so an empty folder left by an uninstall does not count.
 function autodetectPymolPath() {
   for (const candidate of macPymolCandidates()) {
     try {
       if (fs.statSync(candidate).isFile()) return candidate;
     } catch {
-      // Absent -- the expected result for most entries in a list this broad.
+      // Not installed here.
     }
   }
   return null;
@@ -269,10 +252,7 @@ function readPymolPath() {
   } catch {
     saved = null;
   }
-  // A saved path that no longer exists is not a usable setting: PyMOL may
-  // have been moved, upgraded or removed since it was chosen. Falling back to
-  // detection recovers those cases instead of failing at launch with a stale
-  // location.
+  // PyMOL may have moved since it was chosen; fall back to detection.
   if (saved) {
     try {
       if (fs.statSync(saved).isFile()) return saved;
@@ -283,26 +263,8 @@ function readPymolPath() {
   return autodetectPymolPath();
 }
 
-// Real existence/executability check for a PyMOL path. Accepts an explicit
-// path (used by the Settings page to verify whatever is CURRENTLY TYPED in
-// the field, before it's necessarily been saved to disk via setPymolPath) or
-// falls back to the saved path from pymol_path.txt when no explicit path is
-// given (used by the top-bar setup banner, which only cares about the
-// currently-active saved path). X_OK alone passes for ANY traversable
-// directory, not just real executables -- a directory needs its own execute
-// bit set just to be listable/enterable, which has nothing to do with whether
-// it's a runnable program. A macOS .app bundle (e.g.
-// "/Applications/PyMOL.app", which the Browse dialog's default behavior lets
-// a person select directly -- see resolveAppBundleExecutable's own comment)
-// is exactly such a directory: fs.accessSync(..., X_OK) on it returns
-// successfully even though spawn()'ing it directly fails with EACCES, since
-// it isn't actually an executable file. Without isFile() here, this check
-// reported a selected .app bundle as "found and executable" (a green
-// checkmark in Settings), which is why the problem persisted even after a
-// person went to Settings, used Browse, and saved -- Browse returned the
-// bundle path, this verification incorrectly approved it, and every
-// subsequent PyMOL launch kept failing identically regardless of how many
-// times the same path was re-saved.
+// An executable file. X_OK alone also passes directories, including .app
+// bundles, which spawn() cannot run.
 function verifyPymolPath(candidatePath) {
   if (!candidatePath) return false;
   try {
@@ -321,27 +283,10 @@ function writePymolPath(newPath) {
   fs.writeFileSync(PYMOL_PATH_FILE, newPath, "utf-8");
 }
 
-// Resolves a selected macOS .app bundle down to its real internal executable.
-// On macOS, Electron's dialog.showOpenDialog treats a .app bundle as a single
-// selectable "file" by default (it doesn't let a person navigate INSIDE it
-// the way a normal folder works) -- so a person naturally picking "PyMOL.app"
-// from /Applications, the only sensible thing to click on in Finder without
-// knowing PyMOL's own internal folder layout, gets back the bundle's own
-// top-level path (e.g. "/Applications/PyMOL.app"), not the real Unix
-// executable spawn() actually needs (e.g.
-// "/Applications/PyMOL.app/Contents/MacOS/PyMOL").
-//
-// Uses macOS's own `plutil` (a standard system utility on every real Mac, not
-// a new dependency) to read Contents/Info.plist's CFBundleExecutable -- the
-// bundle's own, authoritative declaration of which file inside
-// Contents/MacOS/ is the real entry point -- rather than guessing a filename
-// from the bundle's own name (which can legitimately differ, and would be
-// fragile for any app whose internal executable isn't simply "the bundle name
-// minus .app"). Falls back to that same-name guess only if plutil/Info.plist
-// parsing fails for some reason, and returns the ORIGINAL path unchanged (not
-// a second, potentially-also-wrong guess) if even that isn't a real file --
-// verifyPymolPath's own isFile() check then correctly flags it as invalid
-// rather than silently accepting a fabricated path.
+// The file dialog returns a picked .app bundle as is; spawn() needs the
+// executable inside. Reads CFBundleExecutable from Info.plist, falls back to
+// the bundle's name, and otherwise returns the path unchanged so
+// verifyPymolPath rejects it.
 function resolveAppBundleExecutable(selectedPath) {
   if (!selectedPath || !selectedPath.endsWith(".app")) return selectedPath;
   let stat;
@@ -361,8 +306,7 @@ function resolveAppBundleExecutable(selectedPath) {
       if (fs.existsSync(resolved)) return resolved;
     }
   } catch {
-    // plutil missing/failed, or Info.plist malformed -- fall through to the
-    // same-name guess below rather than giving up immediately.
+    // Fall back to the name-based guess.
   }
 
   const bundleName = path.basename(selectedPath, ".app");
@@ -371,71 +315,30 @@ function resolveAppBundleExecutable(selectedPath) {
 }
 
 // ------------------------------------------------------------
-// Internal-only PyMOL diagnostic log. Never surfaced to the renderer or shown
-// in any user-facing UI -- , Astra3's audience is not expected to be
-// comfortable reading raw technical errors, so every user-facing PyMOL
-// problem gets a plain-language message instead (see PymolSetupDialog in
-// app.jsx). This exists purely so a developer investigating a bug report has
-// a real, timestamped record of what was actually detected/tried, without
-// needing to reproduce the problem live. Capped and rotated by truncating to
-// the most recent ~500 lines on write, so it can't grow unbounded over a
-// long-running install.
+// PyMOL diagnostic log for support requests. Never shown in the interface,
+// which gives plain-language messages instead. Kept to the last 500 lines.
 const PYMOL_LOG_FILE = path.join(TOOLS_DIR, "pymol-diagnostic.log");
 function logPymolEvent(event, details = {}) {
   try {
     fs.mkdirSync(TOOLS_DIR, { recursive: true });
     const line = `[${new Date().toISOString()}] ${event} ${JSON.stringify(details)}\n`;
     let existing = "";
-    try { existing = fs.readFileSync(PYMOL_LOG_FILE, "utf-8"); } catch { /* no log yet, or unreadable -- start a fresh one rather than failing the write */ }
+    try { existing = fs.readFileSync(PYMOL_LOG_FILE, "utf-8"); } catch { /* start a new log */ }
     const lines = (existing + line).split("\n").filter(Boolean);
     const trimmed = lines.slice(-500).join("\n") + "\n";
     fs.writeFileSync(PYMOL_LOG_FILE, trimmed, "utf-8");
   } catch {
-    // Logging itself must never be able to break the actual feature it's
-    // logging about -- best-effort only.
+    // Best effort; logging must never break the caller.
   }
   console.log(`[pymol] ${event}`, details);
 }
 
-// resolveAppBundleExecutable and verifyPymolPath together only ever confirmed
-// "this is a real, executable FILE" -- neither one checks whether that file
-// is actually PyMOL. Selecting ANY other installed application's real
-// executable (reported directly, twice, with two different unrelated apps:
-// VLC and X-VPN) resolved correctly to that app's own real binary, passed the
-// existing checks cleanly, got saved, and Astra3 tried to launch it with
-// PyMOL's own "-cq <script>" arguments -- which an unrelated app naturally
-// doesn't understand, producing its own unrelated output (VLC's own CLI
-// error; X-VPN launching its own GUI and printing its own internal log lines)
-// instead of a clear "that's not PyMOL" message before ever getting that far.
+// Confirms a candidate is PyMOL by running a small script with the same
+// "-cq <script>" invocation used for astra3.py. The script prints a marker
+// with a computed value, so a match shows Python ran.
 //
-// A related case: an
-// earlier version of this check only watched passively for PyMOL's own
-// startup banner text and never saw it against a real, correctly installed
-// PyMOL. A stdin-probing version fixed that specific case but was made
-// advisory-only out of caution about a repeat false rejection -- which then
-// let X-VPN straight through, since an advisory check that never blocks
-// anything provides no real protection at all. Both problems come from the
-// same root cause: genuinely not knowing how a bare "-cq" prompt handles raw
-// input typed at it.
-//
-// This version sidesteps that uncertainty rather than guessing again: instead
-// of typing anything at PyMOL's own interactive prompt, it writes a tiny
-// temporary Python script and launches the candidate with the EXACT SAME "-cq
-// <script.py>" invocation pymol-bridge.js already uses for the real astra3.py
-// launch (see start() below) -- the one PyMOL interaction this whole app
-// already depends on and knows works, rather than a separate, unverified
-// assumption about typed-at-the-prompt behavior. If a candidate can't run
-// this the same way it would need to run astra3.py itself, it couldn't run a
-// real analysis either, so this is testing exactly the right thing. The temp
-// script prints a distinctive marker plus a real arithmetic result (so a
-// match proves evaluation happened, not just text pass-through) and exits on
-// its own -- no indefinite prompt to time out against, no guessing when a
-// REPL is "ready" for input.
-//
-// A plain-language explanation of why the most recent verifyIsRealPymol()
-// call failed, when the failure has a specific, fixable cause (an Intel-only
-// PyMOL on an Apple Silicon Mac without Rosetta, for example). null when the
-// last check passed or failed for the generic "not PyMOL" reason.
+// lastPymolVerifyProblem explains a failure with a specific fix (for example
+// an Intel-only PyMOL on Apple silicon without Rosetta), else null.
 let lastPymolVerifyProblem = null;
 
 // A first launch can be slow (Gatekeeper, or Rosetta translating an Intel
@@ -454,7 +357,7 @@ function verifyIsRealPymol(candidatePath, timeoutMs = 60000) {
     const finish = (result, why) => {
       if (settled) return;
       settled = true;
-      try { proc?.kill(); } catch { /* already exited -- this path runs on both success and timeout */ }
+      try { proc?.kill(); } catch { /* already exited */ }
       cleanup();
       logPymolEvent("verifyIsRealPymol", { candidatePath, result, reason: why });
       resolve(result);
@@ -479,7 +382,7 @@ function verifyIsRealPymol(candidatePath, timeoutMs = 60000) {
     }
 
     proc.on("error", (e) => {
-      const explained = describePymolLaunchError(e, candidatePath, process.platform, process.arch);
+      const explained = describePymolLaunchError(e, candidatePath, process.platform, process.arch, os.release());
       if (explained) lastPymolVerifyProblem = explained;
       finish(false, explained || `spawn error event: ${e.message}`);
     });
@@ -507,12 +410,8 @@ function verifyIsRealPymol(candidatePath, timeoutMs = 60000) {
     // "close", not "exit": exit can arrive before the last output has been
     // read, which would judge a working PyMOL on partial output.
     proc.on("close", (code) => {
-      // Unlike a bare "-cq" prompt (which real PyMOL sits waiting at
-      // indefinitely), running a SCRIPT this way means real PyMOL finishes
-      // and exits on its own once the script completes -- matching a real
-      // astra3.py run's own eventual "Ready for next PDB." exit. If the
-      // marker never appeared before exit, this is a real negative signal
-      // regardless of exit code, not just an early-exit heuristic.
+      // PyMOL exits after the script, so a missing marker at exit is a
+      // definite failure whatever the exit code.
       finish(versionRe.test(combined) && !lastPymolVerifyProblem, `process exited (code ${code}) with marker ${combined.includes(marker) ? "present" : "absent"}`);
     });
 
@@ -525,132 +424,101 @@ function verifyIsRealPymol(candidatePath, timeoutMs = 60000) {
   });
 }
 
-// Where Astra3 writes its output (Protein_outputs/ and everything under it).
-// Astra3's own Python side (astra3_core.py's detect_base_dir()) picks a base
-// directory on its own if nothing overrides it -- normally by walking up from
-// wherever astra3.py itself lives, which is INSIDE this app's install
-// location, not a place a user would expect their analysis results to end up
-// or want to browse to. ASTRA3_BASE_DIR is an env var detect_base_dir()
-// already checks first (see astra3_core.py) -- setting it here from the same
-// value the Settings page shows as "Default output directory" is what makes
-// that setting actually control where files go, instead of being a GUI-only
-// value nothing downstream ever reads. Persisted the same way pymol_path.txt
-// is, so it survives an app restart without the renderer needing to resend it
-// on every launch.
+// The output folder (a Protein_outputs folder) drives both the interface and
+// the engine, which gets its parent as ASTRA3_BASE_DIR. output_dir.txt holds
+// only a folder chosen in Settings; see output-location.js.
 const OUTPUT_DIR_FILE = path.join(TOOLS_DIR, "output_dir.txt");
 
 function readOutputDir() {
   try {
-    const raw = fs.readFileSync(OUTPUT_DIR_FILE, "utf-8").trim();
+    const raw = fs.readFileSync(OUTPUT_DIR_FILE, "utf-8").trim().split(/\r?\n/)[0].trim();
     return raw || null;
   } catch {
-    return null; // not set yet -- Astra3's own detect_base_dir() fallback applies
+    return null;
   }
 }
 
-// Expands a leading "~" to the user's home directory. Electron's own native
-// folder picker (dialog.showOpenDialog) always returns real absolute paths
-// and never does this, but the shipped default value
-// (DEFAULT_SETTINGS.outputDir in app.jsx) uses "~/..." for readability, and
-// someone could also type a "~/..." path into the Settings text field
-// directly. Without this, that path would reach Python's own
-// Path(env).resolve() call literally -- Python does NOT expand "~" there, so
-// it would resolve to a bogus "<cwd>/~/..." path instead of the person's
-// actual home directory.
-function expandHome(p) {
-  if (p === "~") return os.homedir();
-  if (p.startsWith("~/") || p.startsWith("~\\")) return path.join(os.homedir(), p.slice(2));
-  return p;
-}
-
-function writeOutputDir(newPath) {
+function writeOutputDir(dir) {
   fs.mkdirSync(TOOLS_DIR, { recursive: true });
-  fs.writeFileSync(OUTPUT_DIR_FILE, expandHome(newPath), "utf-8");
+  fs.writeFileSync(OUTPUT_DIR_FILE, dir, "utf-8");
 }
 
-// The GUI's "Default output directory" setting is the Protein_outputs folder
-// itself (e.g. ".../Astra3 (MacOS)/Protein_outputs", matching every place the
-// renderer builds paths like `${settings.outputDir}/ <ID>_Output`). Astra3's
-// own PROTEIN_OUTPUTS_DIR is BASE_DIR + "Protein_outputs" (BASE_DIR is what
-// ASTRA3_BASE_DIR overrides) -- so the env var needs to be the PARENT of the
-// GUI's outputDir, or Python would append "Protein_outputs" a second time.
-// Output location used when the person has not chosen one.
-//
-// PyMOL writes into a folder literally named "Protein_outputs" beneath
-// ASTRA3_BASE_DIR, and the base handed to it is dirname(outputDir) -- so the
-// configured path must end in that folder name for the two to agree.
+function forgetOutputDir() {
+  try {
+    fs.rmSync(OUTPUT_DIR_FILE, { force: true });
+  } catch {
+    // Left in place, it is rejected again at the next start.
+  }
+}
+
 function defaultOutputDir() {
-  return path.join(app.getPath("documents"), "Astra3", "Protein_outputs");
+  return outputLocation.defaultOutputDir(app.getPath("documents"));
 }
 
-// Always resolves to a concrete directory. Returning null here would leave
-// ASTRA3_BASE_DIR unset, and Astra3 would then fall back to its own guess
-// (the process working directory) and write results somewhere the interface
-// is not looking.
-function resolveAstraBaseDir() {
-  const outputDir = readOutputDir() || defaultOutputDir();
-  return path.dirname(outputDir);
+// Never used for results: updates replace them, and writing into a signed
+// macOS bundle invalidates its signature.
+function appFolders() {
+  const dirs = [path.resolve(__dirname, "..")];
+  if (app.isPackaged) dirs.push(process.resourcesPath, path.dirname(process.execPath));
+  return dirs.filter(Boolean);
 }
 
-// Recursively totals the bytes under a directory, for the storage figures on
-// the History page. Per-entry errors are skipped rather than abandoning the
-// total, so one unreadable file costs its own size and not the whole figure.
-function directorySizeBytes(target) {
-  let total = 0;
-  let entries;
-  try {
-    entries = fs.readdirSync(target, { withFileTypes: true });
-  } catch {
-    return 0;
+function outputEnv() {
+  return { platform: process.platform, home: os.homedir(), appDirs: appFolders() };
+}
+
+// Resolved once per launch, on first use.
+let outputStatePromise = null;
+let outputNoticeShown = false;
+
+function establishOutputDir(remembered) {
+  if (outputStatePromise) return outputStatePromise;
+  outputStatePromise = (async () => {
+    const saved = readOutputDir();
+    const state = await outputLocation.establishOutputDir({
+      saved,
+      remembered: saved ? null : remembered,
+      defaultDir: defaultOutputDir(),
+      fallbackDirs: [path.join(app.getPath("home"), "Astra3", "Protein_outputs")],
+      env: outputEnv(),
+    });
+    // Drop a refused folder so its notice appears once.
+    if (state.replaced && state.replaced.source === "saved") forgetOutputDir();
+    // A remembered or fallback folder is saved, so later launches use it
+    // without asking again.
+    if (state.source === "remembered" || state.source === "fallback") writeOutputDir(state.dir);
+    return state;
+  })();
+  return outputStatePromise;
+}
+
+// Re-checked at every engine launch in case the folder became unavailable.
+async function resolveAstraBaseDir() {
+  const state = await establishOutputDir(null);
+  const check = await outputLocation.checkOutputDir(state.dir, outputEnv());
+  if (!check.ok) {
+    throw new Error(`Astra3 can't save results in ${state.dir}. ${outputLocation.describeRefusal(check)} Choose another output folder in Settings.`);
   }
-  for (const entry of entries) {
-    const full = path.join(target, entry.name);
-    try {
-      const st = fs.statSync(full);
-      if (st.isDirectory()) total += directorySizeBytes(full);
-      else if (st.isFile()) total += st.size;
-    } catch {
-      // Unreadable or vanished mid-walk.
-    }
-  }
-  return total;
+  return path.dirname(check.dir);
 }
 
-// True for a directory Astra3 created for a run. Every output folder it makes
-// is "<label>_Output". Shared by the size measurement and the delete so the
-// figure reported and the set removed are always the same.
-function isAstraRunFolder(fullPath, name) {
-  if (!/_Output$/i.test(name)) return false;
-  try {
-    return fs.statSync(fullPath).isDirectory();
-  } catch {
-    return false;
-  }
+function protectedFolders() {
+  return [app.getPath("home"), app.getPath("documents"), app.getPath("desktop"), app.getPath("downloads")];
 }
 
-// astra3.py's own location. Unlike the PyMOL executable (which can be
-// installed anywhere on the user's machine and genuinely needs a one-time
-// picker), astra3.py always ships in the same place relative to this app: a
-// "python/" folder next to "gui/" in development, and under
-// process.resourcesPath (via the same extraResources mechanism as tools/) in
-// a packaged build. There is nothing for the user to configure here, so this
-// is computed, not read from a settings file.
+// python/ beside gui/ in development; Resources/python in a packaged build.
 function resolveAstraScriptPath() {
   const devPath = path.join(__dirname, "..", "..", "python", "astra3.py");
   const packagedPath = path.join(process.resourcesPath || "", "python", "astra3.py");
   if (isDev && fs.existsSync(devPath)) return devPath;
   if (fs.existsSync(packagedPath)) return packagedPath;
   if (fs.existsSync(devPath)) return devPath; // last resort, e.g. running packaged=false from an unusual layout
-  return null; // genuinely missing -- surfaced as a setup error rather than silently guessed at
+  return null; // reported as an installation problem
 }
 const ASTRA_SCRIPT_PATH = resolveAstraScriptPath();
 
-// Same dev-vs-packaged resolution pattern as resolveAstraScriptPath above,
-// for the Citation & Docs page's own README/LICENSE/CITATION.cff/
-// THIRD_PARTY_NOTICES.txt viewer -- these live at the repo root (or gui/ for
-// THIRD_PARTY_NOTICES.txt) in dev, and under process.resourcesPath/docs/ in a
-// packaged build (see package.json's own extraResources entry for these exact
-// files).
+// Documents for the Citation & Docs page: the repository root (gui/ for the
+// notices) in development, Resources/docs in a packaged build.
 function resolveDocPath(filename) {
   const devPath = filename === "THIRD_PARTY_NOTICES.txt"
     ? path.join(__dirname, "..", filename)
@@ -677,11 +545,7 @@ function createWindow() {
     minHeight: 680,
     backgroundColor: "#0F1216", // matches --bg-0, avoids a white flash on load
     title: "Astra3",
-    // hiddenInset keeps the native traffic lights but inlays them into the
-    // application's own top bar, which is the standard macOS treatment for an
-    // app with a custom toolbar. The buttons remain real system controls, so
-    // their behaviour, hit targets and accessibility are unchanged, and macOS
-    // hides them automatically in fullscreen.
+    // Native traffic lights inset into the app's own top bar.
     titleBarStyle: "hiddenInset",
     // Off on macOS 26 and later only; see macWindowShadowAllowed().
     hasShadow: macWindowShadowAllowed(process.platform, os.release(), process.versions.electron),
@@ -695,8 +559,6 @@ function createWindow() {
       sandbox: true,
     },
   });
-  // Pushed rather than polled, so the interface reacts on the same frame the
-  // window actually changes.
   const sendFullScreen = (value) => {
     try { mainWindow.webContents.send("window:fullscreen-changed", value); } catch { /* window closing */ }
   };
@@ -704,9 +566,6 @@ function createWindow() {
   mainWindow.on("leave-full-screen", () => sendFullScreen(false));
 
 
-  // Load the local, already-built renderer -- never localhost, never a dev
-  // server. This is the actual point of the desktop conversion: no `python3
-  // -m http.server`, no browser, just a file on disk.
   mainWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
 
   if (isDev) {
@@ -720,8 +579,7 @@ function createWindow() {
 }
 
 // ------------------------------------------------------------
-// Application menu (minimal, native-feeling; includes an About panel that
-// uses the Astra3 icon, per the branding requirement)
+// Application menu
 // ------------------------------------------------------------
 function buildMenu() {
   const template = [
@@ -787,10 +645,8 @@ function showAboutDialog() {
 // ------------------------------------------------------------
 // App lifecycle
 // ------------------------------------------------------------
-// Astra3 needs no location, camera, microphone, notifications or other
-// device access. Every web permission is refused without asking, so nothing
-// in the window can raise a system permission prompt. The one exception is
-// writing to the clipboard, which the Copy citation button uses.
+// Every web permission is refused except clipboard writes (Copy citation),
+// so the window never raises a system permission prompt.
 const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write"]);
 function denyDevicePermissions() {
   const ses = session.defaultSession;
@@ -801,18 +657,17 @@ function denyDevicePermissions() {
 // ------------------------------------------------------------
 // Navigation guard
 // ------------------------------------------------------------
-// Every window and frame stays on Astra3's own page: the main frame on
-// renderer/index.html, subframes (the in-app report) on their srcdoc. A web
-// link (http, https, mailto) opens in the person's own browser; anything
-// else is refused. This covers report links, target="_blank" links and files
-// dropped on the window, none of which should ever load inside the app.
+// Frames stay on Astra3's own pages (the report frame on its own). http(s) and
+// mailto links open in the default browser; any other navigation, including
+// a dropped file, is refused.
 const APP_PAGE = path.resolve(__dirname, "..", "renderer", "index.html").toLowerCase();
+const REPORT_FRAME_PAGE = path.resolve(__dirname, "..", "renderer", "report-frame.html").toLowerCase();
 
-function isAppPage(url) {
+function isLocalPage(url, page) {
   const bare = String(url || "").split(/[?#]/)[0];
   if (!/^file:/i.test(bare)) return false;
   try {
-    return path.resolve(require("url").fileURLToPath(bare)).toLowerCase() === APP_PAGE;
+    return path.resolve(require("url").fileURLToPath(bare)).toLowerCase() === page;
   } catch {
     return false;
   }
@@ -831,7 +686,9 @@ app.on("web-contents-created", (_e, contents) => {
   });
   contents.on("will-frame-navigate", (event) => {
     const url = String(event.url || "");
-    const allowed = event.isMainFrame ? isAppPage(url) : /^about:(srcdoc|blank)(#.*)?$/i.test(url);
+    const allowed = event.isMainFrame
+      ? isLocalPage(url, APP_PAGE)
+      : isLocalPage(url, REPORT_FRAME_PAGE) || /^about:blank(#.*)?$/i.test(url);
     if (allowed) return;
     event.preventDefault();
     openInBrowser(url);
@@ -862,13 +719,10 @@ app.on("before-quit", () => {
 // ------------------------------------------------------------
 // PyMOL process management
 // ------------------------------------------------------------
-// See pymol-bridge.js for the actual spawn/stdin/stdout handling -- kept in
-// its own module so this file stays focused on window/app lifecycle. Wired
-// together at the bottom of this file.
-// -- The Astra3 Engine --
-// Astra3's Python run as WebAssembly by this app's own executable (see
-// engine/astra3-engine.js), with images drawn in the "Astra3 Engine" window
-// (engine-window.js). Packaged builds keep engine/ outside the archive.
+// The process itself is handled in pymol-bridge.js. The Astra3 Engine runs
+// astra3.py under Pyodide with this app's own executable (engine/
+// astra3-engine.js) and draws images in engine-window.js. Packaged builds
+// keep engine/ outside the asar archive.
 const ENGINE_SCRIPT_PATH = (() => {
   const candidates = [
     path.join(process.resourcesPath || "", "engine", "astra3-engine.js"),
@@ -938,16 +792,12 @@ pymolBridge.on("state", (payload) => {
 });
 
 // ------------------------------------------------------------
-// IPC handlers: the ONLY surface the renderer can reach, via preload.js's
-// contextBridge. Every handler here is deliberately narrow (a specific
-// action, not "run arbitrary code") to keep the renderer sandboxed even
-// though it's asking a privileged process to do things on its behalf.
+// IPC handlers: everything the renderer can ask for, each a single
+// narrow action.
 // ------------------------------------------------------------
 
-// -- Filesystem / dialogs --
-// Since Electron 43 a dialog given no starting folder opens in Downloads, and
-// the system no longer returns to the folder last used. Each kind of dialog
-// remembers its own folder for the session instead.
+// Since Electron 43 a dialog without a starting folder opens in Downloads, so
+// each kind of dialog remembers its last folder for the session.
 const lastDialogFolder = {};
 function dialogStart(kind, fallback) {
   const dir = lastDialogFolder[kind] || fallback;
@@ -975,13 +825,8 @@ ipcMain.handle("dialog:openFolder", async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
-// Dedicated picker for "select your PyMOL installation" specifically
-// (Settings' own Browse button), kept separate from the general
-// dialog:openFile handler above (used for structure-file imports, which have
-// no reason to special-case .app bundles). See resolveAppBundleExecutable's
-// own comment for why this exists: on macOS, .app is selectable as a single
-// "file" by default, and the bundle's own top-level path is not what spawn()
-// actually needs.
+// Settings' PyMOL Browse button: like dialog:openFile, but resolves a picked
+// .app bundle to its executable.
 ipcMain.handle("dialog:openPymolExecutable", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     ...dialogStart("program", "/Applications"),
@@ -993,10 +838,8 @@ ipcMain.handle("dialog:openPymolExecutable", async () => {
   return resolveAppBundleExecutable(result.filePaths[0]);
 });
 
-// -- Clipboard --
-// Copy buttons write through Electron's clipboard, not the web Clipboard API.
-// Inside the report's srcdoc frame the web API depends on document focus and
-// a permission check, which the in-app report does not reliably have.
+// Electron's clipboard rather than the web API, which needs focus and a
+// permission the in-app report frame does not reliably have.
 const CLIPBOARD_TEXT_LIMIT = 1000000;
 ipcMain.handle("clipboard:writeText", (_e, text) => {
   if (typeof text !== "string" || !text || text.length > CLIPBOARD_TEXT_LIMIT) return false;
@@ -1012,10 +855,8 @@ ipcMain.handle("clipboard:writeImage", (_e, dataUri) => {
 });
 
 ipcMain.handle("fs:readFile", async (_e, filePath) => {
-  // Node's errors cross the IPC boundary verbatim, so a missing file would
-  // otherwise surface in the interface as an errno and an internal method
-  // name. Each failure is turned into a sentence instead. Thrown rather than
-  // returned so existing .catch paths keep working unchanged.
+  // Node's errors would reach the interface as errno text, so each is rewritten
+  // as a sentence. Still thrown, for callers' .catch handlers.
   try {
     return await fs.promises.readFile(filePath, "utf-8");
   } catch (e) {
@@ -1032,12 +873,7 @@ ipcMain.handle("fs:readFile", async (_e, filePath) => {
   }
 });
 
-// Lists filenames (not full paths) in a directory -- used by the Reports
-// page's Images tab to discover which .png files a run actually produced,
-// rather than assuming a fixed set of names. Returns [] (not an error) for a
-// missing/inaccessible directory, since "no images yet" and "folder doesn't
-// exist" should both just render as an empty gallery, not a thrown error the
-// caller has to handle specially.
+// File names in a directory; [] when it is missing or unreadable.
 ipcMain.handle("fs:listDir", async (_e, dirPath) => {
   try {
     const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
@@ -1047,13 +883,19 @@ ipcMain.handle("fs:listDir", async (_e, dirPath) => {
   }
 });
 
-// Same idea, but for subdirectory NAMES rather than files -- used to find a
-// run's real output folder by searching for it (matching a prefix/contains
-// pattern) rather than assuming an exact computed name. astra3_security.py's
-// own sanitization rules (strip anything outside [A-Za-z0-9_-], collapse
-// repeats) are simple enough to replicate, but doing so risks drifting out of
-// sync if that rule ever changes on the Python side -- searching what's
-// actually on disk sidesteps that entirely.
+// Subdirectory names; [] when missing or unreadable.
+// Run folders in a directory with their modification times: [{ name, mtimeMs }].
+ipcMain.handle("fs:listRunFolders", async (_e, dirPath) => {
+  try {
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    return entries
+      .filter((e) => e.isDirectory() && runFolders.runFolderPath(path.join(dirPath, e.name)))
+      .map((e) => ({ name: e.name, mtimeMs: fs.statSync(path.join(dirPath, e.name)).mtimeMs }));
+  } catch {
+    return [];
+  }
+});
+
 ipcMain.handle("fs:listSubdirs", async (_e, dirPath) => {
   try {
     const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
@@ -1063,14 +905,10 @@ ipcMain.handle("fs:listSubdirs", async (_e, dirPath) => {
   }
 });
 
-// Reads a file and returns it as a data: URI -- used for displaying a local
-// PNG in an <img> tag. Electron's renderer runs with contextIsolation/sandbox
-// on and no direct filesystem access by design (see the security hardening
-// pass), so images can't be pointed at with a bare file:// src the way a
-// normal web page could; this mirrors the same read-via-IPC-then-hand-to-the-
-// renderer pattern already used for the viewer's .pdb text and report HTML,
-// just base64-encoded for binary image data instead of read as UTF-8 text.
+// A local image as a data: URI, since the sandboxed renderer cannot load file:// URLs.
 ipcMain.handle("fs:readFileAsDataUri", async (_e, filePath) => {
+  // Only images that runs wrote.
+  if (!/\.(png|jpe?g)$/i.test(String(filePath || "")) || !runFolders.isInsideRunFolders(filePath)) return null;
   try {
     const data = await fs.promises.readFile(filePath);
     const ext = path.extname(filePath).toLowerCase();
@@ -1082,12 +920,13 @@ ipcMain.handle("fs:readFileAsDataUri", async (_e, filePath) => {
 });
 
 ipcMain.handle("fs:openPath", async (_e, targetPath) => {
-  // Opens a file/folder with the OS default handler (e.g. HTML report in the
-  // default browser, output folder in Finder/Explorer).
+  // Opens with the default application.
   if (!targetPath) return "No path was provided, so there was nothing to open.";
-  // ChimeraX files open in a new ChimeraX: the default handler goes through
-  // LaunchServices, which gives a file to the oldest ChimeraX running, and
-  // that can be Astra3's hidden image helper.
+  if (!runFolders.isInsideRunFolders(targetPath)) {
+    return `Astra3 opens only its output folders and the files its runs write, so this was not opened:\n${targetPath}`;
+  }
+  // LaunchServices would hand ChimeraX files to the oldest running ChimeraX,
+  // which can be Astra3's hidden image helper.
   if (/\.(cxs|cxc)$/i.test(targetPath)) return openSessionFile(targetPath);
   if (!fs.existsSync(targetPath)) {
     return `This file no longer exists:\n${targetPath}\n\nIt may have been moved, renamed, or deleted since the run finished. Re-running the analysis will recreate it.`;
@@ -1096,20 +935,8 @@ ipcMain.handle("fs:openPath", async (_e, targetPath) => {
   return errorMsg || null;
 });
 
-// Total size of the outputs folder plus a per-run breakdown, in one call: the
-// History page needs both, and walking the tree twice would double the disk
-// work on a large folder.
-// Returns a small thumbnail of an image as a data URI.
-//
-// Astra3's renders are full-resolution ray traces (3000x2250 at excellent
-// quality). Handing those to the interface unscaled is not viable: each one
-// decodes to roughly 27 MB of bitmap memory regardless of how small it is
-// displayed, so a gallery holding a dozen of them exhausts the renderer
-// process and the window goes blank. Downscaling here means the interface
-// receives a few hundred KB per image instead, and the full-resolution file
-// on disk is untouched.
-//
-// Uses Electron's built-in nativeImage, so this adds no dependency.
+// A downscaled data: URI for galleries. Full renders (up to 3000x2250) decode
+// to about 27 MB each, and a dozen of them exhaust the renderer process.
 ipcMain.handle("fs:readImageThumbnail", async (_e, filePath, maxWidth) => {
   try {
     if (!filePath || !fs.existsSync(filePath)) return null;
@@ -1120,15 +947,15 @@ ipcMain.handle("fs:readImageThumbnail", async (_e, filePath, maxWidth) => {
     const scaled = size.width > width ? image.resize({ width, quality: "good" }) : image;
     return scaled.toDataURL();
   } catch {
-    // A corrupt or unreadable image is not worth failing the gallery over;
-    // the caller falls back to a placeholder card.
+    // The caller shows a placeholder.
     return null;
   }
 });
 
-ipcMain.handle("fs:outputUsage", async (_e, outputDir) => {
-  const result = { total: 0, folders: {}, exists: false };
-  if (!outputDir || !fs.existsSync(outputDir)) return result;
+ipcMain.handle("fs:outputUsage", async () => {
+  const { dir: outputDir } = await establishOutputDir(null);
+  const result = { outputDir, total: 0, folders: {}, byPath: {}, exists: false };
+  if (!fs.existsSync(outputDir)) return result;
   result.exists = true;
   let entries;
   try {
@@ -1138,104 +965,87 @@ ipcMain.handle("fs:outputUsage", async (_e, outputDir) => {
   }
   for (const entry of entries) {
     const full = path.join(outputDir, entry.name);
-    if (!isAstraRunFolder(full, entry.name)) continue;
-    const size = directorySizeBytes(full);
+    if (!runFolders.isAstraRunFolder(full, entry.name)) continue;
+    const size = runFolders.directorySizeBytes(full);
     result.folders[entry.name] = size;
+    result.byPath[full] = size;
     result.total += size;
   }
   return result;
 });
 
-// Deletes every Astra3 run folder inside the outputs directory.
-//
-// This is the only destructive operation in the application, and the path it
-// operates on comes from a text field the user can type anything into. It
-// therefore refuses system and personal directories outright, and removes
-// only directories matching Astra3's own "<label>_Output" naming -- so a
-// folder that also holds the user's own files is left intact.
-ipcMain.handle("fs:clearOutputs", async (_e, outputDir) => {
-  if (!outputDir) return { ok: false, error: "No output folder is configured." };
-  const resolved = path.resolve(outputDir);
-  const forbidden = [
-    path.parse(resolved).root,
-    app.getPath("home"),
-    app.getPath("documents"),
-    app.getPath("desktop"),
-    app.getPath("downloads"),
-  ].map((p) => path.resolve(p));
-  if (forbidden.includes(resolved)) {
-    return { ok: false, error: `Refusing to delete "${resolved}" -- that is a system or personal folder, not an Astra3 outputs folder. Check the output folder setting.` };
+// `folders` are the run folders recorded in History; `everything` also sweeps
+// the current output folder. run-folders.js limits what can be deleted.
+// Resolves to { ok, results, freed }, one result per requested path.
+async function deleteRuns({ folders, everything } = {}) {
+  if (pymolBridge.isBusy()) {
+    return { ok: false, results: [], freed: 0, error: "Wait for the current analysis to finish before deleting files." };
   }
-  if (!fs.existsSync(resolved)) return { ok: true, deleted: 0, freed: 0, skipped: 0, failures: [] };
-  let stat;
-  try {
-    stat = fs.statSync(resolved);
-  } catch (e) {
-    return { ok: false, error: `Could not read "${resolved}": ${e.message}` };
-  }
-  if (!stat.isDirectory()) return { ok: false, error: `"${resolved}" is not a folder.` };
-
-  let deleted = 0;
+  const options = { protectedDirs: protectedFolders() };
+  const results = [];
+  // Several entries can share a folder (re-runs reuse it).
+  const done = new Map();
+  const key = (p) => (isMac || process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
   let freed = 0;
-  let skipped = 0;
-  const failures = [];
-  for (const entry of fs.readdirSync(resolved, { withFileTypes: true })) {
-    const full = path.join(resolved, entry.name);
-    if (!isAstraRunFolder(full, entry.name)) { skipped += 1; continue; }
+  const remove = async (requested) => {
+    const known = typeof requested === "string" && path.isAbsolute(requested) ? done.get(key(requested)) : null;
+    if (known) return { ...known, requested };
+    const result = await runFolders.deleteRunFolder(requested, options);
+    if (result.path) done.set(key(result.path), result);
+    freed += result.freed || 0;
+    return result;
+  };
+  for (const requested of Array.isArray(folders) ? folders : []) results.push(await remove(requested));
+  if (everything) {
+    const { dir: outputDir } = await establishOutputDir(null);
+    let entries = [];
     try {
-      const size = directorySizeBytes(full);
-      fs.rmSync(full, { recursive: true, force: true });
-      deleted += 1;
-      freed += size;
-    } catch (e) {
-      // Reported by name rather than swallowed: a file still open elsewhere
-      // is the usual cause and is something the user can act on.
-      failures.push(`${entry.name}: ${e.message}`);
+      entries = fs.readdirSync(outputDir, { withFileTypes: true });
+    } catch {
+      // Nothing to sweep.
+    }
+    for (const entry of entries) {
+      const full = path.join(outputDir, entry.name);
+      if (done.has(key(full)) || !runFolders.isAstraRunFolder(full, entry.name)) continue;
+      results.push(await remove(full));
     }
   }
-  return { ok: failures.length === 0, deleted, freed, skipped, failures };
-});
+  return { ok: results.every((r) => r.status === "deleted"), results, freed };
+}
 
-// Opens a PyMOL session by launching the configured PyMOL directly.
-//
-// macOS will open a .pse through LaunchServices only if PyMOL has registered
-// the type, which depends on how it was installed. Launching the executable
-// the application already knows about is deterministic and avoids depending
-// on that registration.
-// Related Structures tab: searches RCSB from the main process, where network
-// access and timeouts are controlled; the renderer only displays results.
+ipcMain.handle("fs:deleteRuns", async (_e, request) => deleteRuns(request || {}));
+// Sizes of History's run folders wherever they are, keyed by requested path.
+ipcMain.handle("fs:runSizes", async (_e, folders) => runFolders.runFolderSizes(folders));
+ipcMain.handle("fs:clearOutputs", async (_e, request) => deleteRuns({ ...(request || {}), everything: true }));
+
+// Related Structures: RCSB searches run here, where network access and
+// timeouts are controlled.
 ipcMain.handle("related:find", async (_e, query) => {
   const { findRelatedStructures } = require("./related-structures");
   return findRelatedStructures(query || {});
 });
 
-// Quick View on the 3D Viewer page: a structure's coordinates without an
-// analysis (see quick-view.js). Temporary IDs are this session's imports.
+// Quick View: coordinates without an analysis (see quick-view.js).
 ipcMain.handle("viewer:quickView", async (_e, request) => {
   const { quickView } = require("./quick-view");
   return quickView(request || {}, pymolBridge.importList());
 });
 
-// On macOS a session opens through LaunchServices (`open -n -a`), so PyMOL or
-// ChimeraX runs as itself rather than as Astra3's child. Started as a child,
-// anything it changes inside an app bundle is attributed to Astra3, and macOS
-// blocks it with a "prevented from modifying apps" notice. Returns false
-// when the program is not inside an .app bundle.
+// Opens via LaunchServices so the program is not Astra3's child; otherwise
+// macOS attributes its writes to Astra3 and shows a "prevented from modifying
+// apps" notice. Returns false when the program is not inside an .app bundle.
 function openWithMacApp(exePath, filePath) {
   if (process.platform !== "darwin") return false;
   const m = String(exePath || "").match(/^(.*?\.app)(?:\/|$)/);
   if (!m || !fs.existsSync(m[1])) return false;
-  // -n: a new copy, so the session never goes to Astra3's hidden image
-  // helper (a ChimeraX already running with its window hidden).
+  // -n starts a new instance, never Astra3's hidden ChimeraX helper.
   const child = spawn("open", ["-n", "-a", m[1], filePath], { detached: true, stdio: "ignore" });
   child.unref();
   return true;
 }
 
-// Opens a saved session for the person to work in: ChimeraX sessions and
-// command files in ChimeraX, PyMOL sessions in PyMOL, and an Astra3 Engine
-// session in ChimeraX through the .cxc beside it when PyMOL is not installed.
-// Returns null, or a message saying why it could not be opened.
+// .cxs/.cxc open in ChimeraX, .pse in PyMOL, or in ChimeraX through the
+// matching .cxc when PyMOL is not installed. Returns null or an error message.
 function openSessionFile(sessionPath) {
   if (!sessionPath) return "No session file was provided.";
   if (!fs.existsSync(sessionPath)) {
@@ -1256,8 +1066,6 @@ function openSessionFile(sessionPath) {
   const pymolPath = readPymolPath();
   const cxc = sessionPath.replace(/\.pse$/i, ".cxc");
   if (!pymolPath && cxc !== sessionPath && fs.existsSync(cxc)) {
-    // A session from the Astra3 Engine: its ChimeraX command file opens the
-    // same scene in ChimeraX.
     const chimeraxPath = readChimeraxPath();
     if (!chimeraxPath) {
       return "This session opens in PyMOL (.pse) or ChimeraX (the .cxc file beside it), and neither is installed. The structure can be viewed on the Viewer page.";
@@ -1286,128 +1094,35 @@ function openSessionFile(sessionPath) {
 
 ipcMain.handle("fs:openInPymol", async (_e, sessionPath) => openSessionFile(sessionPath));
 
-// Removes only what a given run wrote, judged by modification time, and
-// prunes any directory left empty afterwards.
-//
-// Output folders are named after the structure, so re-running one reuses the
-// folder its previous run wrote into. Deleting the whole folder to clean up a
-// cancelled re-run therefore took the EARLIER run's output with it -- its
-// report included, leaving a History entry pointing at a file that no longer
-// existed. Anything older than the cancelled run started is not that run's to
-// delete.
-function removeEntriesNewerThan(dir, cutoff) {
-  let removed = 0;
-  let freed = 0;
-  let kept = 0;
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return { removed, freed, kept: 1 };
-  }
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      const inner = removeEntriesNewerThan(full, cutoff);
-      removed += inner.removed;
-      freed += inner.freed;
-      if (inner.kept === 0) {
-        try { fs.rmdirSync(full); } catch { kept += 1; }
-      } else {
-        kept += inner.kept;
-      }
-      continue;
-    }
-    let stat;
-    try { stat = fs.statSync(full); } catch { kept += 1; continue; }
-    if (stat.mtimeMs >= cutoff) {
-      try { fs.rmSync(full, { force: true }); removed += 1; freed += stat.size; }
-      catch { kept += 1; }
-    } else {
-      kept += 1;
-    }
-  }
-  return { removed, freed, kept };
-}
-
-// Deletes a chosen subset of run folders rather than everything in the
-// output directory. Reuses the same guards as fs:clearOutputs: the parent
-// must not be a system or personal folder, and only directories that look
-// like Astra3's own run folders are ever removed, so a folder name supplied
-// by the renderer cannot be used to delete something else. Folder names are
-// matched by basename only -- any path separator in the input is rejected
-// rather than resolved, so a name like "../.." cannot escape the output
-// directory.
-ipcMain.handle("fs:deleteRunFolders", async (_e, { outputDir, folderNames, newerThan }) => {
-  if (!outputDir) return { ok: false, error: "No output folder is configured." };
-  if (!Array.isArray(folderNames) || folderNames.length === 0) {
-    return { ok: true, deleted: 0, freed: 0, failures: [] };
-  }
-  const resolved = path.resolve(outputDir);
-  const forbidden = [
-    path.parse(resolved).root,
-    app.getPath("home"),
-    app.getPath("documents"),
-    app.getPath("desktop"),
-    app.getPath("downloads"),
-  ].map((p) => path.resolve(p));
-  if (forbidden.includes(resolved)) {
-    return { ok: false, error: `Refusing to delete inside "${resolved}" -- that is a system or personal folder, not an Astra3 outputs folder.` };
-  }
-  if (!fs.existsSync(resolved)) return { ok: true, deleted: 0, freed: 0, failures: [] };
-
-  let deleted = 0;
-  let freed = 0;
-  let skipped = 0;
-  const failures = [];
-  for (const raw of folderNames) {
+// Cleanup after a cancelled run. `newerThan` keeps files from an earlier run
+// of the same structure. Names containing path separators are refused.
+ipcMain.handle("fs:deleteRunFolders", async (_e, { outputDir, folderNames, newerThan } = {}) => {
+  if (!outputDir) return { ok: false, error: "No output folder was given.", deleted: 0, freed: 0, failures: [], results: [] };
+  const names = Array.isArray(folderNames) ? folderNames : [];
+  const options = { protectedDirs: protectedFolders(), newerThan };
+  const results = [];
+  for (const raw of names) {
     const name = String(raw || "");
     if (!name || name !== path.basename(name) || name === "." || name === "..") {
-      failures.push(`${name}: not a plain folder name`);
+      results.push({ requested: name, path: null, status: "refused", message: "It is not a plain folder name.", freed: 0 });
       continue;
     }
-    const full = path.join(resolved, name);
-    if (path.dirname(path.resolve(full)) !== resolved) {
-      failures.push(`${name}: resolves outside the output folder`);
-      continue;
-    }
-    if (!fs.existsSync(full)) { skipped += 1; continue; }
-    if (!isAstraRunFolder(full, name)) { skipped += 1; continue; }
-    try {
-      // newerThan scopes the delete to one run's own output. Without it the
-      // whole folder goes, which is right for History's "clear files" but
-      // wrong for cleaning up after a cancelled re-run.
-      if (typeof newerThan === "number" && newerThan > 0) {
-        const scoped = removeEntriesNewerThan(full, newerThan);
-        freed += scoped.freed;
-        if (scoped.kept === 0) {
-          try { fs.rmdirSync(full); } catch { /* empty either way */ }
-        }
-        if (scoped.removed > 0) deleted += 1;
-      } else {
-        const size = directorySizeBytes(full);
-        fs.rmSync(full, { recursive: true, force: true });
-        deleted += 1;
-        freed += size;
-      }
-    } catch (e) {
-      failures.push(`${name}: ${e.message}`);
-    }
+    results.push({ ...(await runFolders.deleteRunFolder(path.join(path.resolve(outputDir), name), options)), requested: name });
   }
-  return { ok: failures.length === 0, deleted, freed, skipped, failures };
+  const failures = results
+    .filter((r) => r.status !== "deleted" && r.status !== "trimmed")
+    .map((r) => `${r.requested}: ${r.message}`);
+  return {
+    ok: failures.length === 0,
+    deleted: results.filter((r) => r.status === "deleted" || (r.status === "trimmed" && r.removed > 0)).length,
+    freed: results.reduce((sum, r) => sum + (r.freed || 0), 0),
+    failures,
+    results,
+  };
 });
 
-// Opens several images as ONE browsable set rather than one window per file.
-//
-// macOS: Preview accepts multiple paths in a single invocation and shows them
-// in one window with its own sidebar/scroller, which is the behaviour asked
-// for. Opening each path separately instead produces a stack of windows.
-//
-// Windows has no direct equivalent -- Photos takes a single file and then
-// arrows through that file's containing folder. Opening the first selected
-// image gives the closest thing: one window, with the rest reachable by arrow
-// key, provided they share a folder. When the selection spans folders the set
-// is grouped and the first of each is opened, so nothing is silently dropped.
+// Opens several images together: one Preview window on macOS, each file in
+// the default viewer elsewhere.
 ipcMain.handle("fs:openImageSet", async (_e, targetPaths) => {
   if (!Array.isArray(targetPaths) || targetPaths.length === 0) {
     return { ok: true, opened: 0, failures: [], mode: "none" };
@@ -1428,19 +1143,12 @@ ipcMain.handle("fs:openImageSet", async (_e, targetPaths) => {
       });
       return { ok: failures.length === 0, opened: existing.length, failures, mode: "preview" };
     } catch (e) {
-      // Falls through to the per-file path below rather than failing: a
-      // missing or renamed Preview is not a reason to open nothing.
+      // Fall back to opening files one by one.
       failures.push(`Preview could not be launched (${e.message}); opened individually instead.`);
     }
   }
 
   if (process.platform === "win32") {
-    // Every selected file is opened. An earlier version opened only the first
-    // image in each folder, on the reasoning that the Windows viewer can arrow
-    // through the rest of the folder -- but selecting four images from one run
-    // then opened exactly one, and the other three simply never appeared. The
-    // viewer's folder navigation is a convenience, not a substitute for
-    // opening what was asked for.
     let opened = 0;
     for (const target of existing) {
       const err = await shell.openPath(target);
@@ -1464,12 +1172,7 @@ ipcMain.handle("fs:showInFolder", async (_e, targetPath) => {
 });
 
 ipcMain.handle("fs:saveScreenshot", async (_e, { dataUri, suggestedName }) => {
-  // Viewer screenshots (see renderer's ViewerPage.takeScreenshot) come in as
-  // a data: URI from $3Dmol's own pngURI() -- the renderer has no direct
-  // filesystem write access by design (see the security hardening pass), so
-  // this is the one place that actually decodes and writes the PNG bytes,
-  // behind a native "Save As" dialog rather than silently writing somewhere
-  // the user didn't choose.
+  // Writes a 3D Viewer screenshot (a PNG data: URI) where the person chooses.
   const saveName = suggestedName || "astra3_viewer_screenshot.png";
   const result = await dialog.showSaveDialog(mainWindow, {
     defaultPath: lastDialogFolder.save ? path.join(lastDialogFolder.save, path.basename(saveName)) : saveName,
@@ -1486,9 +1189,7 @@ ipcMain.handle("fs:saveScreenshot", async (_e, { dataUri, suggestedName }) => {
   }
 });
 
-// App / environment info -- Fullscreen state, so the interface can collapse
-// its own chrome to match. macOS hides the menu bar and window controls
-// natively in fullscreen; the application's own top bar has to be told.
+// The interface collapses its own top bar in fullscreen.
 ipcMain.handle("window:isFullScreen", async () => (mainWindow ? mainWindow.isFullScreen() : false));
 
 ipcMain.handle("app:getPaths", async () => ({
@@ -1590,51 +1291,49 @@ ipcMain.handle("dialog:openChimeraxExecutable", async () => {
 });
 
 ipcMain.handle("app:getPymolPath", async () => readPymolPath());
-// Real existence/executability check -- see verifyPymolPath's own comment for
-// why getPymolPath() alone (a saved string) is not sufficient to know PyMOL
-// is actually installed and runnable. explicitPath lets a caller check a
-// candidate BEFORE it's saved (e.g. Settings verifying whatever is currently
-// typed); omitted or falsy falls back to the currently-saved path.
+// Checks explicitPath, or the saved path when none is given.
 ipcMain.handle("app:verifyPymolPath", async (_e, explicitPath) => verifyPymolPath(explicitPath || readPymolPath()));
-// Real "is this actually PyMOL" check -- see verifyIsRealPymol's own comment.
-// Deliberately separate from app:verifyPymolPath above (a fast, synchronous
-// file check) since this one actually launches the candidate and can take a
-// few seconds; callers explicitly opt into the slower, stronger check rather
-// than paying its cost on every keystroke.
+// Slow: launches the candidate (see verifyIsRealPymol).
 ipcMain.handle("app:verifyIsRealPymol", async (_e, candidatePath) => verifyIsRealPymol(candidatePath));
 ipcMain.handle("app:pymolVerifyProblem", async () => lastPymolVerifyProblem);
 ipcMain.handle("app:setPymolPath", async (_e, newPath) => {
   writePymolPath(newPath);
   return true;
 });
-// Explicit, user-confirmed app restart -- used specifically after changing
-// the PyMOL executable path in Settings (: a changed path can't safely take
-// effect for an ALREADY launched PyMOL process, since pymol-bridge.js only
-// reads it fresh at the start of a new start() call, and a full relaunch is
-// the simplest, safest way to guarantee every part of the app -- not just the
-// next spawned PyMOL process -- is working from the new path). app.relaunch()
-// queues a new launch of this same app; app.exit(0) then quits the current
-// instance immediately (a clean, intentional exit, not a crash) so the queued
-// relaunch actually starts.
+// Restart after a PyMOL location change, confirmed by the person in Settings.
 ipcMain.handle("app:restartApp", async () => {
   app.relaunch();
   app.exit(0);
 });
-// astra3.py's location is resolved automatically (see resolveAstraScriptPath
-// above) -- there is nothing for the user to set, so only a getter is
-// exposed, used by the setup-status banner to confirm the script was found.
 ipcMain.handle("app:getAstraScriptPath", async () => ASTRA_SCRIPT_PATH);
-ipcMain.handle("app:getOutputDir", async () => readOutputDir());
+// `remembered` (the interface's last value) is used only when nothing is
+// saved. `notice` is returned once per launch.
+ipcMain.handle("app:getOutputLocation", async (_e, remembered) => {
+  const state = await establishOutputDir(typeof remembered === "string" ? remembered : null);
+  const notice = outputNoticeShown ? null : outputLocation.startupNotice(state);
+  outputNoticeShown = true;
+  return { dir: state.dir, defaultDir: defaultOutputDir(), notice };
+});
+ipcMain.handle("app:getOutputDir", async () => (await establishOutputDir(null)).dir);
+// Validates and saves a folder chosen in Settings. The engine reads its base
+// folder only at launch, so an idle running engine is stopped and the next
+// command starts one on the new folder.
 ipcMain.handle("app:setOutputDir", async (_e, newPath) => {
-  writeOutputDir(newPath);
-  // PyMOL only reads ASTRA3_BASE_DIR once, at its own startup -- a change
-  // here has no effect on an already-running PyMOL process. Report that back
-  // so the renderer can tell the person a restart is needed, instead of the
-  // setting silently appearing to do nothing if they change it mid-session.
-  return { ok: true, requiresRestart: pymolBridge.isRunning() };
+  if (pymolBridge.isBusy()) return { ok: false, error: "Finish or cancel the current run before changing the output folder." };
+  const check = await outputLocation.checkOutputDir(newPath, outputEnv());
+  if (!check.ok) return { ok: false, error: outputLocation.describeRefusal(check) };
+  const previous = (await establishOutputDir(null)).dir;
+  writeOutputDir(check.dir);
+  outputStatePromise = Promise.resolve({ dir: check.dir, source: "saved", replaced: null, problem: null });
+  const changed = !outputLocation.samePlace(previous, check.dir, process.platform);
+  if (changed && pymolBridge.isRunning()) {
+    pymolBridge.stop();
+    pymolBridge.emit("state", { running: false });
+  }
+  return { ok: true, dir: check.dir, changed };
 });
 
-// -- PyMOL bridge --
+// PyMOL bridge
 ipcMain.handle("pymol:start", async () => pymolBridge.start());
 ipcMain.handle("pymol:stop", async () => pymolBridge.stop());
 ipcMain.handle("pymol:isRunning", async () => pymolBridge.isRunning());
@@ -1645,14 +1344,7 @@ ipcMain.handle("pymol:answerPrompt", async (_e, answer) => pymolBridge.answerPro
 // Current imports, for the Import page.
 ipcMain.handle("pymol:imports", async () => pymolBridge.importList());
 
-// App-wide zoom -- for accessibility, some scientists reading dense
-// report/console text may want everything larger than the app's default
-// sizing. Uses Electron's own webContents zoom API (the same mechanism a real
-// browser's Cmd/Ctrl +/-/0 uses) rather than a CSS transform hack: this
-// correctly reflows layout, text wrapping, and every measurement-dependent
-// bit of the UI together at the new scale, instead of visually
-// stretching/blurring a fixed-size render. Clamped to a sane range (50%-200%)
-// so it can't be driven to an unusable extreme by repeated key presses.
+// App-wide zoom, clamped to 50-200%.
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2.0;
 const ZOOM_STEP = 0.1;

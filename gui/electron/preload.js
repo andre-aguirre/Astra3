@@ -1,52 +1,45 @@
 // ============================================================
 // Astra3: preload script
 // ============================================================
-// Runs in an isolated context with access to Node/Electron APIs, but the
-// renderer (React GUI) can ONLY reach what's explicitly exposed here via
-// contextBridge. This is the enforcement point for "renderer has no
-// unrestricted Node.js access" -- nothing here lets the renderer run
-// arbitrary shell commands or read arbitrary files outside these specific,
-// narrow calls.
+// The renderer's only access to the main process: each function below maps
+// to one narrow IPC handler in main.js.
 // ============================================================
 
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("astra3Native", {
-  // -- dialogs / filesystem --
+  // Dialogs and files
   openFileDialog: (options) => ipcRenderer.invoke("dialog:openFile", options),
-  // Dedicated PyMOL-executable picker (Settings' own Browse button) --
-  // resolves a selected macOS .app bundle down to its real internal
-  // executable automatically.
+  // Resolves a picked .app bundle to its executable.
   openPymolExecutableDialog: () => ipcRenderer.invoke("dialog:openPymolExecutable"),
   openFolderDialog: () => ipcRenderer.invoke("dialog:openFolder"),
   readFile: (path) => ipcRenderer.invoke("fs:readFile", path),
-  // Clipboard writes, through the main process. Each resolves to true once
-  // the clipboard holds the text or PNG data URI.
+  // Resolve to true once the clipboard holds the text or PNG data URI.
   copyText: (text) => ipcRenderer.invoke("clipboard:writeText", text),
   copyImage: (dataUri) => ipcRenderer.invoke("clipboard:writeImage", dataUri),
   getDocPath: (filename) => ipcRenderer.invoke("app:getDocPath", filename),
   listDir: (path) => ipcRenderer.invoke("fs:listDir", path),
   listSubdirs: (path) => ipcRenderer.invoke("fs:listSubdirs", path),
+  listRunFolders: (path) => ipcRenderer.invoke("fs:listRunFolders", path),
   readFileAsDataUri: (path) => ipcRenderer.invoke("fs:readFileAsDataUri", path),
-  // Downscaled copy of an image, for galleries. Full-resolution renders are
-  // far too large to hold in the interface at any meaningful count.
+  // Downscaled image for galleries; full renders are too large to hold.
   readImageThumbnail: (path, maxWidth) => ipcRenderer.invoke("fs:readImageThumbnail", path, maxWidth),
   openPath: (path) => ipcRenderer.invoke("fs:openPath", path),
-  // Opens a .pse by launching the configured PyMOL directly, rather than
-  // relying on a LaunchServices association that may not be registered.
+  // Opens a session file in PyMOL or ChimeraX (see openSessionFile).
   openInPymol: (path) => ipcRenderer.invoke("fs:openInPymol", path),
-  // Storage figures for the History page: total plus a per-run breakdown.
-  outputUsage: (dir) => ipcRenderer.invoke("fs:outputUsage", dir),
-  // Deletes Astra3's run folders. Guarded in the main process.
-  clearOutputs: (dir) => ipcRenderer.invoke("fs:clearOutputs", dir),
-  // Deletes only the named run folders inside dir. Guarded on the main-process
-  // side the same way clearOutputs is -- see fs:deleteRunFolders.
+  // Size of the output folder in use, total and per run.
+  outputUsage: () => ipcRenderer.invoke("fs:outputUsage"),
+  // Sizes of run folders by full path (null when missing or not a run folder).
+  runSizes: (folders) => ipcRenderer.invoke("fs:runSizes", folders),
+  // Deletes run folders by full path; resolves to a result per folder.
+  deleteRuns: (folders) => ipcRenderer.invoke("fs:deleteRuns", { folders }),
+  // As deleteRuns, plus every run folder in the output folder.
+  clearOutputs: (folders) => ipcRenderer.invoke("fs:clearOutputs", { folders }),
+  // Cleanup after a cancelled run; see fs:deleteRunFolders.
   deleteRunFolders: (outputDir, folderNames, newerThan) => ipcRenderer.invoke("fs:deleteRunFolders", { outputDir, folderNames, newerThan }),
-  // Opens several images as one browsable set -- see fs:openImageSet.
   openImageSet: (paths) => ipcRenderer.invoke("fs:openImageSet", paths),
   isFullScreen: () => ipcRenderer.invoke("window:isFullScreen"),
-  // Returns an unsubscribe function so a React effect can clean up after
-  // itself; without one every remount would stack another listener.
+  // Returns an unsubscribe function for effect cleanup.
   onFullScreenChange: (cb) => {
     const handler = (_e, value) => cb(value);
     ipcRenderer.on("window:fullscreen-changed", handler);
@@ -55,26 +48,19 @@ contextBridge.exposeInMainWorld("astra3Native", {
   showInFolder: (path) => ipcRenderer.invoke("fs:showInFolder", path),
   saveScreenshot: (dataUri, suggestedName) => ipcRenderer.invoke("fs:saveScreenshot", { dataUri, suggestedName }),
 
-  // -- app / environment --
+  // App and environment
   getPaths: () => ipcRenderer.invoke("app:getPaths"),
   getPymolPath: () => ipcRenderer.invoke("app:getPymolPath"),
-  // A real PyMOL location found on this machine, or null.
+  // A detected PyMOL location, or null.
   autodetectPymolPath: () => ipcRenderer.invoke("app:autodetectPymolPath"),
-  // Real existence/executability check, not just "a path string was saved" --
-  // see main.js's own verifyPymolPath comment. Pass an explicit path to check
-  // a candidate before it's saved (e.g. a freshly-typed value in Settings);
-  // omit it to check the currently-saved path.
+  // Checks explicitPath, or the saved path when omitted.
   verifyPymolPath: (explicitPath) => ipcRenderer.invoke("app:verifyPymolPath", explicitPath),
-  // Real "is this actually PyMOL" check -- launches the candidate briefly and
-  // watches for its own identifying startup text. Slower than verifyPymolPath
-  // (a few seconds, not instant), so callers use it deliberately (e.g. right
-  // before committing a path change), not on every keystroke. See main.js's
-  // own verifyIsRealPymol comment.
+  // Launches the candidate to confirm it is PyMOL; takes a few seconds.
   verifyIsRealPymol: (candidatePath) => ipcRenderer.invoke("app:verifyIsRealPymol", candidatePath),
   // Specific cause of the last failed verifyIsRealPymol, or null.
   pymolVerifyProblem: () => ipcRenderer.invoke("app:pymolVerifyProblem"),
   setPymolPath: (newPath) => ipcRenderer.invoke("app:setPymolPath", newPath),
-  // Analysis engine: "pymol" (default) or "chimerax", and ChimeraX's location.
+  // Analysis engine: "pymol" (default), "chimerax" or "astra3".
   getEngine: () => ipcRenderer.invoke("app:getEngine"),
   getEngineWindow: () => ipcRenderer.invoke("app:getEngineWindow"),
   setEngineWindow: (shown) => ipcRenderer.invoke("app:setEngineWindow", shown),
@@ -88,19 +74,16 @@ contextBridge.exposeInMainWorld("astra3Native", {
   setChimeraxPath: (newPath) => ipcRenderer.invoke("app:setChimeraxPath", newPath),
   chimeraxVersion: (explicitPath) => ipcRenderer.invoke("app:chimeraxVersion", explicitPath),
   openChimeraxExecutableDialog: () => ipcRenderer.invoke("dialog:openChimeraxExecutable"),
-  // Explicit, user-confirmed restart after a PyMOL path change -- see
-  // main.js's own app:restartApp comment.
   restartApp: () => ipcRenderer.invoke("app:restartApp"),
-  // astra3.py's location is resolved automatically by the main process; this
-  // is read-only, used only to confirm setup succeeded.
   getAstraScriptPath: () => ipcRenderer.invoke("app:getAstraScriptPath"),
-  // Where Astra3 writes output (Protein_outputs/ and everything under it).
-  // setOutputDir's result includes requiresRestart: true if PyMOL was already
-  // running, since it only reads this at its own startup.
+  // The output folder is decided by the main process. getOutputLocation
+  // resolves to { dir, defaultDir, notice }; setOutputDir to { ok, dir } or
+  // { ok: false, error }.
+  getOutputLocation: (remembered) => ipcRenderer.invoke("app:getOutputLocation", remembered),
   getOutputDir: () => ipcRenderer.invoke("app:getOutputDir"),
   setOutputDir: (newPath) => ipcRenderer.invoke("app:setOutputDir", newPath),
 
-  // -- PyMOL bridge --
+  // Engine
   pymolStart: () => ipcRenderer.invoke("pymol:start"),
   findRelatedStructures: (query) => ipcRenderer.invoke("related:find", query),
   // Coordinates for the 3D Viewer from a PDB ID or a temporary ID, without
@@ -111,23 +94,15 @@ contextBridge.exposeInMainWorld("astra3Native", {
   pymolRunCommand: (commandString) => ipcRenderer.invoke("pymol:runCommand", commandString),
   pymolRunImportCommand: (filePath) => ipcRenderer.invoke("pymol:runImportCommand", filePath),
   pymolImports: () => ipcRenderer.invoke("pymol:imports"),
-  // Resolves a browser File object (from a drop event or <input type="file">)
-  // to its real absolute filesystem path. Must be called from the preload
-  // script per Electron's own webUtils docs (the renderer has no direct
-  // access to this API even with the File object itself passed across the
-  // context bridge). webUtils.getPathForFile is the current, non-deprecated
-  // way to do this; the legacy File.path property this superseded was removed
-  // starting in Electron 32 (see Electron's own breaking-changes doc), so
-  // this falls back to file.path only if webUtils genuinely isn't present in
-  // whatever Electron build is actually running, rather than assuming one or
-  // the other exists.
+  // The filesystem path of a dropped or picked File. webUtils is only usable
+  // from preload; File.path was removed in Electron 32.
   getPathForFile: (file) => {
     try {
       if (webUtils && typeof webUtils.getPathForFile === "function") {
         return webUtils.getPathForFile(file);
       }
     } catch (e) {
-      // fall through to the legacy property below
+      // Fall back to File.path.
     }
     return file.path || null;
   },
@@ -139,7 +114,7 @@ contextBridge.exposeInMainWorld("astra3Native", {
   zoomOut: () => ipcRenderer.invoke("app:zoomOut"),
   zoomReset: () => ipcRenderer.invoke("app:zoomReset"),
 
-  // -- PyMOL bridge events (log lines, state changes/prompts) --
+  // Engine events: log lines, state changes and prompts
   onPymolLog: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("pymol:log", handler);

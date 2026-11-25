@@ -26,7 +26,7 @@ const { BrowserWindow, app, dialog, ipcMain, nativeImage, shell } = require("ele
 const POLL_MS = 80;
 const JOB_TIMEOUT_MS = 5 * 60 * 1000;
 
-// -- PNG text chunks ------------------------------------------------------
+// PNG text chunks
 // Each image carries its scene (camera, field of view, structures, size and
 // engine) in a PNG text chunk, so the exact view can be read back from the
 // image itself.
@@ -294,8 +294,8 @@ class EngineRenderer {
 
   // A new analysis. Its images start a new group in the window, the last
   // run's scene is cleared, and a window closed or minimized during the last
-  // run comes back with this run's first image -- not before, so it is not
-  // in front of any question the run asks first.
+  // run comes back with this run's first image, and not before, so it is
+  // not in front of any question the run asks first.
   analysisStarted(command) {
     if (!this.getShowWindow()) return;
     this.reshowPending = true;
