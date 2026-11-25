@@ -14,7 +14,7 @@ export type PlatformStatus = 'available' | 'comingSoon';
 
 export interface Release {
   version: string;
-  date: string; // ISO date
+  date: string; // ISO date, or 'TBD' until the release is out
   items: [title: string, detail: string][];
 }
 
@@ -25,7 +25,7 @@ const doi = '10.5281/zenodo.22928159';
 export const CONFIG = {
   name: 'Astra3',
   fullName: 'Structural Analysis Toolkit for PDB Rendering Automation',
-  version: '2.0.1',
+  version: '2.0.2',
   githubUrl,
   doi,
   doiUrl: `https://doi.org/${doi}`,
@@ -61,6 +61,23 @@ export const CONFIG = {
   },
 
   releases: [
+    {
+      version: '2.0.2',
+      date: 'TBD',
+      items: [
+        ['Output folder', 'Astra3 checks it when it starts and when you change it, and says when it cannot be used instead of saving somewhere else. Some Windows installs had saved results to a folder from the computer Astra3 was built on.'],
+        ['Delete with files', 'an entry leaves History only once its folder is gone from disk. A folder that cannot be deleted (open in another program, or not allowed by macOS or Controlled Folder Access) stays listed with the reason.'],
+        ['Re-runs', 'running the same IDs again saves to 1HEW_Output (1), then (2) and so on, so earlier results are kept; reports and History still say 1HEW_Output.'],
+        ['Output folders in History', 'a folder icon next to “Output folder” lists every folder that holds runs, each with an Open button. A new output folder applies to the next run without restarting Astra3.'],
+        ['Chain pairing', 'chains are matched by sequence, not only by letter, so two entries that letter the same subunits differently are superposed and compared subunit for subunit. A chain changes partner only when a chain of another letter is the same protein (90% identical or more) and its own counterpart is not.'],
+        ['Similarity', 'counts substitutions that BLOSUM62 scores above zero, as BLAST’s positives do. A score of zero no longer counts, so similarity can read slightly lower than before; identity is unchanged.'],
+        ['Ion coordination', 'protein O, His N and Cys S atoms within each metal’s distance limits from Harding (2006), each listed with its distance and target distance, in place of one 2.6 Å cut-off. Potassium and sodium contacts are now found; ions outside Harding’s table are listed without coordinating atoms.'],
+        ['Resolution classes', 'follow Dubach & Guskov (2020) and are given for diffraction structures only. A cryo-EM resolution is an estimate of a different kind and is reported without a class.'],
+        ['Reports', 'the report shown in the app runs in a sandbox that cannot reach Astra3, your files or the network, and looks and works as before. A file name containing HTML is shown as text.'],
+        ['Apple Silicon', 'Astra3 says in the Console when PyMOL is an Intel build running through Rosetta, which macOS 28 and later will not provide, and its messages name the fix for the macOS in use.'],
+        ['Fixes', '-ro and -skipreport runs say what was skipped, and the summary after DONE describes what was made. Ctrl+C at the CHANGEDIR, DONE and IMPORT prompts ends cleanly. A -reference naming a structure that was not loaded is reported in the Console as well as in the report. The Methods text writes dates out in full.'],
+      ],
+    },
     {
       version: '2.0.1',
       date: '2026-10-31',

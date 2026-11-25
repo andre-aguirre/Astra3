@@ -1,7 +1,9 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { CONFIG, windowsAvailable } from '../config';
-const fmt = (d: string) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+const fmt = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d)
+  ? new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' })
+  : d);
 ---
 <BaseLayout title="Changelog · Astra3" description="Astra3 release history: what changed in each version, taken from the release notes." current="changelog">
 <header class="page-head"><div class="wrap"><p class="eyebrow">Changelog</p><h1>Release history</h1><p class="lede">Dates are macOS releases; downloads and full notes are on <a href={CONFIG.releasesUrl} target="_blank" rel="noopener" style="color:var(--accent-bright)">GitHub Releases</a>.{windowsAvailable && <> The Windows version receives the same updates through the <a href={CONFIG.platforms.windows.url!} target="_blank" rel="noopener" style="color:var(--accent-bright)">Microsoft Store</a>, once Microsoft has certified each one.</>}</p></div></header>

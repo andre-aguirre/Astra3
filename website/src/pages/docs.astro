@@ -103,6 +103,7 @@ BATCH batch.txt -alwaysreduce</code></pre>
             <li><strong>Structure quality:</strong> method, resolution, chains, ligands, ions, B-factors, alternate conformations</li>
             <li><strong>Chains:</strong> terminus ranges and missing residues from <code>REMARK 465</code> or the mmCIF equivalent</li>
             <li><strong>Ligands:</strong> binding-site residues within 4.0 Å and possible polar contacts within 3.5 Å</li>
+            <li><strong>Ions:</strong> coordinating protein O, His N and Cys S atoms within each metal’s distance limits (Harding 2006), with their distances</li>
             <li><strong>HETATM audit</strong>, geometric <strong>disulfides</strong> (Sγ–Sγ ≤ 2.5 Å) and a <strong>water summary</strong></li>
             <li><strong>1.9.0:</strong> wwPDB validation (clashscore, Ramachandran, rotamer and real-space fit outliers), UniProt reference and declared mutations, Pfam/CATH/ECOD/SCOP domains, cross-checks, and a Methods paragraph saved as <code>Methods.txt</code></li>
           </ul>
@@ -127,7 +128,7 @@ BATCH batch.txt -alwaysreduce</code></pre>
           <h3>"This file does not appear to be a valid PyMOL executable."</h3>
           <p>You selected something other than PyMOL. Choose PyMOL's own application; the common locations are <code>/Applications/PyMOL.app/Contents/MacOS/PyMOL</code> on macOS and <code>%LOCALAPPDATA%\Schrodinger\PyMOL2\PyMOLWin.exe</code> on Windows.</p>
           <h3>"… is built for Intel Macs" (Apple Silicon)</h3>
-          <p>That PyMOL needs Apple's Rosetta, which is not installed. Run <code>softwareupdate --install-rosetta</code> in Terminal, or install a PyMOL built for Apple Silicon.</p>
+          <p>That PyMOL is an Intel build. Install a Universal or Apple Silicon version of PyMOL. On macOS 27 and earlier, installing Rosetta with <code>softwareupdate --install-rosetta</code> in Terminal also works; macOS 28 and later will not provide Rosetta for apps. While an Intel PyMOL runs through Rosetta, the Console says so when PyMOL starts.</p>
           <h3>"PyMOL could not be found."</h3>
           <p>PyMOL was moved, renamed or removed. The setup dialog reopens; browse to the new location. Changing a configured path restarts Astra3 so it applies everywhere.</p>
           <h3>Analyses fail when saving</h3>
@@ -141,7 +142,8 @@ BATCH batch.txt -alwaysreduce</code></pre>
             <li>Astra3 is not a modelling or prediction tool; it does not predict structure, function, stability, affinity or biological effect.</li>
             <li>Ligand-environment results are geometric proximity, not confirmed interactions. Salt bridges and π-stacking are not computed.</li>
             <li>Residues are paired by sequence alignment; it is not designed for remote homology or fold recognition.</li>
-            <li>TERMINI needs a shared chain ID and enough resolved residues near each terminus.</li>
+            <li>TERMINI needs chains of the same protein, paired by sequence whatever their letters, and enough resolved residues near each terminus.</li>
+            <li>Ion coordination is geometric and lists protein atoms only; ions outside Harding’s (2006) table get no coordinating atoms.</li>
             <li>Crystal contacts are not computed.</li>
             <li>Fetching by PDB ID needs internet access; offline use works through IMPORT.</li>
           </ul>

@@ -46,7 +46,7 @@ const win = CONFIG.platforms.windows;
         <h3>Troubleshooting on macOS</h3>
         <p class="muted"><strong style="color:var(--text-0)">Folder permission.</strong> If your output folder is on the Desktop, Documents or Downloads, macOS asks once for permission. If it was denied, grant it in System Settings → Privacy &amp; Security → Files and Folders.</p>
         <p class="muted"><strong style="color:var(--text-0)">PyMOL not found.</strong> Use Browse in the setup dialog or Settings → PyMOL and pick <span class="mono">PyMOL.app</span> itself. Astra3 resolves the executable inside it and checks that it really is PyMOL.</p>
-        <p class="muted"><strong style="color:var(--text-0)">Older PyMOL on an Apple Silicon Mac.</strong> A PyMOL built only for Intel Macs needs Apple's Rosetta. Astra3 says so if Rosetta is missing; install it with <span class="mono">softwareupdate --install-rosetta</span> in Terminal, or install a current PyMOL.</p>
+        <p class="muted"><strong style="color:var(--text-0)">Older PyMOL on an Apple Silicon Mac.</strong> A PyMOL built only for Intel Macs runs through Apple's Rosetta, which macOS 28 and later will not provide for apps. Install a Universal or Apple Silicon version of PyMOL. On macOS 27 and earlier, Rosetta can be installed with <span class="mono">softwareupdate --install-rosetta</span> in Terminal; Astra3 says when it is missing.</p>
       </div>
       {windowsAvailable && (
         <div class="panel">
